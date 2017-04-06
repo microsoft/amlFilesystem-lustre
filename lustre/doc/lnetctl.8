@@ -106,54 +106,6 @@ parameter\.
 .
 .br
 \-\-verbose: display detailed output per network
-
-.
-.SS "Peer Configuration"
-.TP
-\fBlnetctl peer\fR add
-Configure an LNET peer with at least one supplied NID\.  By default, peers are marked as multi-rail capable\.  If prim_nid is not specified, the first NID in this list is assumed to be the primary NID for the peer.
-.
-.br
-.
-\-\-nid: one or more peer NIDs to add to the peer\.
-.
-.br
-.
-\-\-prim_nid: Primary NID of the peer\.
-.
-.br
-\-\-non_mr: create this peer as not Multi-Rail capable\.
-.
-.br
-
-.TP
-\fBlnetctl peer\fR del
-Delete a peer NID.  The primary NID must be specified.  If the removed NID is the primary NID, the peer entry will be deleted.
-.
-.br
-.
-\-\-nid: one or more peer NIDs to remove from the peer\.
-.
-.br
-.
-\-\-prim_nid: Primary NID of the peer\.
-.
-.br
-
-.TP
-\fBlnetctl peer\fR show
-Show configured peers.  By default, lists all peers and associated NIDs.
-.
-.br
-.
-\-\-nid: list of primary nids to filter on
-.
-.br
-.
-\-\-verbose: Include extended statistics, including credits and counters.
-.
-.br
-
 .
 .SS "Route Configuration"
 .
@@ -641,10 +593,10 @@ statistics:
 .
 .br
 .
-.SS "Showing peer information"
+.SS "Showing peer credits information"
 .
 .IP "\(bu" 4
-lnetctl peer show
+lnetctl peer_credits show
 .
 .IP "" 0
 .
@@ -652,40 +604,28 @@ lnetctl peer show
 peer:
 .
 .br
-    \- primary nid: 10\.148\.0\.8@o2ib
+	\- nid: 192\.168\.205\.131@tcp1
 .
 .br
-      Multi\-Rail: True
+	  state: down
 .
 .br
-      peer ni:
+	  refcount: 4
 .
 .br
-        \- nid: 10\.148\.0\.8@o2ib
+	  max_ni_tx_credits: 8
 .
 .br
-          state: NA
+	  available_tx_credits: 8
 .
 .br
-    \- primary nid: 10\.148\.0\.20@o2ib
+	  available_rtr_credits: 8
 .
 .br
-      Multi\-Rail: True
+	  min_rtr_credits: 7
 .
 .br
-      peer ni:
-.
-.br
-        \- nid: 10\.148\.0\.20@o2ib
-.
-.br
-          state: NA
-.
-.br
-        \- nid: 10\.148\.0\.25@o2ib
-.
-.br
-          state: NA
+	  tx_q_num_of_buf: 0
 .
 .br
 

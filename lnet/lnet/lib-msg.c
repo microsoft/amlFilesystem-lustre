@@ -72,8 +72,6 @@ lnet_build_msg_event(struct lnet_msg *msg, enum lnet_event_kind ev_type)
 		ev->target.pid	  = le32_to_cpu(hdr->dest_pid);
 		ev->initiator.nid = LNET_NID_ANY;
 		ev->initiator.pid = the_lnet.ln_pid;
-		ev->source.nid	  = LNET_NID_ANY;
-		ev->source.pid    = the_lnet.ln_pid;
 		ev->sender	  = LNET_NID_ANY;
 
 	} else {
@@ -81,12 +79,8 @@ lnet_build_msg_event(struct lnet_msg *msg, enum lnet_event_kind ev_type)
 		ev->target.pid	  = hdr->dest_pid;
 		ev->target.nid	  = hdr->dest_nid;
 		ev->initiator.pid = hdr->src_pid;
-		/* Multi-Rail: resolve src_nid to "primary" peer NID */
-		ev->initiator.nid = msg->msg_initiator;
-		/* Multi-Rail: track source NID. */
-		ev->source.pid	  = hdr->src_pid;
-		ev->source.nid	  = hdr->src_nid;
-		ev->rlength       = hdr->payload_length;
+		ev->initiator.nid = hdr->src_nid;
+		ev->rlength	  = hdr->payload_length;
 		ev->sender	  = msg->msg_from;
 		ev->mlength	  = msg->msg_wanted;
 		ev->offset	  = msg->msg_offset;
@@ -216,10 +210,6 @@ lnet_msg_decommit_tx(struct lnet_msg *msg, int status)
 	}
 
 	counters->send_count++;
-	if (msg->msg_txpeer)
-		atomic_inc(&msg->msg_txpeer->lpni_stats.send_count);
-	if (msg->msg_txni)
-		atomic_inc(&msg->msg_txni->ni_stats.send_count);
  out:
 	lnet_return_tx_credits_locked(msg);
 	msg->msg_tx_committed = 0;
@@ -271,10 +261,6 @@ lnet_msg_decommit_rx(struct lnet_msg *msg, int status)
 	}
 
 	counters->recv_count++;
-	if (msg->msg_rxpeer)
-		atomic_inc(&msg->msg_rxpeer->lpni_stats.recv_count);
-	if (msg->msg_rxni)
-		atomic_inc(&msg->msg_rxni->ni_stats.recv_count);
 	if (ev->type == LNET_EVENT_PUT || ev->type == LNET_EVENT_REPLY)
 		counters->recv_length += msg->msg_wanted;
 
@@ -390,7 +376,7 @@ lnet_complete_msg_locked(struct lnet_msg *msg, int cpt)
 
 		ack_wmd = msg->msg_hdr.msg.put.ack_wmd;
 
-		lnet_prep_send(msg, LNET_MSG_ACK, msg->msg_ev.source, 0, 0);
+		lnet_prep_send(msg, LNET_MSG_ACK, msg->msg_ev.initiator, 0, 0);
 
 		msg->msg_hdr.msg.ack.dst_wmd = ack_wmd;
 		msg->msg_hdr.msg.ack.match_bits = msg->msg_ev.match_bits;

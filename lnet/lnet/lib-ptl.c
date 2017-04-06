@@ -222,7 +222,7 @@ lnet_match2mt(struct lnet_portal *ptl, struct lnet_process_id id, __u64 mbits)
 
 	/* if it's a unique portal, return match-table hashed by NID */
 	return lnet_ptl_is_unique(ptl) ?
-	       ptl->ptl_mtables[lnet_cpt_of_nid(id.nid, NULL)] : NULL;
+	       ptl->ptl_mtables[lnet_cpt_of_nid(id.nid)] : NULL;
 }
 
 struct lnet_match_table *
@@ -292,7 +292,7 @@ lnet_mt_of_match(struct lnet_match_info *info, struct lnet_msg *msg)
 
 	rotor = ptl->ptl_rotor++; /* get round-robin factor */
 	if (portal_rotor == LNET_PTL_ROTOR_HASH_RT && routed)
-		cpt = info->mi_cpt;
+		cpt = lnet_cpt_of_nid(msg->msg_hdr.src_nid);
 	else
 		cpt = rotor % LNET_CPT_NUMBER;
 
@@ -682,8 +682,7 @@ lnet_ptl_attach_md(struct lnet_me *me, struct lnet_libmd *md,
 		LASSERT(msg->msg_rx_delayed || head == &ptl->ptl_msg_stealing);
 
 		hdr   = &msg->msg_hdr;
-		/* Multi-Rail: Primary peer NID */
-		info.mi_id.nid	= msg->msg_initiator;
+		info.mi_id.nid	= hdr->src_nid;
 		info.mi_id.pid	= hdr->src_pid;
 		info.mi_opc	= LNET_MD_OP_PUT;
 		info.mi_portal	= hdr->msg.put.ptl_index;
@@ -942,7 +941,7 @@ lnet_clear_lazy_portal(struct lnet_ni *ni, int portal, char *reason)
 		/* grab all messages which are on the NI passed in */
 		list_for_each_entry_safe(msg, tmp, &ptl->ptl_msg_delayed,
 					 msg_list) {
-			if (msg->msg_txni == ni || msg->msg_rxni == ni)
+			if (msg->msg_rxpeer->lp_ni == ni)
 				list_move(&msg->msg_list, &zombies);
 		}
 	} else {

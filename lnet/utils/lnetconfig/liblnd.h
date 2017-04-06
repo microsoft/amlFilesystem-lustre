@@ -30,17 +30,12 @@
 #include "cyaml.h"
 
 int
-lustre_net_show_tunables(struct cYAML *tunables,
-			 struct lnet_ioctl_config_lnd_cmn_tunables *cmn);
-
-int
-lustre_ni_show_tunables(struct cYAML *lnd_tunables,
-			__u32 net_type,
-			struct lnet_lnd_tunables *lnd);
+lustre_interface_show_net(struct cYAML *interfaces, unsigned int index,
+			  bool detail, struct lnet_ioctl_config_data *data,
+			  struct lnet_ioctl_net_config *net_config);
 
 void
-lustre_yaml_extract_lnd_tunables(struct cYAML *tree,
-				 __u32 net_type,
-				 struct lnet_lnd_tunables *tun);
+lustre_interface_parse(struct cYAML *lndparams, const char *dev_name,
+		       struct lnet_ioctl_config_lnd_tunables *lnd_cfg);
 
 #endif /* LIB_LND_CONFIG_API_H */

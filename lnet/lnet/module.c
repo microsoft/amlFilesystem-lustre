@@ -91,7 +91,7 @@ lnet_unconfigure (void)
 }
 
 static int
-lnet_dyn_configure_net(struct libcfs_ioctl_hdr *hdr)
+lnet_dyn_configure(struct libcfs_ioctl_hdr *hdr)
 {
 	struct lnet_ioctl_config_data *conf =
 	  (struct lnet_ioctl_config_data *)hdr;
@@ -101,17 +101,19 @@ lnet_dyn_configure_net(struct libcfs_ioctl_hdr *hdr)
 		return -EINVAL;
 
 	mutex_lock(&lnet_config_mutex);
-	if (the_lnet.ln_niinit_self)
-		rc = lnet_dyn_add_net(conf);
-	else
+	if (!the_lnet.ln_niinit_self) {
 		rc = -EINVAL;
+		goto out_unlock;
+	}
+	rc = lnet_dyn_add_ni(LNET_PID_LUSTRE, conf);
+out_unlock:
 	mutex_unlock(&lnet_config_mutex);
 
 	return rc;
 }
 
 static int
-lnet_dyn_unconfigure_net(struct libcfs_ioctl_hdr *hdr)
+lnet_dyn_unconfigure(struct libcfs_ioctl_hdr *hdr)
 {
 	struct lnet_ioctl_config_data *conf =
 	  (struct lnet_ioctl_config_data *) hdr;
@@ -121,50 +123,12 @@ lnet_dyn_unconfigure_net(struct libcfs_ioctl_hdr *hdr)
 		return -EINVAL;
 
 	mutex_lock(&lnet_config_mutex);
-	if (the_lnet.ln_niinit_self)
-		rc = lnet_dyn_del_net(conf->cfg_net);
-	else
+	if (!the_lnet.ln_niinit_self) {
 		rc = -EINVAL;
-	mutex_unlock(&lnet_config_mutex);
-
-	return rc;
-}
-
-static int
-lnet_dyn_configure_ni(struct libcfs_ioctl_hdr *hdr)
-{
-	struct lnet_ioctl_config_ni *conf =
-	  (struct lnet_ioctl_config_ni *)hdr;
-	int			      rc;
-
-	if (conf->lic_cfg_hdr.ioc_len < sizeof(*conf))
-		return -EINVAL;
-
-	mutex_lock(&lnet_config_mutex);
-	if (the_lnet.ln_niinit_self)
-		rc = lnet_dyn_add_ni(conf);
-	else
-		rc = -EINVAL;
-	mutex_unlock(&lnet_config_mutex);
-
-	return rc;
-}
-
-static int
-lnet_dyn_unconfigure_ni(struct libcfs_ioctl_hdr *hdr)
-{
-	struct lnet_ioctl_config_ni *conf =
-	  (struct lnet_ioctl_config_ni *) hdr;
-	int			      rc;
-
-	if (conf->lic_cfg_hdr.ioc_len < sizeof(*conf))
-		return -EINVAL;
-
-	mutex_lock(&lnet_config_mutex);
-	if (the_lnet.ln_niinit_self)
-		rc = lnet_dyn_del_ni(conf);
-	else
-		rc = -EINVAL;
+		goto out_unlock;
+	}
+	rc = lnet_dyn_del_ni(conf->cfg_net);
+out_unlock:
 	mutex_unlock(&lnet_config_mutex);
 
 	return rc;
@@ -191,16 +155,10 @@ lnet_ioctl(unsigned int cmd, struct libcfs_ioctl_hdr *hdr)
 		return lnet_unconfigure();
 
 	case IOC_LIBCFS_ADD_NET:
-		return lnet_dyn_configure_net(hdr);
+		return lnet_dyn_configure(hdr);
 
 	case IOC_LIBCFS_DEL_NET:
-		return lnet_dyn_unconfigure_net(hdr);
-
-	case IOC_LIBCFS_ADD_LOCAL_NI:
-		return lnet_dyn_configure_ni(hdr);
-
-	case IOC_LIBCFS_DEL_LOCAL_NI:
-		return lnet_dyn_unconfigure_ni(hdr);
+		return lnet_dyn_unconfigure(hdr);
 
 	default:
 		/* Passing LNET_PID_ANY only gives me a ref if the net is up

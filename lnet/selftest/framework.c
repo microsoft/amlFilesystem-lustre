@@ -1032,8 +1032,7 @@ sfw_run_batch (sfw_batch_t *tsb)
 			wi = &tsu->tsu_worker;
 			swi_init_workitem(wi, tsu, sfw_run_test,
 					  lst_sched_test[\
-					  lnet_cpt_of_nid(tsu->tsu_dest.nid,
-							  NULL)]);
+					  lnet_cpt_of_nid(tsu->tsu_dest.nid)]);
 			swi_schedule_workitem(wi);
 		}
 	}

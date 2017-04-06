@@ -419,7 +419,6 @@ typedef struct lnet_md {
 	 * - LNET_MD_IOVEC: The start and length fields specify an array of
 	 *   struct iovec.
 	 * - LNET_MD_MAX_SIZE: The max_size field is valid.
-	 * - LNET_MD_BULK_HANDLE: The bulk_handle field is valid.
 	 *
 	 * Note:
 	 * - LNET_MD_KIOV or LNET_MD_IOVEC allows for a scatter/gather
@@ -443,15 +442,6 @@ typedef struct lnet_md {
 	 * descriptor are not logged.
 	 */
 	struct lnet_handle_eq eq_handle;
-	/**
-	 * The bulk MD handle which was registered to describe the buffers
-	 * either to be used to transfer data to the peer or receive data
-	 * from the peer. This allows LNet to properly determine the NUMA
-	 * node on which the memory was allocated and use that to select the
-	 * nearest local network interface. This value is only used
-	 * if the LNET_MD_BULK_HANDLE option is set.
-	 */
-	struct lnet_handle_md bulk_handle;
 } lnet_md_t;
 
 /* Max Transfer Unit (minimum supported everywhere).
@@ -482,8 +472,6 @@ typedef struct lnet_md {
 #define LNET_MD_MAX_SIZE	     (1 << 7)
 /** See struct lnet_md::options. */
 #define LNET_MD_KIOV		     (1 << 8)
-/** See struct lnet_md::options. */
-#define LNET_MD_BULK_HANDLE	     (1 << 9)
 
 /* For compatibility with Cray Portals */
 #define LNET_MD_PHYS			     0
@@ -562,22 +550,20 @@ typedef struct lnet_event {
 	struct lnet_process_id   target;
 	/** The identifier (nid, pid) of the initiator. */
 	struct lnet_process_id   initiator;
-	/** The source NID on the initiator. */
-	struct lnet_process_id   source;
 	/**
 	 * The NID of the immediate sender. If the request has been forwarded
 	 * by routers, this is the NID of the last hop; otherwise it's the
-	 * same as the source.
+	 * same as the initiator.
 	 */
-	lnet_nid_t          sender;
+	lnet_nid_t	    sender;
 	/** Indicates the type of the event. */
 	enum lnet_event_kind	type;
 	/** The portal table index specified in the request */
-	unsigned int        pt_index;
+	unsigned int	    pt_index;
 	/** A copy of the match bits specified in the request. */
-	__u64               match_bits;
+	__u64		    match_bits;
 	/** The length (in bytes) specified in the request. */
-	unsigned int        rlength;
+	unsigned int	    rlength;
 	/**
 	 * The length (in bytes) of the data that was manipulated by the
 	 * operation. For truncated operations, the manipulated length will be
@@ -585,7 +571,7 @@ typedef struct lnet_event {
 	 * see struct lnet_md). For all other operations, the manipulated length
 	 * will be the length of the requested operation, i.e. rlength.
 	 */
-	unsigned int        mlength;
+	unsigned int	    mlength;
 	/**
 	 * The handle to the MD associated with the event. The handle may be
 	 * invalid if the MD has been unlinked.
@@ -601,26 +587,26 @@ typedef struct lnet_event {
 	 * 64 bits of out-of-band user data. Only valid for LNET_EVENT_PUT.
 	 * \see LNetPut
 	 */
-	__u64               hdr_data;
+	__u64		    hdr_data;
 	/**
 	 * Indicates the completion status of the operation. It's 0 for
 	 * successful operations, otherwise it's an error code.
 	 */
-	int                 status;
+	int		    status;
 	/**
 	 * Indicates whether the MD has been unlinked. Note that:
 	 * - An event with unlinked set is the last event on the MD.
 	 * - This field is also set for an explicit LNET_EVENT_UNLINK event.
 	 * \see LNetMDUnlink
 	 */
-	int                 unlinked;
+	int		    unlinked;
 	/**
 	 * The displacement (in bytes) into the memory region that the
 	 * operation used. The offset can be determined by the operation for
 	 * a remote managed MD or by the local MD.
 	 * \see struct lnet_md::options
 	 */
-	unsigned int        offset;
+	unsigned int	    offset;
 	/**
 	 * The sequence number for this event. Sequence numbers are unique
 	 * to each event.
