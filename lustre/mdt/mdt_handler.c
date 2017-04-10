@@ -1246,6 +1246,10 @@ static int mdt_layout_change(struct mdt_thread_info *info,
 	int rc;
 	ENTRY;
 
+	CDEBUG(D_INFO, "got layout change request from client: "
+	       "opc:%u flags:%#x extent[%#llx,%#llx)\n",
+	       layout->li_opc, layout->li_flags,
+	       layout->li_start, layout->li_end);
 	if (layout->li_start >= layout->li_end) {
 		CERROR("Recieved an invalid layout change range [%llu, %llu) "
 		       "for "DFID"\n", layout->li_start, layout->li_end,
@@ -3559,6 +3563,14 @@ static int mdt_intent_layout(enum mdt_it_code opcode,
 
 	if (layout_change) {
 		struct lu_buf *buf = &info->mti_buf;
+
+		/**
+		 * mdt_layout_change is a reint operation, when the request
+		 * is resent, layout write shouldn't reprocess it again.
+		 */
+		rc = mdt_check_resent(info, mdt_reconstruct_generic, lhc);
+		if (rc)
+			GOTO(out_obj, rc = rc < 0 ? rc : 0);
 
 		buf->lb_buf = NULL;
 		buf->lb_len = 0;

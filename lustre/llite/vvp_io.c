@@ -361,6 +361,9 @@ static void vvp_io_fini(const struct lu_env *env, const struct cl_io_slice *ios)
 			end = cl_offset(io->ci_obj, index + 1);
 		}
 
+		CDEBUG(D_VFSTRACE, DFID" type %d [%llx, %llx)\n",
+		       PFID(lu_object_fid(&obj->co_lu)), io->ci_type,
+		       start, end);
 		rc = ll_layout_write_intent(inode, start, end);
 		io->ci_result = rc;
 		if (!rc)
