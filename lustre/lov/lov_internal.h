@@ -94,11 +94,20 @@ static inline size_t lov_comp_md_size(const struct lov_stripe_md *lsm)
 
 	size = sizeof(struct lov_comp_md_v1);
 	for (entry = 0; entry < lsm->lsm_entry_count; entry++) {
+		u16 stripe_count;
+
 		lsme = lsm->lsm_entries[entry];
 
+		/**
+		 * uninstantiated component could still keep -1 stripe count
+		 * and does not have objects
+		 */
+		stripe_count = lsme->lsme_stripe_count;
+		if (stripe_count == (u16)-1)
+			stripe_count = 0;
+
 		size += sizeof(*lsme);
-		size += lov_mds_md_size(lsme->lsme_stripe_count,
-					lsme->lsme_magic);
+		size += lov_mds_md_size(stripe_count, lsme->lsme_magic);
 	}
 
 	return size;
