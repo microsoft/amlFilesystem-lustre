@@ -3572,6 +3572,19 @@ static int mdt_intent_layout(enum mdt_it_code opcode,
 		if (rc)
 			GOTO(out_obj, rc = rc < 0 ? rc : 0);
 
+		/**
+		 * There is another resent case: the client's job has been
+		 * done by another client, referring lod_declare_layout_change
+		 * -EALREADY case, and it became a operation w/o transaction,
+		 * so we should not do the layout change, otherwise
+		 * mdt_layout_change() will try to cancel the granted server
+		 * CR lock whose remote counterpart is still in hold on the
+		 * client, and a deadlock ensues.
+		 */
+		rc = mdt_check_resent_lock(info, obj, lhc);
+		if (rc <= 0)
+			GOTO(out_obj, rc);
+
 		buf->lb_buf = NULL;
 		buf->lb_len = 0;
 		if (unlikely(req_is_replay(mdt_info_req(info)))) {
