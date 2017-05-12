@@ -80,6 +80,21 @@ struct lov_stripe_md {
 	struct lov_stripe_md_entry *lsm_entries[];
 };
 
+static inline bool lsme_inited(const struct lov_stripe_md_entry *lsme)
+{
+	return lsme->lsme_flags & LCME_FL_INIT;
+}
+
+static inline bool lsm_entry_inited(const struct lov_stripe_md *lsm, int index)
+{
+	return lsme_inited(lsm->lsm_entries[index]);
+}
+
+static inline bool lsm_is_composite(__u32 magic)
+{
+	return !!(magic & LOV_MAGIC_COMP_V1);
+}
+
 static inline size_t lov_comp_md_size(const struct lov_stripe_md *lsm)
 {
 	struct lov_stripe_md_entry *lsme;
@@ -98,12 +113,9 @@ static inline size_t lov_comp_md_size(const struct lov_stripe_md *lsm)
 
 		lsme = lsm->lsm_entries[entry];
 
-		/**
-		 * uninstantiated component could still keep -1 stripe count
-		 * and does not have objects
-		 */
-		stripe_count = lsme->lsme_stripe_count;
-		if (stripe_count == (u16)-1)
+		if (lsme_inited(lsme))
+			stripe_count = lsme->lsme_stripe_count;
+		else
 			stripe_count = 0;
 
 		size += sizeof(*lsme);
@@ -346,15 +358,5 @@ static inline void lov_lsm2layout(struct lov_stripe_md *lsm,
 		ol->ol_comp_end = 0;
 		ol->ol_comp_id = 0;
 	}
-}
-
-static inline bool lsme_inited(const struct lov_stripe_md_entry *lsme)
-{
-	return lsme->lsme_flags & LCME_FL_INIT;
-}
-
-static inline bool lsm_entry_inited(const struct lov_stripe_md *lsm, int index)
-{
-	return lsme_inited(lsm->lsm_entries[index]);
 }
 #endif
