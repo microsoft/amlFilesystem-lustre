@@ -33,6 +33,7 @@
 #define DEBUG_SUBSYSTEM S_LNET
 
 #include <lnet/lib-lnet.h>
+#include <lnet/lnet-sysfs.h>
 #include <uapi/linux/lnet/lnet-dlc.h>
 
 static int config_on_load = 0;
@@ -237,9 +238,17 @@ static int __init lnet_init(void)
 
 	mutex_init(&lnet_config_mutex);
 
+	/* Create sysfs base directories for LNet statistics */
+	lnet_kobj = kobject_create_and_add("lnet", fs_kobj);
+	if (!lnet_kobj) {
+		CERROR("Sysfs kobject for lnet could not be created\n");
+		RETURN(-ENOMEM);
+	}
+
 	rc = lnet_lib_init();
 	if (rc != 0) {
 		CERROR("lnet_lib_init: error %d\n", rc);
+		kobject_put(lnet_kobj);
 		RETURN(rc);
 	}
 
@@ -265,6 +274,9 @@ static void __exit lnet_exit(void)
 	LASSERT(rc == 0);
 
 	lnet_lib_exit();
+
+	/* cleanup the base sysfs directories */
+	kobject_put(lnet_kobj);
 }
 
 MODULE_AUTHOR("OpenSFS, Inc. <http://www.lustre.org/>");
