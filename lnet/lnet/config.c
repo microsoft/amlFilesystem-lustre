@@ -37,6 +37,7 @@
 #include <linux/nsproxy.h>
 #include <net/net_namespace.h>
 #include <lnet/lib-lnet.h>
+#include <lnet/lnet-sysfs.h>
 
 /* tmp struct for parsing routes */
 struct lnet_text_buf {
@@ -320,6 +321,9 @@ lnet_ni_free(struct lnet_ni *ni)
 	if (ni->ni_net_ns != NULL)
 		put_net(ni->ni_net_ns);
 
+	/* clean up the sysfs kobjects for this NI */
+	lnet_ni_sysfs_cleanup(ni);
+
 	LIBCFS_FREE(ni, sizeof(*ni));
 }
 
@@ -352,6 +356,9 @@ lnet_net_free(struct lnet_net *net)
 		LIBCFS_FREE(net->net_cpts,
 			    sizeof(*net->net_cpts) * net->net_ncpts);
 
+	/* clean up the sysfs kobjects for this net*/
+	lnet_net_sysfs_cleanup(net);
+
 	LIBCFS_FREE(net, sizeof(*net));
 }
 
@@ -359,6 +366,7 @@ struct lnet_net *
 lnet_net_alloc(__u32 net_id, struct list_head *net_list)
 {
 	struct lnet_net		*net;
+	int                     rc;
 
 	if (!lnet_net_unique(net_id, net_list, NULL)) {
 		CERROR("Duplicate net %s. Ignore\n",
@@ -370,6 +378,15 @@ lnet_net_alloc(__u32 net_id, struct list_head *net_list)
 	if (net == NULL) {
 		CERROR("Out of memory creating network %s\n",
 		       libcfs_net2str(net_id));
+		return NULL;
+	}
+
+	/* setup the sysfs kobjects for net*/
+	rc = lnet_net_sysfs_setup(net_id, net);
+	if (rc != 0) {
+		CERROR("Could not setup sysfs kobjects for net %s\n",
+		       libcfs_net2str(net_id));
+		LIBCFS_FREE(net, sizeof(*net));
 		return NULL;
 	}
 
@@ -396,7 +413,7 @@ lnet_net_alloc(__u32 net_id, struct list_head *net_list)
 static int
 lnet_ni_add_interface(struct lnet_ni *ni, char *iface)
 {
-	int niface = 0;
+	int niface = 0, rc = 0;
 
 	if (ni == NULL)
 		return -ENOMEM;
@@ -431,6 +448,13 @@ lnet_ni_add_interface(struct lnet_ni *ni, char *iface)
 
 	strncpy(ni->ni_interfaces[niface], iface,
 		strlen(iface) + 1);
+
+	/* setup the sysfs kobjects for NI*/
+	rc = lnet_ni_sysfs_setup(ni, iface);
+	if (rc != 0) {
+		CERROR("Could not setup sysfs kobjects for ni %s\n", iface);
+		return -ENOMEM;
+	}
 
 	return 0;
 }

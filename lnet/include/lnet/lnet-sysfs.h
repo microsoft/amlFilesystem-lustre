@@ -74,4 +74,46 @@ ssize_t lnet_attr_store(struct kobject *kobj, struct attribute *attr,
 
 extern const struct sysfs_ops lnet_sysfs_ops;
 
+/*
+ * lnet_net_sysfs_setup
+ *
+ * Setup the sysfs hierarchy for lnet network stats.
+ * Create kset for the net.
+ *
+ * net_id - net_type of the network being added
+ * net - network added to the lnet
+ */
+int lnet_net_sysfs_setup(__u32 net_id, struct lnet_net *net);
+
+/*
+ * lnet_ni_sysfs_setup
+ *
+ * Create kobject for the NI under the kset of the network
+ * that this NI is part of. Create the attribute files
+ * for this NI as well.
+ *
+ * ni - NI for which stats are being created
+ */
+int lnet_ni_sysfs_setup(struct lnet_ni *ni, char *iface);
+
+/*
+ * lnet_net_sysfs_cleanup
+ *
+ * Cleanup the sysfs kset for this network.
+ *
+ * net - network being cleaned up from lnet
+ */
+void lnet_net_sysfs_cleanup(struct lnet_net *net);
+
+/*
+ * lnet_ni_sysfs_cleanup
+ *
+ * Cleanup the sysfs hierarchy for this NI stats.
+ * Remove the kobject for the NI and the
+ * attribute files for the NI.
+ *
+ * ni - NI for which stats are being cleaned up
+ */
+void lnet_ni_sysfs_cleanup(struct lnet_ni *ni);
+
 #endif

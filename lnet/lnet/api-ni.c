@@ -2522,9 +2522,19 @@ LNetNIInit(lnet_pid_t requested_pid)
 		return rc;
 	}
 
+	LASSERT(lnet_kobj);
+
+	the_lnet.ln_net_kobj = kobject_create_and_add("net", lnet_kobj);
+	if (!the_lnet.ln_net_kobj) {
+		mutex_unlock(&the_lnet.ln_api_mutex);
+		CERROR("kobject for net could not be created\n");
+		return -ENOMEM;
+	}
+
 	rc = lnet_prepare(requested_pid);
 	if (rc != 0) {
 		mutex_unlock(&the_lnet.ln_api_mutex);
+		kobject_put(the_lnet.ln_net_kobj);
 		return rc;
 	}
 
@@ -2632,6 +2642,7 @@ err_empty_list:
 		list_del_init(&net->net_list);
 		lnet_net_free(net);
 	}
+	kobject_put(the_lnet.ln_net_kobj);
 	return rc;
 }
 EXPORT_SYMBOL(LNetNIInit);
@@ -2672,6 +2683,7 @@ LNetNIFini()
 		lnet_destroy_routes();
 		lnet_shutdown_lndnets();
 		lnet_unprepare();
+		kobject_put(the_lnet.ln_net_kobj);
 	}
 
 	mutex_unlock(&the_lnet.ln_api_mutex);

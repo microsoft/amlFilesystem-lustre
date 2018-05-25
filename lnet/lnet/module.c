@@ -56,6 +56,7 @@ lnet_configure(void *arg)
 		if (rc != 1)
 			goto out;
 
+
 		rc = LNetNIInit(LNET_PID_LUSTRE);
 		if (rc >= 0) {
 			the_lnet.ln_niinit_self = 1;

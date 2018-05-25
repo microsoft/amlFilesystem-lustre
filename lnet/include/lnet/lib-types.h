@@ -415,6 +415,9 @@ struct lnet_net {
 
 	/* network state */
 	enum lnet_net_state	net_state;
+
+	/* Sysfs kset for each network*/
+	struct kset		*nwid_kset;
 };
 
 struct lnet_ni {
@@ -503,6 +506,12 @@ struct lnet_ni {
 	 */
 	char			*ni_interfaces[LNET_INTERFACES_NUM];
 	struct net		*ni_net_ns;     /* original net namespace */
+
+	/* Sysfs kobjects */
+	struct kobject		*ni_kobj;
+	struct kobject		stats_kobj;
+
+	struct completion	stats_kobj_unregister;
 };
 
 #define LNET_PROTO_PING_MATCHBITS	0x8000000000000000LL
@@ -1144,6 +1153,8 @@ struct lnet {
 	/* recovery eq handler */
 	struct lnet_handle_eq		ln_mt_eqh;
 
+	/* Sysfs kobject for net */
+	struct kobject			*ln_net_kobj;
 };
 
 #endif
