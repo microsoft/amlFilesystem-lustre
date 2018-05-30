@@ -41,6 +41,7 @@
 #include <linux/uaccess.h>
 
 #include <lnet/lib-lnet.h>
+#include <lnet/lnet-sysfs.h>
 #include <uapi/linux/lnet/lnet-dlc.h>
 
 /* Value indicating that recovery needs to re-check a peer immediately. */
@@ -310,11 +311,12 @@ lnet_destroy_peer_locked(struct lnet_peer *lp)
  * Call with lnet_net_lock/EX held
  */
 static void
-lnet_peer_detach_peer_ni_locked(struct lnet_peer_ni *lpni)
+lnet_peer_detach_peer_ni_locked(struct lnet_peer_ni *lpni, bool del_spni)
 {
 	struct lnet_peer_table *ptable;
 	struct lnet_peer_net *lpn;
 	struct lnet_peer *lp;
+	struct lnet_sysfs_peer *spni = lpni->lpni_sysfs_peer;
 
 	/*
 	 * Belts and suspenders: gracefully handle teardown of a
@@ -333,6 +335,11 @@ lnet_peer_detach_peer_ni_locked(struct lnet_peer_ni *lpni)
 	/* Update peer NID count. */
 	lp = lpn->lpn_peer;
 	lp->lp_nnis--;
+
+	/* Add the peer_ni sysfs kobject to the zombie list*/
+	if (del_spni && LNET_NETTYP(LNET_NIDNET(lpni->lpni_nid)) != LOLND)
+		list_add_tail(&spni->spni_zombie,
+			      &the_lnet.ln_sysfs_peer_zombie);
 
 	/*
 	 * If there are no more peer nets, make the peer unfindable
@@ -404,7 +411,7 @@ lnet_peer_ni_del_locked(struct lnet_peer_ni *lpni)
 	spin_unlock(&ptable->pt_zombie_lock);
 
 	/* no need to keep this peer_ni on the hierarchy anymore */
-	lnet_peer_detach_peer_ni_locked(lpni);
+	lnet_peer_detach_peer_ni_locked(lpni, true);
 
 	/* remove hashlist reference on peer_ni */
 	lnet_peer_ni_decref_locked(lpni);
@@ -415,6 +422,7 @@ lnet_peer_ni_del_locked(struct lnet_peer_ni *lpni)
 void lnet_peer_uninit(void)
 {
 	struct lnet_peer_ni *lpni, *tmp;
+	struct lnet_sysfs_peer *spni;
 
 	lnet_net_lock(LNET_LOCK_EX);
 
@@ -426,6 +434,13 @@ void lnet_peer_uninit(void)
 	lnet_peer_tables_destroy();
 
 	lnet_net_unlock(LNET_LOCK_EX);
+
+	/* Cleanup the sysfs zombie list */
+	while (!list_empty(&the_lnet.ln_sysfs_peer_zombie)) {
+		spni = list_entry(the_lnet.ln_sysfs_peer_zombie.next,
+				  struct lnet_sysfs_peer, spni_zombie);
+		lnet_peer_ni_sysfs_cleanup(spni);
+	}
 }
 
 static int
@@ -451,9 +466,18 @@ lnet_peer_del_locked(struct lnet_peer *peer)
 static int
 lnet_peer_del(struct lnet_peer *peer)
 {
+	struct lnet_sysfs_peer *spni;
+
 	lnet_net_lock(LNET_LOCK_EX);
 	lnet_peer_del_locked(peer);
 	lnet_net_unlock(LNET_LOCK_EX);
+
+	/* Cleanup the sysfs zombie list */
+	while (!list_empty(&the_lnet.ln_sysfs_peer_zombie)) {
+		spni = list_entry(the_lnet.ln_sysfs_peer_zombie.next,
+				  struct lnet_sysfs_peer, spni_zombie);
+		lnet_peer_ni_sysfs_cleanup(spni);
+	}
 
 	return 0;
 }
@@ -471,6 +495,7 @@ static int
 lnet_peer_del_nid(struct lnet_peer *lp, lnet_nid_t nid, unsigned flags)
 {
 	struct lnet_peer_ni *lpni;
+	struct lnet_sysfs_peer *spni;
 	lnet_nid_t primary_nid = lp->lp_primary_nid;
 	int rc = 0;
 
@@ -505,6 +530,13 @@ lnet_peer_del_nid(struct lnet_peer *lp, lnet_nid_t nid, unsigned flags)
 	rc = lnet_peer_ni_del_locked(lpni);
 
 	lnet_net_unlock(LNET_LOCK_EX);
+
+	/* Cleanup the sysfs zombie list */
+	while (!list_empty(&the_lnet.ln_sysfs_peer_zombie)) {
+		spni = list_entry(the_lnet.ln_sysfs_peer_zombie.next,
+				  struct lnet_sysfs_peer, spni_zombie);
+		lnet_peer_ni_sysfs_cleanup(spni);
+	}
 
 out:
 	CDEBUG(D_NET, "peer %s NID %s flags %#x: %d\n",
@@ -1136,6 +1168,27 @@ lnet_peer_attach_peer_ni(struct lnet_peer *lp,
 				unsigned flags)
 {
 	struct lnet_peer_table *ptable;
+	struct lnet_sysfs_peer *spni;
+
+	/*
+	 * Make sure the sysfs zombie list is empty
+	 * before setting up the sysfs kobjects
+	 */
+	while (!list_empty(&the_lnet.ln_sysfs_peer_zombie)) {
+		spni = list_entry(the_lnet.ln_sysfs_peer_zombie.next,
+				  struct lnet_sysfs_peer, spni_zombie);
+		lnet_peer_ni_sysfs_cleanup(spni);
+	}
+
+	lnet_net_lock(LNET_LOCK_EX);
+	spni = lpni->lpni_sysfs_peer;
+	lnet_net_unlock(LNET_LOCK_EX);
+
+	if (spni)
+		lnet_peer_ni_sysfs_cleanup(spni);
+
+	/* setup sysfs kobjects */
+	lnet_peer_ni_sysfs_setup(lpni, lp);
 
 	/* Install the new peer_ni */
 	lnet_net_lock(LNET_LOCK_EX);
@@ -1155,7 +1208,7 @@ lnet_peer_attach_peer_ni(struct lnet_peer *lp,
 	if (lpni->lpni_peer_net) {
 		LASSERT(lpni->lpni_peer_net != lpn);
 		LASSERT(lpni->lpni_peer_net->lpn_peer != lp);
-		lnet_peer_detach_peer_ni_locked(lpni);
+		lnet_peer_detach_peer_ni_locked(lpni, false);
 		lnet_peer_net_decref_locked(lpni->lpni_peer_net);
 		lpni->lpni_peer_net = NULL;
 	}
@@ -1178,7 +1231,6 @@ lnet_peer_attach_peer_ni(struct lnet_peer *lp,
 		list_add_tail(&lp->lp_peer_list, &ptable->pt_peer_list);
 		ptable->pt_peers++;
 	}
-
 
 	/* Update peer state */
 	spin_lock(&lp->lp_lock);

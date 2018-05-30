@@ -47,6 +47,7 @@
 #include <libcfs/libcfs.h>
 #include <lnet/api.h>
 #include <lnet/lib-types.h>
+#include <lnet/lnet-sysfs.h>
 #include <uapi/linux/lnet/lnet-dlc.h>
 #include <uapi/linux/lnet/lnet-types.h>
 #include <uapi/linux/lnet/lnetctl.h>

@@ -635,6 +635,8 @@ struct lnet_peer_ni {
 	__u32			lpni_pref_nnids;
 	/* router checker state */
 	struct lnet_rc_data	*lpni_rcd;
+	/* sysfs structure */
+	struct lnet_sysfs_peer	*lpni_sysfs_peer;
 };
 
 /* Preferred path added due to traffic on non-MR peer_ni */
@@ -712,6 +714,22 @@ struct lnet_peer {
 
 	/* tasks waiting on discovery of this peer */
 	wait_queue_head_t	lp_dc_waitq;
+
+	/* sysfs kobject */
+	struct kobject		*prim_nid_kobj;
+
+	/* sysfs kset */
+	struct kset		*peer_nis_kset;
+};
+
+struct lnet_sysfs_peer {
+	/* chain on ln_sysfs_peer_zombie */
+	struct list_head	spni_zombie;
+	struct lnet_peer_ni	*peer_ni;
+	struct lnet_peer	*peer;
+	struct kobject		*peer_nid_kobj;
+	struct kobject		stats_kobj;
+	struct completion	stats_kobj_unregister;
 };
 
 /*
@@ -1155,6 +1173,12 @@ struct lnet {
 
 	/* Sysfs kobject for net */
 	struct kobject			*ln_net_kobj;
+
+	/* Sysfs kobject for base peer directory */
+	struct kobject			*ln_peers_kobj;
+
+	/* sysfs peer kobject zombie list */
+	struct list_head		ln_sysfs_peer_zombie;
 };
 
 #endif

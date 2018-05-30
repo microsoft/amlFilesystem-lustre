@@ -1129,6 +1129,7 @@ lnet_prepare(lnet_pid_t requested_pid)
 	INIT_LIST_HEAD(&the_lnet.ln_dc_expired);
 	INIT_LIST_HEAD(&the_lnet.ln_mt_localNIRecovq);
 	INIT_LIST_HEAD(&the_lnet.ln_mt_peerNIRecovq);
+	INIT_LIST_HEAD(&the_lnet.ln_sysfs_peer_zombie);
 	init_waitqueue_head(&the_lnet.ln_dc_waitq);
 
 	rc = lnet_descriptor_setup();
@@ -2018,6 +2019,7 @@ static void
 lnet_shutdown_lndnet(struct lnet_net *net)
 {
 	struct lnet_ni *ni;
+	struct lnet_sysfs_peer *spni;
 
 	lnet_net_lock(LNET_LOCK_EX);
 
@@ -2037,6 +2039,16 @@ lnet_shutdown_lndnet(struct lnet_net *net)
 
 	/* Do peer table cleanup for this net */
 	lnet_peer_tables_cleanup(net);
+
+	/*
+	 * Cleanup the sysfs peer zombie list to cleanup all
+	 * the peer kobjects.
+	 */
+	while (!list_empty(&the_lnet.ln_sysfs_peer_zombie)) {
+		spni = list_entry(the_lnet.ln_sysfs_peer_zombie.next,
+				  struct lnet_sysfs_peer, spni_zombie);
+		lnet_peer_ni_sysfs_cleanup(spni);
+	}
 
 	lnet_net_lock(LNET_LOCK_EX);
 	/*
@@ -2531,9 +2543,18 @@ LNetNIInit(lnet_pid_t requested_pid)
 		return -ENOMEM;
 	}
 
+	the_lnet.ln_peers_kobj = kobject_create_and_add("peers", lnet_kobj);
+	if (!the_lnet.ln_peers_kobj) {
+		mutex_unlock(&the_lnet.ln_api_mutex);
+		CERROR("kobject for peers could not be created\n");
+		kobject_put(the_lnet.ln_net_kobj);
+		return -ENOMEM;
+	}
+
 	rc = lnet_prepare(requested_pid);
 	if (rc != 0) {
 		mutex_unlock(&the_lnet.ln_api_mutex);
+		kobject_put(the_lnet.ln_peers_kobj);
 		kobject_put(the_lnet.ln_net_kobj);
 		return rc;
 	}
@@ -2643,6 +2664,7 @@ err_empty_list:
 		lnet_net_free(net);
 	}
 	kobject_put(the_lnet.ln_net_kobj);
+	kobject_put(the_lnet.ln_peers_kobj);
 	return rc;
 }
 EXPORT_SYMBOL(LNetNIInit);
@@ -2683,6 +2705,7 @@ LNetNIFini()
 		lnet_destroy_routes();
 		lnet_shutdown_lndnets();
 		lnet_unprepare();
+		kobject_put(the_lnet.ln_peers_kobj);
 		kobject_put(the_lnet.ln_net_kobj);
 	}
 

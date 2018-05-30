@@ -116,4 +116,27 @@ void lnet_net_sysfs_cleanup(struct lnet_net *net);
  */
 void lnet_ni_sysfs_cleanup(struct lnet_ni *ni);
 
+/*
+ * lnet_peer_sysfs_setup
+ *
+ * Setup the sysfs hierarchy for lnet peer stats.
+ * Create kset for the prim_nid, kobject for the peer_ni
+ * and the attribute files for the peer_ni.
+ *
+ * peers_kobj - Parent kobject(lnet_peer_kobj) for kset prim_nid
+ * lpni - peer_ni for which stats are being created
+ */
+int lnet_peer_ni_sysfs_setup(struct lnet_peer_ni *lpni, struct lnet_peer *lp);
+
+/*
+ * lnet_peer_sysfs_cleanup
+ *
+ * Cleanup the sysfs hierarchy for lnet peer stats.
+ * Remove the kobject for the peer_ni and the
+ * attribute files for the peer_ni.
+ *
+ * spni - sysfs peer structure storing the peer_nid kobject
+ */
+void lnet_peer_ni_sysfs_cleanup(struct lnet_sysfs_peer *spni);
+
 #endif
