@@ -816,8 +816,8 @@ lnet_get_lnd_timeout(void)
 }
 EXPORT_SYMBOL(lnet_get_lnd_timeout);
 
-void
-lnet_register_lnd(struct lnet_lnd *lnd)
+int
+lnet_register_lnd(struct lnet_lnd *lnd, char *lnd_name)
 {
 	mutex_lock(&the_lnet.ln_lnd_mutex);
 
@@ -830,12 +830,35 @@ lnet_register_lnd(struct lnet_lnd *lnd)
 	CDEBUG(D_NET, "%s LND registered\n", libcfs_lnd2str(lnd->lnd_type));
 
 	mutex_unlock(&the_lnet.ln_lnd_mutex);
+
+	if (lnd->lnd_type == LOLND)
+		return 0;
+
+	/* Create sysfs kobject and kset for lnd and lnd_peers */
+	lnd->lnd_kobj = kobject_create_and_add(lnd_name, lnet_kobj);
+	if (!lnd->lnd_kobj) {
+		CERROR("sysfs kobject for %s could not be created\n", lnd_name);
+		return -ENOMEM;
+	}
+
+	lnd->lnd_peers_kset = kset_create_and_add("peers", NULL, lnd->lnd_kobj);
+	if (!lnd->lnd_peers_kset) {
+		CERROR("sysfs kobject for %s peers could not be created\n",
+			lnd_name);
+		kobject_put(lnd->lnd_kobj);
+		return -ENOMEM;
+	}
+
+	return 0;
 }
 EXPORT_SYMBOL(lnet_register_lnd);
 
 void
 lnet_unregister_lnd(struct lnet_lnd *lnd)
 {
+	kset_put(lnd->lnd_peers_kset);
+	kobject_put(lnd->lnd_kobj);
+
 	mutex_lock(&the_lnet.ln_lnd_mutex);
 
 	LASSERT(lnet_find_lnd_by_type(lnd->lnd_type) == lnd);
@@ -2475,8 +2498,8 @@ int lnet_lib_init(void)
 	/* All LNDs apart from the LOLND are in separate modules.  They
 	 * register themselves when their module loads, and unregister
 	 * themselves when their module is unloaded. */
-	lnet_register_lnd(&the_lolnd);
-	return 0;
+	rc = lnet_register_lnd(&the_lolnd, "lolnd");
+	return rc;
 }
 
 /**

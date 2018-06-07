@@ -828,7 +828,7 @@ struct page *lnet_kvaddr_to_page(unsigned long vaddr);
 int lnet_cpt_of_md(struct lnet_libmd *md, unsigned int offset);
 
 unsigned int lnet_get_lnd_timeout(void);
-void lnet_register_lnd(struct lnet_lnd *lnd);
+int lnet_register_lnd(struct lnet_lnd *lnd, char *lnd_name);
 void lnet_unregister_lnd(struct lnet_lnd *lnd);
 
 int lnet_connect(struct socket **sockp, lnet_nid_t peer_nid,

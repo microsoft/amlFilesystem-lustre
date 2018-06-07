@@ -317,7 +317,7 @@ kiblnd_tunables_setup(struct lnet_ni *ni)
 	return 0;
 }
 
-int
+void
 kiblnd_tunables_init(void)
 {
 	default_tunables.lnd_version = CURRENT_LND_VERSION;
@@ -329,5 +329,4 @@ kiblnd_tunables_init(void)
 	default_tunables.lnd_fmr_cache = fmr_cache;
 	default_tunables.lnd_ntx = ntx;
 	default_tunables.lnd_conns_per_peer = conns_per_peer;
-	return 0;
 }

@@ -52,6 +52,24 @@
 
 extern struct kobject *lnet_kobj;               /* Sysfs lnet kobject */
 
+struct sysfs_lnd_conn {
+	struct kobject stats_kobj;
+	struct kobj_type *stats_ktype;
+	struct completion stats_kobj_unregister;
+};
+
+struct sysfs_lnd_peer {
+	/* sysfs peer nid object */
+	struct kobject *peer_ni_kobj;
+	/* sysfs local nid object */
+	struct kobject *local_ni_kobj;
+	struct kobject stats_kobj;
+	struct kobj_type *stats_ktype;
+	struct completion stats_kobj_unregister;
+	/* sysfs conn kobject */
+	struct kobject *peer_conns_kobj;
+};
+
 struct lnet_attr {
 	struct attribute attr;
 	ssize_t (*show)(struct kobject *kobj, struct attribute *attr,

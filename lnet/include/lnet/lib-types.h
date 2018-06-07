@@ -249,11 +249,15 @@ struct socket;
 
 struct lnet_lnd {
 	/* fields managed by portals */
-	struct list_head	lnd_list;	/* stash in the LND table */
-	int			lnd_refcount;	/* # active instances */
+	struct list_head lnd_list;	/* stash in the LND table */
+	int lnd_refcount;	/* # active instances */
 
 	/* fields initialized by the LND */
-	__u32			lnd_type;
+	__u32 lnd_type;
+
+	/* Sysfs kobject */
+	struct kobject *lnd_kobj;
+	struct kset *lnd_peers_kset;
 
 	int  (*lnd_startup)(struct lnet_ni *ni);
 	void (*lnd_shutdown)(struct lnet_ni *ni);

@@ -707,6 +707,8 @@ struct kib_conn {
 
 	/* in-progress connection state */
 	struct kib_connvars	*ibc_connvars;
+	/* sysfs lnd conn structure */
+	struct sysfs_lnd_conn   ibc_sysfs;
 };
 
 #define IBLND_CONN_INIT               0         /* being initialised */
@@ -753,6 +755,8 @@ struct kib_peer_ni {
 	__u16			ibp_max_frags;
 	/* max_peer_credits */
 	__u16			ibp_queue_depth;
+	/* sysfs lnd peer structure */
+	struct sysfs_lnd_peer   ibp_sysfs;
 };
 
 #ifndef HAVE_IB_INC_RKEY
@@ -1153,7 +1157,7 @@ int kiblnd_fmr_pool_map(struct kib_fmr_poolset *fps, struct kib_tx *tx,
 void kiblnd_fmr_pool_unmap(struct kib_fmr *fmr, int status);
 
 int  kiblnd_tunables_setup(struct lnet_ni *ni);
-int  kiblnd_tunables_init(void);
+void kiblnd_tunables_init(void);
 
 int  kiblnd_connd (void *arg);
 int  kiblnd_scheduler(void *arg);

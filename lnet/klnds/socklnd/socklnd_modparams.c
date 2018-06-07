@@ -157,7 +157,7 @@ MODULE_PARM_DESC(protocol, "protocol version");
 
 struct ksock_tunables ksocknal_tunables;
 
-int ksocknal_tunables_init(void)
+void ksocknal_tunables_init(void)
 {
 
         /* initialize ksocknal_tunables structure */
@@ -210,6 +210,4 @@ int ksocknal_tunables_init(void)
 
         if (*ksocknal_tunables.ksnd_zc_min_payload < (2 << 10))
                 *ksocknal_tunables.ksnd_zc_min_payload = (2 << 10);
-
-	return 0;
 };

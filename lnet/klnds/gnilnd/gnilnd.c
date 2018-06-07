@@ -2898,9 +2898,9 @@ static int __init kgnilnd_init(void)
 	kgnilnd_insert_sysctl();
 	kgnilnd_proc_init();
 
-	lnet_register_lnd(&the_kgnilnd);
+	rc = lnet_register_lnd(&the_kgnilnd, "kgnilnd");
 
-	return 0;
+	return rc;
 }
 
 MODULE_AUTHOR("Cray, Inc. <nic@cray.com>");

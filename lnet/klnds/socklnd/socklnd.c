@@ -2886,13 +2886,11 @@ static int __init ksocklnd_init(void)
 	the_ksocklnd.lnd_query    = ksocknal_query;
 	the_ksocklnd.lnd_accept   = ksocknal_accept;
 
-	rc = ksocknal_tunables_init();
-	if (rc != 0)
-		return rc;
+	ksocknal_tunables_init();
 
-	lnet_register_lnd(&the_ksocklnd);
+	rc = lnet_register_lnd(&the_ksocklnd, "ksocklnd");
 
-	return 0;
+	return rc;
 }
 
 MODULE_AUTHOR("OpenSFS, Inc. <http://www.lustre.org/>");

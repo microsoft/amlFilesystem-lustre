@@ -369,6 +369,8 @@ struct ksock_conn {
 	int			ksnc_tx_scheduled;
 	/* time stamp of the last posted TX */
 	time64_t		ksnc_tx_last_post;
+	/* sysfs lnd conn structure */
+	struct sysfs_lnd_conn   ksnc_sysfs;
 };
 
 struct ksock_route {
@@ -413,6 +415,7 @@ struct ksock_peer_ni {
 	struct lnet_ni       *ksnp_ni;       /* which network */
 	int                   ksnp_n_passive_ips; /* # of... */
 	__u32                 ksnp_passive_ips[LNET_INTERFACES_NUM]; /* preferred local interfaces */
+	struct sysfs_lnd_peer ksnp_sysfs; /* sysfs lnd peer structure */
 };
 
 struct ksock_connreq {
@@ -667,7 +670,7 @@ extern int ksocknal_lib_recv_kiov(struct ksock_conn *conn, struct page **pages,
 extern int ksocknal_lib_get_conn_tunables(struct ksock_conn *conn, int *txmem,
 					  int *rxmem, int *nagle);
 
-extern int ksocknal_tunables_init(void);
+extern void ksocknal_tunables_init(void);
 
 extern void ksocknal_lib_csum_tx(struct ksock_tx *tx);
 

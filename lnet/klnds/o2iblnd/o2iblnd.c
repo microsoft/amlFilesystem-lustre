@@ -3399,13 +3399,11 @@ static int __init ko2iblnd_init(void)
 			  ibm_u.putack.ibpam_rd.rd_frags[IBLND_MAX_RDMA_FRAGS])
 		 <= IBLND_MSG_SIZE);
 
-	rc = kiblnd_tunables_init();
-	if (rc != 0)
-		return rc;
+	kiblnd_tunables_init();
 
-	lnet_register_lnd(&the_o2iblnd);
+	rc = lnet_register_lnd(&the_o2iblnd, "ko2iblnd");
 
-	return 0;
+	return rc;
 }
 
 MODULE_AUTHOR("OpenSFS, Inc. <http://www.lustre.org/>");
