@@ -548,6 +548,24 @@ int lustre_lnet_show_peer(char *knid, int detail, int seq_no,
 			  bool backup);
 
 /*
+ *   lustre_lnet_stats_peer
+ *   Show the stats for the peers specified with nid. If the primary nids
+ *   are specified then the stats will be displayed for all the peer nis
+ *   under that primary nid.
+ *   If no nids are specified then this will show stats for all the peers
+ *   configured for this node.
+ *
+ *   nid - list of nids (can be list of primary nids)
+ *   num_nids - number of nids in the nid array
+ *   detail - display detailed statistics
+ *   seq_no - sequence number of the command
+ *   show_rc - YAML structure of the resultant show
+ *   err_rc - YAML strucutre of the resultant return code.
+ */
+int lustre_lnet_stats_peer(char **nid, int num_nids, int detail, int seq_no,
+			   struct cYAML **show_rc, struct cYAML **err_rc);
+
+/*
  * lustre_lnet_list_peer
  *   List the known peers.
  *

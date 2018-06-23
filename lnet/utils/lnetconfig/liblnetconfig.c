@@ -3285,6 +3285,513 @@ out:
 	return rc;
 }
 
+static int build_peer_stats_tree(char *path, struct cYAML *root, char *parent,
+				 char *nid, int detail, char *err_str)
+{
+	struct cYAML *tree = NULL, *item = NULL, *item1 = NULL, *peer_ni = NULL,
+		     *send = NULL, *recv = NULL, *drop = NULL, *health = NULL,
+		     *prim_nid = NULL;
+	char *stats_path = NULL;
+	char val[LNET_MAX_STR_LEN];
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int buf;
+
+	/* check if the prim_nid (parent) is already added to
+	 * the root. If it is then add this nid and its stats
+	 * under the same prim_nid object else create new.
+	 */
+	tree = cYAML_get_object_item(root, "peer");
+	if (!tree && !cYAML_is_sequence(tree)) {
+		snprintf(err_str, LNET_MAX_STR_LEN, "\"yaml tree root not\""
+			 " found\"");
+		return rc;
+	}
+
+	while (cYAML_get_next_seq_item(tree, &item) != NULL) {
+		prim_nid = cYAML_get_object_item(item, "primary nid");
+		/* if no prim_nid exists yet, then configure one first */
+		if (!prim_nid)
+			goto create_prim_nid;
+
+		if (strcmp(prim_nid->cy_valuestring, parent) == 0) {
+			item1 = cYAML_get_object_item(item, "peer ni");
+			if (item1 == NULL || !cYAML_is_sequence(item1))
+				return LUSTRE_CFG_RC_BAD_PARAM;
+			else
+				goto add_nid_tree;
+		}
+	}
+
+create_prim_nid:
+	item = cYAML_create_seq_item(tree);
+	if (item == NULL)
+		goto out;
+
+	if (!cYAML_create_string(item, "primary nid", parent))
+		goto out;
+
+	item1 = cYAML_create_seq(item, "peer ni");
+	if (!item1)
+		goto out;
+
+add_nid_tree:
+	stats_path = concat_dir(path, "stats");
+	if (!stats_path)
+		return rc;
+
+	peer_ni = cYAML_create_seq_item(item1);
+	if (!peer_ni)
+		goto out;
+
+	if (cYAML_create_string(peer_ni, "nid", nid) == NULL)
+		goto out;
+
+	if (!detail) {
+		if (!read_sysfs_file(stats_path, "peer_total_send_count", val,
+				     1, sizeof(val))) {
+			buf = atoi(val);
+			if (!cYAML_create_number(peer_ni, "send", buf))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats_path, "peer_total_recv_count",
+				     val, 1, sizeof(val))) {
+			buf = atoi(val);
+			if (!cYAML_create_number(peer_ni, "receive", buf))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats_path, "peer_total_drop_count", val,
+				     1, sizeof(val))) {
+			buf = atoi(val);
+			if (!cYAML_create_number(peer_ni, "drop", buf))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		goto health_stats;
+	}
+
+	send = cYAML_create_object(peer_ni, "send");
+	if (send == NULL)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "peer_get_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "get", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_put_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "put", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_reply_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "reply", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_ack_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "ack", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_hello_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "hello", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	recv = cYAML_create_object(peer_ni, "receive");
+	if (recv == NULL)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "peer_get_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "get", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_put_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "put", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_reply_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "reply", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_ack_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "ack", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_hello_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "hello", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	drop = cYAML_create_object(peer_ni, "drop");
+	if (drop == NULL)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "peer_total_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "total", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_get_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "get", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_put_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "put", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_reply_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "reply", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_ack_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "ack", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "peer_hello_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "hello", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+health_stats:
+	health = cYAML_create_object(peer_ni, "health");
+	if (health == NULL)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "remote_dropped", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "dropped", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "remote_timeout", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "remote_timeout", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "remote_error", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "error", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "network_timeout", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "network_timeout", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	rc = LUSTRE_CFG_RC_NO_ERR;
+
+out:
+	free(stats_path);
+	return rc;
+}
+
+static int traverse_sysfs_nids(char *path, char *peer, char *parent,
+			       struct cYAML *root, int detail, bool *found,
+			       char *err_str)
+{
+	struct dirent *dent;
+	DIR *srcdir = opendir(path);
+	char *nipath = NULL;
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+
+	if (srcdir == NULL)
+		goto out;
+
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			nipath = concat_dir(path, dent->d_name);
+			if (!nipath) {
+				rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+				goto out;
+			}
+
+			if (peer && (strcmp(dent->d_name, peer) == 0) &&
+			    !(*found)) {
+				rc = build_peer_stats_tree(nipath, root, parent,
+							   dent->d_name,
+							   detail, err_str);
+				if (rc != LUSTRE_CFG_RC_NO_ERR)
+					goto out;
+
+				*found = true;
+				free(nipath);
+				break;
+			} else if (peer && (strcmp(dent->d_name, peer) == 0) &&
+				   !(*found)) {
+				free(nipath);
+				continue;
+			} else {
+				rc = build_peer_stats_tree(nipath, root, parent,
+							   dent->d_name, detail,
+							   err_str);
+				if (rc != LUSTRE_CFG_RC_NO_ERR)
+					goto out;
+				free(nipath);
+			}
+		}
+	}
+
+	closedir(srcdir);
+	return rc;
+
+out:
+	free(nipath);
+	if (srcdir)
+		closedir(srcdir);
+
+	return rc;
+}
+
+static int traverse_sysfs_peer_path(const char *path, char *peer,
+				    struct cYAML *root, int detail, bool *found,
+				    char *err_str)
+{
+	struct dirent *dent;
+	DIR *srcdir = opendir(path);
+	char *nipath = NULL, *pnis_dir = NULL;
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+
+	if (srcdir == NULL)
+		goto out;
+
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			nipath = concat_dir(path, dent->d_name);
+			if (!nipath) {
+				rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+				goto out;
+			}
+
+			pnis_dir = concat_dir(nipath, "peer_nis");
+			if (!pnis_dir) {
+				rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+				goto out;
+			}
+
+			if (!peer || (peer && strcmp(dent->d_name, peer) == 0))
+				*found = true;
+
+			rc = traverse_sysfs_nids(pnis_dir, peer, dent->d_name,
+						 root, detail, found, err_str);
+
+			free(pnis_dir);
+			free(nipath);
+
+			if (peer && *found)
+				break;
+			else
+				continue;
+		}
+	}
+
+	if (!(*found)) {
+		if (peer) {
+			rc = LUSTRE_CFG_RC_BAD_PARAM;
+			snprintf(err_str, LNET_MAX_STR_LEN,
+				 "\"Bad parameter - %s\"", peer);
+		} else {
+			rc = LUSTRE_CFG_RC_NO_ERR;
+			snprintf(err_str, LNET_MAX_STR_LEN,
+				 "\"No peer NI configured to show stats for\"");
+		}
+	}
+
+	closedir(srcdir);
+	return rc;
+
+out:
+	free(nipath);
+	if (srcdir)
+		closedir(srcdir);
+	return rc;
+}
+
+int lustre_lnet_stats_peer(char **nid, int num_nids, int detail, int seq_no,
+			   struct cYAML **show_rc, struct cYAML **err_rc)
+{
+	struct cYAML *root = NULL, *peer_root = NULL, *first_seq = NULL;
+	char err_str[LNET_MAX_STR_LEN];
+	char *mountdir = NULL, *path = NULL;
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int rc2 = LUSTRE_CFG_RC_NO_ERR;
+	int i = 0;
+	bool found = false;
+
+	snprintf(err_str, sizeof(err_str),
+		 "\"out of memory\"");
+
+	/* create struct cYAML root object */
+	root = cYAML_create_object(NULL, NULL);
+	if (root == NULL)
+		goto out;
+
+	peer_root = cYAML_create_seq(root, "peer");
+	if (peer_root == NULL)
+		goto out;
+
+	mountdir = find_mount_point("sysfs");
+	if (!mountdir) {
+		snprintf(err_str, sizeof(err_str),
+			 "\"cannot find mount point for sysfs\"");
+		goto out;
+	}
+
+	path = concat_dir(mountdir, "/fs/lnet/peers");
+	if (path == NULL)
+		goto out;
+
+	if (!nid) {
+		rc = traverse_sysfs_peer_path(path, NULL, root, detail, &found,
+					      err_str);
+		rc2 = rc;
+		if (rc != LUSTRE_CFG_RC_NO_ERR || !found) {
+			cYAML_build_error(rc, seq_no, "stats", "peer", err_str,
+					  err_rc);
+			goto out;
+		}
+
+	} else {
+		for (i = 0; i < num_nids ; i++) {
+			rc2 = rc;
+			rc = traverse_sysfs_peer_path(path, nid[i], root,
+						      detail, &found, err_str);
+			if (rc != LUSTRE_CFG_RC_NO_ERR) {
+				cYAML_build_error(rc, seq_no, "stats", "peer",
+						  err_str, err_rc);
+				continue;
+			}
+		}
+	}
+
+	if (rc2 == LUSTRE_CFG_RC_NO_ERR && rc == LUSTRE_CFG_RC_NO_ERR)
+		snprintf(err_str, sizeof(err_str), "\"success\"");
+
+out:
+	free(path);
+
+	if (!show_rc || !found ||
+	    (rc != LUSTRE_CFG_RC_NO_ERR && rc2 != LUSTRE_CFG_RC_NO_ERR)) {
+		cYAML_free_tree(root);
+	} else if (show_rc != NULL && *show_rc != NULL) {
+		struct cYAML *show_node;
+		/* find the peer node, if one doesn't exist then
+		 * insert one.  Otherwise add to the one there
+		 */
+		show_node = cYAML_get_object_item(*show_rc, "peer");
+		if (show_node != NULL && cYAML_is_sequence(show_node)) {
+			cYAML_get_next_seq_item(show_node, &first_seq);
+			cYAML_insert_child(show_node, first_seq);
+			free(peer_root);
+			free(root);
+		} else if (show_node == NULL) {
+			cYAML_insert_sibling((*show_rc)->cy_child, peer_root);
+			free(root);
+		} else {
+			cYAML_free_tree(root);
+		}
+	} else {
+		*show_rc = root;
+	}
+
+	if (rc != LUSTRE_CFG_RC_NO_ERR)
+		return rc;
+	else if (rc2 != LUSTRE_CFG_RC_NO_ERR)
+		return rc2;
+
+	return rc;
+}
+
 int lustre_lnet_list_peer(int seq_no,
 			  struct cYAML **show_rc, struct cYAML **err_rc)
 {

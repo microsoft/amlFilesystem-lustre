@@ -51,6 +51,7 @@ static int jt_show_peer(int argc, char **argv);
 static int jt_show_recovery(int argc, char **argv);
 static int jt_show_global(int argc, char **argv);
 static int jt_stats_net(int argc, char **argv);
+static int jt_stats_peer(int argc, char **argv);
 static int jt_set_tiny(int argc, char **argv);
 static int jt_set_small(int argc, char **argv);
 static int jt_set_large(int argc, char **argv);
@@ -233,6 +234,10 @@ command_t peer_cmds[] = {
 	 "\t--nid: NID of peer to filter on.\n"
 	 "\t--verbose: display detailed output per peer."
 		       " Optional argument of '2' outputs more stats\n"},
+	{"stats", jt_stats_peer, 0, "show Peer statistics\n"
+	"\t--prim_nid: peer primary NID to filter the stats for\n"
+	"\t--nid: peer nids (e.g. <nid1>,<nid2>) to filter stats for\n"
+	"\t--verbose: display detailed statistics per peer.\n"},
 	{"list", jt_list_peer, 0, "list all peers\n"},
 	{"set", jt_set_peer_ni_value, 0, "set peer ni specific parameter\n"
 	 "\t--nid: Peer NI NID to set the\n"
@@ -1285,7 +1290,6 @@ static int jt_stats_net(int argc, char **argv)
 
 	rc = lustre_lnet_stats_ni(nids, size, net_type, (int) detail, -1,
 				  &show_rc, &err_rc);
-
 	if (show_rc)
 		cYAML_print_tree(show_rc);
 
@@ -1763,7 +1767,6 @@ static int jt_add_peer_nid(int argc, char **argv)
 						" parameters", &err_rc);
 				goto failed;
 			}
-
 			size = lustre_lnet_parse_nids(optarg, nids, size,
 						      &nids2);
 			if (nids2 == NULL)
@@ -1945,6 +1948,111 @@ static int jt_show_peer(int argc, char **argv)
 
 	cYAML_free_tree(err_rc);
 	cYAML_free_tree(show_rc);
+
+	return rc;
+}
+
+static int jt_stats_peer(int argc, char **argv)
+{
+	char **nids = NULL, **nids2 = NULL;
+	struct cYAML *show_rc = NULL, *err_rc = NULL;
+	long int detail = 0;
+	int size = 0;
+	int rc = LUSTRE_CFG_RC_NO_ERR, opt, i;
+	bool nid_list = false, prim_nid_present = false;
+
+	const char *const short_opts = "hk:n:v";
+	const struct option long_opts[] = {
+	{ .name = "help",	.has_arg = no_argument,		.val = 'h' },
+	{ .name = "prim_nid",   .has_arg = required_argument,   .val = 'k' },
+	{ .name = "nid",	.has_arg = required_argument,	.val = 'n' },
+	{ .name = "verbose",	.has_arg = optional_argument,	.val = 'v' },
+	{ .name = NULL } };
+
+	rc = check_cmd(stats_cmds, "peer", "stats", 0, argc, argv);
+	if (rc)
+		return rc;
+
+	while ((opt = getopt_long(argc, argv, short_opts,
+				  long_opts, NULL)) != -1) {
+		switch (opt) {
+		case 'k':
+			prim_nid_present = true;
+			if (nid_list) {
+				cYAML_build_error(-1, -1, "peer", "stats",
+						  "prim_nid can not be specified"
+						  " along side nid parameter.",
+						  &err_rc);
+				rc = LUSTRE_CFG_RC_BAD_PARAM;
+				goto failed;
+			}
+			size = lustre_lnet_parse_nids(optarg, NULL, size,
+						      &nids2);
+			break;
+		case 'n':
+			nid_list = true;
+			if (prim_nid_present) {
+				cYAML_build_error(-1, -1, "peer", "stats",
+						  "nids can not be specified"
+						  " along side prim_nid param.",
+						  &err_rc);
+				rc = LUSTRE_CFG_RC_BAD_PARAM;
+				goto failed;
+			}
+			size = lustre_lnet_parse_nids(optarg, NULL, size,
+						      &nids2);
+			break;
+		case 'v':
+			if ((!optarg) && (argv[optind] != NULL) &&
+			    (argv[optind][0] != '-')) {
+				if (parse_long(argv[optind++], &detail) != 0)
+					detail = 1;
+			} else {
+				detail = 1;
+			}
+			break;
+		case '?':
+			print_help(peer_cmds, "peer", "stats");
+		default:
+			return 0;
+		}
+	}
+
+	if (optarg && (nids2 == NULL)) {
+		rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+		goto failed;
+
+	}
+	nids = nids2;
+
+	for (; optind < argc; optind++) {
+		size = lustre_lnet_parse_nids(argv[optind], nids, size,
+					      &nids2);
+		if (optarg && (nids2 == NULL))
+			goto failed;
+		nids = nids2;
+	}
+
+	rc = lustre_lnet_stats_peer(nids, size, (int) detail, -1, &show_rc,
+				    &err_rc);
+
+	if (show_rc)
+		cYAML_print_tree(show_rc);
+
+	cYAML_free_tree(show_rc);
+
+failed:
+	if (nids) {
+		/* free the array of nids */
+		for (i = 0; i < size; i++)
+			free(nids[i]);
+		free(nids);
+	}
+
+	if (rc != LUSTRE_CFG_RC_NO_ERR || err_rc)
+		cYAML_print_tree(err_rc);
+
+	cYAML_free_tree(err_rc);
 
 	return rc;
 }
