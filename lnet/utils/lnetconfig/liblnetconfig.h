@@ -185,6 +185,25 @@ int lustre_lnet_show_net(char *nw, int detail, int seq_no,
 			 bool backup);
 
 /*
+ * lustre_lnet_ni_stats
+ *   Show the stats for the NIs specified with nid option.
+ *   If no nids are specified then stats for all the
+ *   configured NIs are shown. The stats can be filtered
+ *   per network by specifying network with option --net.
+ *
+ *   nid - list of nids.
+ *   num_nids - number of nids in the nid array
+ *   nw - network to filter the stats for
+ *   detail - display detailed statistics.
+ *   seq_no - sequence number of the command
+ *   show_rc - YAML structure of the resultant show
+ *   err_rc - YAML structure of the resultant return code.
+ */
+int lustre_lnet_stats_ni(char **nid, int num_nids, char *nw, int detail,
+			 int seq_no, struct cYAML **show_rc,
+			 struct cYAML **err_rc);
+
+/*
  * lustre_lnet_enable_routing
  *   Send down an IOCTL to enable or diable routing
  *

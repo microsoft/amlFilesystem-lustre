@@ -50,6 +50,7 @@ static int jt_show_stats(int argc, char **argv);
 static int jt_show_peer(int argc, char **argv);
 static int jt_show_recovery(int argc, char **argv);
 static int jt_show_global(int argc, char **argv);
+static int jt_stats_net(int argc, char **argv);
 static int jt_set_tiny(int argc, char **argv);
 static int jt_set_small(int argc, char **argv);
 static int jt_set_large(int argc, char **argv);
@@ -147,6 +148,10 @@ command_t net_cmds[] = {
 	 "\t--net: net name (e.g. tcp0) to filter on\n"
 	 "\t--verbose: display detailed output per network."
 		       " Optional argument of '2' outputs more stats\n"},
+	{"stats", jt_stats_net, 0, "show NI statistics\n"
+	 "\t--net: net name (e.g. tcp) to filter the stats for\n"
+	 "\t--nid: nids (e.g. 10.211.55.[10-13]@tcp) to filter stats for\n"
+	 "\t  show stats for all nids if none of the option is used\n"},
 	{"set", jt_set_ni_value, 0, "set local NI specific parameter\n"
 	 "\t--nid: NI NID to set the\n"
 	 "\t--health: specify health value to set\n"
@@ -1194,6 +1199,110 @@ static int jt_show_net(int argc, char **argv)
 
 	cYAML_free_tree(err_rc);
 	cYAML_free_tree(show_rc);
+
+	return rc;
+}
+
+static int jt_stats_net(int argc, char **argv)
+{
+	char **nids = NULL, **nids2 = NULL;
+	char *net_type = NULL;
+	struct cYAML *show_rc = NULL, *err_rc = NULL;
+	long int detail = 0;
+	int size = 0;
+	int rc = LUSTRE_CFG_RC_NO_ERR, opt, i;
+	bool nid_list = false, net_present = false;
+
+	const char *const short_opts = "ht:n:v";
+	const struct option long_opts[] = {
+	{ .name = "help",	.has_arg = no_argument,		.val = 'h' },
+	{ .name = "net",	.has_arg = required_argument,	.val = 't' },
+	{ .name = "nid",	.has_arg = required_argument,	.val = 'n' },
+	{ .name = "verbose",	.has_arg = optional_argument,	.val = 'v' },
+	{ .name = NULL } };
+
+	rc = check_cmd(stats_cmds, "net", "stats", 0, argc, argv);
+	if (rc)
+		return rc;
+
+	while ((opt = getopt_long(argc, argv, short_opts,
+				  long_opts, NULL)) != -1) {
+		switch (opt) {
+		case 't':
+			net_present = true;
+			if (nid_list) {
+				cYAML_build_error(-1, -1, "net", "stats",
+						  " net type can not be"
+						  " specified along side nid.",
+						  &err_rc);
+				rc = LUSTRE_CFG_RC_BAD_PARAM;
+				goto failed;
+			}
+			net_type = optarg;
+			break;
+		case 'n':
+			nid_list = true;
+			if (net_present) {
+				cYAML_build_error(-1, -1, "net", "stats",
+						  " nids can not be specified"
+						  " along side net type param.",
+						  &err_rc);
+				rc = LUSTRE_CFG_RC_BAD_PARAM;
+				goto failed;
+			}
+			size = lustre_lnet_parse_nids(optarg, NULL, size,
+						      &nids2);
+			if (nids2 == NULL)
+				goto failed;
+			nids = nids2;
+			rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+			break;
+		case 'v':
+			if ((!optarg) && (argv[optind] != NULL) &&
+			    (argv[optind][0] != '-')) {
+				if (parse_long(argv[optind++], &detail) != 0)
+					detail = 1;
+			} else {
+				detail = 1;
+			}
+			break;
+		case '?':
+			print_help(net_cmds, "net", "stats");
+		default:
+			return 0;
+		}
+	}
+
+	if (nid_list) {
+		for (; optind < argc; optind++) {
+			size = lustre_lnet_parse_nids(argv[optind], nids,
+						      size, &nids2);
+			if (nids2 == NULL)
+				goto failed;
+			nids = nids2;
+		}
+	}
+
+	rc = lustre_lnet_stats_ni(nids, size, net_type, (int) detail, -1,
+				  &show_rc, &err_rc);
+
+	if (show_rc)
+		cYAML_print_tree(show_rc);
+
+	cYAML_free_tree(show_rc);
+
+failed:
+	if (nids) {
+		/* free the array of nids */
+		for (i = 0; i < size; i++)
+			free(nids[i]);
+		free(nids);
+	}
+
+	if (rc != LUSTRE_CFG_RC_NO_ERR || err_rc)
+		cYAML_print_tree(err_rc);
+
+	cYAML_free_tree(err_rc);
 
 	return rc;
 }

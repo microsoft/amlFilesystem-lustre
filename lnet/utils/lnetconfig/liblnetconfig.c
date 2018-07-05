@@ -48,6 +48,8 @@
 #include "liblnd.h"
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <mntent.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include "liblnetconfig.h"
@@ -86,6 +88,39 @@ struct lustre_lnet_ip2nets {
 	struct lnet_dlc_network_descr ip2nets_net;
 	struct list_head ip2nets_ip_ranges;
 };
+
+static char *find_mount_point(const char *filesys)
+{
+	FILE *fp;
+	struct mntent *ent;
+
+	fp = setmntent("/proc/mounts", "r");
+	if (fp == NULL)
+		return NULL;
+
+	while ((ent = getmntent(fp)) != NULL) {
+		if (strncmp(ent->mnt_fsname, filesys, strlen(ent->mnt_fsname))
+		    == 0)
+			break;
+	}
+	endmntent(fp);
+
+	return ent->mnt_dir;
+}
+
+static char *concat_dir(const char *str1, const char *str2)
+{
+	char *result;
+
+	result = malloc(strlen(str1) + strlen(str2) + 2);
+	if (result == NULL)
+		return NULL;
+
+	strcpy(result, str1);
+	strcat(result, str2);
+	strcat(result, "/");
+	return result;
+}
 
 int open_sysfs_file(const char *path, const char *attr, const int mode)
 {
@@ -3872,6 +3907,795 @@ out:
 	}
 
 	cYAML_build_error(rc, seq_no, SHOW_CMD, "statistics", err_str, err_rc);
+
+	return rc;
+}
+
+static int build_ni_stats_tree(char *path, struct cYAML *root, char *nid,
+			       int detail, char *err_str)
+{
+	struct cYAML *send = NULL, *recv = NULL, *drop = NULL, *health = NULL,
+		     *message = NULL, *ni_node = NULL;
+	char *stats_path = NULL;
+	char val[LNET_MAX_STR_LEN];
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int buf;
+
+	stats_path = concat_dir(path, "stats");
+	if (!stats_path)
+		return rc;
+
+	ni_node = cYAML_create_seq_item(root);
+	if (!ni_node)
+		goto out;
+
+	if (!cYAML_create_string(ni_node, "nid", nid))
+		goto out;
+
+	message = cYAML_create_object(ni_node, "message");
+	if (!message)
+		goto out;
+
+	if (!detail) {
+		if (!read_sysfs_file(stats_path, "total_send_count", val, 1,
+				     sizeof(val))) {
+			buf = atoi(val);
+			if (!cYAML_create_number(message, "send", buf))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats_path, "total_recv_count", val, 1,
+				     sizeof(val))) {
+			buf = atoi(val);
+			if (!cYAML_create_number(message, "receive", buf))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats_path, "total_drop_count", val, 1,
+				     sizeof(val))) {
+			buf = atoi(val);
+			if (!cYAML_create_number(message, "drop", buf))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		goto health_stats;
+	}
+
+	send = cYAML_create_object(message, "send");
+	if (!send)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "get_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "get", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "put_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "put", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "reply_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "reply", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "ack_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "ack", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "hello_send_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(send, "hello", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	recv = cYAML_create_object(message, "receive");
+	if (!recv)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "get_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "get", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "put_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "put", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "reply_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "reply", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "ack_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "ack", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "hello_recv_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(recv, "hello", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	drop = cYAML_create_object(message, "drop");
+	if (!drop)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "get_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "get", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "put_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "put", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "reply_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "reply", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "ack_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "ack", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "hello_drop_count", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(drop, "hello", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+health_stats:
+	health = cYAML_create_object(ni_node, "health");
+	if (!health)
+		goto out;
+
+	if (!read_sysfs_file(stats_path, "local_interrupt", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "interrupt", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "local_dropped", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "dropped", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "local_aborted", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "aborted", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "local_no_route", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "no_route", buf))
+			goto out;
+	}
+
+	if (!read_sysfs_file(stats_path, "local_timeout", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "timeout", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	if (!read_sysfs_file(stats_path, "local_error", val, 1,
+			     sizeof(val))) {
+		buf = atoi(val);
+		if (!cYAML_create_number(health, "error", buf))
+			goto out;
+	}
+	memset(&val[0], 0, sizeof(val));
+
+	rc = LUSTRE_CFG_RC_NO_ERR;
+
+out:
+	free(stats_path);
+	return rc;
+}
+
+static int traverse_sysfs_intf(const char *path, char *nw, char *nid,
+			       struct cYAML *root, int detail, char *err_str)
+{
+	struct dirent *dent;
+	DIR *srcdir = opendir(path);
+	char *intfpath = NULL;
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+
+	if (srcdir == NULL)
+		return rc;
+
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			struct lnet_dlc_intf_descr *intf;
+			struct list_head intf_list;
+			char *ni;
+			__u32 ip;
+
+			INIT_LIST_HEAD(&intf_list);
+
+			intfpath = concat_dir(path, dent->d_name);
+			if (!intfpath) {
+				closedir(srcdir);
+				return LUSTRE_CFG_RC_OUT_OF_MEM;
+			}
+
+			rc = lustre_lnet_add_intf_descr(&intf_list, dent->d_name,
+							strlen(dent->d_name));
+			if (rc != LUSTRE_CFG_RC_NO_ERR)
+				goto out;
+
+			list_for_each_entry(intf, &intf_list, intf_on_network) {
+				rc = lustre_lnet_queryip(intf, &ip);
+				if (rc != LUSTRE_CFG_RC_NO_ERR) {
+					snprintf(err_str, LNET_MAX_STR_LEN,
+						 "\"couldn't query intf %s\"",
+						 intf->intf_name);
+					goto out;
+				}
+			}
+
+			ni = libcfs_nid2str(LNET_MKNID(libcfs_str2net(nw), ip));
+
+			if (nid == NULL || (strcmp(nid, ni) == 0)) {
+				rc = build_ni_stats_tree(intfpath, root, ni,
+							 detail, err_str);
+				if (rc != LUSTRE_CFG_RC_NO_ERR)
+					goto out;
+
+				free(intfpath);
+
+				if (nid)
+					break;
+			} else {
+				free(intfpath);
+				continue;
+			}
+		}
+	}
+
+	closedir(srcdir);
+	return rc;
+out:
+	free(intfpath);
+
+	if (srcdir)
+		closedir(srcdir);
+	return rc;
+}
+
+static int traverse_sysfs_net_path(const char *path, char *nw, char *nid,
+				   __u32 *netlist, int net_count,
+				   struct cYAML *root, int detail,
+				   char *err_str)
+{
+	struct cYAML *item = NULL, *tmp = NULL;
+	char *netpath = NULL;
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int i = 0;
+	bool found = false;
+
+	for (i = 0; i < net_count; i++) {
+		char *net = libcfs_net2str(netlist[i]);
+		if (nw == NULL || (nw && strcmp(nw, net) == 0)) {
+			found = true;
+			netpath = concat_dir(path, net);
+
+			item = cYAML_create_seq_item(root);
+			if (!item)
+				goto out;
+
+			if (!cYAML_create_string(item, "net type", net))
+				goto out;
+
+			tmp = cYAML_create_seq(item, "local NI(s)");
+			if (!tmp)
+				goto out;
+
+			rc = traverse_sysfs_intf(netpath, net, nid, tmp,
+						 detail, err_str);
+			if (rc != LUSTRE_CFG_RC_NO_ERR)
+				goto out;
+
+			free(netpath);
+		} else
+			continue;
+	}
+
+	if (!found) {
+		rc = LUSTRE_CFG_RC_BAD_PARAM;
+		snprintf(err_str, LNET_MAX_STR_LEN, "\"Bad parameter - %s\"",
+			 nw);
+	}
+
+	return rc;
+
+out:
+	free(netpath);
+	return rc;
+}
+
+static int check_ip_in_range(char *nidstr, int count, char **config_nids,
+			     char **rnids, char *err_str)
+{
+	struct lustre_lnet_ip_range_descr *ipr;
+	struct lustre_lnet_ip2nets ip2nets;
+	char *start, *delimit;
+	char ip_range[LNET_MAX_STR_LEN];
+	__u32 net, ip;
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+	int i = 0, rcount = 0, ip_range_len = 0;
+
+	/* initialize all lists */
+	INIT_LIST_HEAD(&ip2nets.ip2nets_ip_ranges);
+	INIT_LIST_HEAD(&ip2nets.ip2nets_net.network_on_rule);
+	INIT_LIST_HEAD(&ip2nets.ip2nets_net.nw_intflist);
+
+	start = nidstr;
+	delimit = strchr(nidstr, '@');
+	if (!delimit) {
+		snprintf(err_str, LNET_MAX_STR_LEN, "\"cannot parse NID %s\"",
+			 nidstr);
+		return rc;
+	}
+
+	ip_range_len = delimit - start;
+
+	delimit++;
+	net = libcfs_str2net(delimit);
+	/* expression support is for o2iblnd and socklnd only */
+	if (LNET_NETTYP(net) != O2IBLND && LNET_NETTYP(net) != SOCKLND)
+		return LUSTRE_CFG_RC_SKIP;
+
+	strncpy(ip_range, start, ip_range_len);
+	ip_range[ip_range_len] = '\0';
+	ip2nets.ip2nets_net.nw_id = net;
+
+	rc = lustre_lnet_add_ip_range(&ip2nets.ip2nets_ip_ranges, ip_range);
+	if (rc != LUSTRE_CFG_RC_NO_ERR) {
+		snprintf(err_str, LNET_MAX_STR_LEN,
+			 "\"cannot parse ip_range '%s'\"", ip_range);
+		goto out;
+	}
+
+	list_for_each_entry(ipr, &ip2nets.ip2nets_ip_ranges, ipr_entry) {
+		for (i = 0; i < count; i++) {
+			ip = LNET_NIDADDR(libcfs_str2nid(config_nids[i]));
+			rc = cfs_ip_addr_match(ip, &ipr->ipr_expr);
+			if (rc) {
+				rnids[rcount] = config_nids[i];
+				rcount++;
+			}
+		}
+	}
+	rc = rcount;
+out:
+	lustre_lnet_clean_ip2nets(&ip2nets);
+	return rc;
+}
+
+static int add_nid_to_tree(const char *path, char *nid, struct cYAML *root,
+			   int detail, char *err_str)
+{
+	struct cYAML *tree = NULL, *net_node = NULL, *tmp = NULL,
+		     *ni_node = NULL, *local_nis = NULL, *item = NULL,
+		     *item1 = NULL;
+	char *net, *delimit;
+	char *netpath = NULL;
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+
+	delimit = strchr(nid, '@');
+	if (delimit == NULL) {
+		snprintf(err_str, LNET_MAX_STR_LEN, "\"Cannot parse NID - %s\"",
+			 nid);
+		return rc;
+	}
+
+	delimit++;
+	net = delimit;
+
+	tree = cYAML_get_object_item(root, "net");
+	if (!tree && !cYAML_is_sequence(tree)) {
+		snprintf(err_str, LNET_MAX_STR_LEN, "\"yaml tree root not\""
+			 " found\"");
+		return rc;
+	}
+
+	/* check if the sub-tree for the net-type exists or not.
+	 * if exists, then add the nid to the subtree else create
+	 * one for this net type.
+	 */
+	while (cYAML_get_next_seq_item(tree, &item) != NULL) {
+		net_node = cYAML_get_object_item(item, "net type");
+		/* if no net exists yet, then configure the first */
+		if (!net_node)
+			goto create_net_tree;
+
+		if (strcmp(net_node->cy_valuestring, net) == 0) {
+			local_nis = cYAML_get_object_item(item, "local NI(s)");
+			if (local_nis == NULL || !cYAML_is_sequence(local_nis))
+				return LUSTRE_CFG_RC_BAD_PARAM;
+
+			while (cYAML_get_next_seq_item(local_nis,
+						       &item1) != NULL) {
+				ni_node = cYAML_get_object_item(item1, "nid");
+				if (!ni_node)
+					return LUSTRE_CFG_RC_MISSING_PARAM;
+
+				if (strcmp(ni_node->cy_valuestring, nid) == 0)
+					return LUSTRE_CFG_RC_NO_ERR;
+			}
+
+			netpath = concat_dir(path, net);
+			rc = traverse_sysfs_intf(netpath, net, nid, local_nis,
+						 detail, err_str);
+			free(netpath);
+			return rc;
+		}
+	}
+
+create_net_tree:
+	rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	netpath = concat_dir(path, net);
+
+	item = cYAML_create_seq_item(tree);
+	if (!item)
+		goto out;
+
+	if (cYAML_create_string(tree, "net type", net) == NULL)
+		goto out;
+
+	tmp = cYAML_create_seq(tree, "local NI(s)");
+	if (!tmp)
+		goto out;
+
+	rc = traverse_sysfs_intf(netpath, net, nid, tmp, detail, err_str);
+
+out:
+	free(netpath);
+	return rc;
+}
+
+static int lnet_get_config_ni_list(char *path, char *net, char **config_nids,
+				   int *count)
+{
+	struct dirent *dent;
+	DIR *srcdir = opendir(path);
+	__u32 nw = libcfs_str2net(net);
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+
+	if (!srcdir)
+		return rc;
+
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			struct lnet_dlc_intf_descr *intf;
+			struct list_head intf_list;
+			__u32 ip;
+
+			INIT_LIST_HEAD(&intf_list);
+
+			rc = lustre_lnet_add_intf_descr(&intf_list,
+							dent->d_name,
+							strlen(dent->d_name));
+			if (rc != LUSTRE_CFG_RC_NO_ERR)
+				goto out;
+
+			list_for_each_entry(intf, &intf_list, intf_on_network) {
+				rc = lustre_lnet_queryip(intf, &ip);
+				if (rc != LUSTRE_CFG_RC_NO_ERR)
+					goto out;
+			}
+			config_nids[*count] = libcfs_nid2str(LNET_MKNID(nw,
+									ip));
+			(*count)++;
+		}
+	}
+
+out:
+	closedir(srcdir);
+	return *count;
+}
+
+static int lnet_get_config_net_list(char *path, int *ni_count,
+				    __u32 *config_nets, char **config_nids)
+{
+	struct dirent *dent;
+	DIR *srcdir = opendir(path);
+	char *netpath = NULL;
+	int net_count = 0;
+	int rc = LUSTRE_CFG_RC_BAD_PARAM;
+
+	if (!srcdir)
+		return rc;
+
+	/* loop over all the subdirs(net) under path
+	 * and add them to array config_nets[].
+	 * Here we have info for all configured nids
+	 * as well in config_nids[].
+	 */
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			config_nets[net_count] = libcfs_str2net(dent->d_name);
+			netpath = concat_dir(path, dent->d_name);
+			rc = lnet_get_config_ni_list(netpath, dent->d_name,
+						     config_nids, ni_count);
+			if (rc < 0) {
+				free(netpath);
+				return rc;
+			}
+			net_count++;
+		}
+		free(netpath);
+	}
+
+	closedir(srcdir);
+	return net_count;
+}
+
+int lustre_lnet_stats_ni(char **nid, int num_nids, char *nw, int detail,
+			 int seq_no, struct cYAML **show_rc,
+			 struct cYAML **err_rc)
+{
+	struct cYAML *root = NULL, *net_root = NULL, *first_seq = NULL;
+	char err_str[LNET_MAX_STR_LEN];
+	char *mountdir = NULL, *path = NULL;
+	__u32 config_nets[MAX_NUM_IPS];
+	char *config_nids[MAX_NUM_IPS];
+	char *rnids[MAX_NUM_IPS];
+	int net_count = 0, ni_count = 0, rcount = 0;
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int rc2 = LUSTRE_CFG_RC_NO_ERR;
+	int i, j, k;
+	bool found = false;
+
+	snprintf(err_str, sizeof(err_str),
+		 "\"out of memory\"");
+
+	/* create struct cYAML root object */
+	root = cYAML_create_object(NULL, NULL);
+	if (!root)
+		goto out;
+
+	net_root = cYAML_create_seq(root, "net");
+	if (!net_root)
+		goto out;
+
+	mountdir = find_mount_point("sysfs");
+	if (!mountdir) {
+		snprintf(err_str, sizeof(err_str),
+			 "\"cannot find mount point for sysfs\"");
+		goto out;
+	}
+
+	path = concat_dir(mountdir, "/fs/lnet/net");
+	if (!path)
+		goto out;
+
+	if (!first_seq)
+		first_seq = net_root;
+
+	if (nw && (libcfs_str2net(nw) == LNET_NIDNET(LNET_NID_ANY))) {
+		snprintf(err_str, sizeof(err_str),
+			 "\"cannot parse net '%s'\"", nw);
+		rc = LUSTRE_CFG_RC_BAD_PARAM;
+		cYAML_build_error(rc, seq_no, "stats", "net", err_str, err_rc);
+		goto out;
+	}
+
+	/* get the list of the configured nets and NIs on the node */
+	rc = lnet_get_config_net_list(path, &ni_count, config_nets,
+				      config_nids);
+	if (rc < 0) {
+		snprintf(err_str, sizeof(err_str),
+			 "\"could not find the configured sysfs structure\"");
+		goto out;
+	} else if (rc == 0) {
+		snprintf(err_str, sizeof(err_str),
+			 "\" No NIs configured. Nothing to show stats for\"");
+		cYAML_build_error(rc, seq_no, "stats", "net", err_str, err_rc);
+		rc = LUSTRE_CFG_RC_NO_MATCH;
+		goto out;
+	}
+
+	net_count = rc;
+
+	/* if no NID is given to filter stats for */
+	if (nid == NULL) {
+		found = true;
+		rc = traverse_sysfs_net_path(path, nw, NULL, config_nets,
+					     net_count, net_root, detail,
+					     err_str);
+		if (rc != LUSTRE_CFG_RC_NO_ERR) {
+			cYAML_build_error(rc, seq_no, "stats", "net", err_str,
+					  err_rc);
+			goto out;
+		}
+		goto success;
+	}
+
+	/* if the stats are to be filtered for the input NIDs */
+	for (i = 0; i < num_nids ; i++) {
+		found = false;
+		rc2 = rc;
+
+		/*
+		 * if the input nid is a range then check if
+		 * any of the configured NIDs belongs to that range.
+		 */
+		if (strchr(nid[i], '[')) {
+			rcount = check_ip_in_range(nid[i], ni_count,
+						   config_nids, rnids, err_str);
+			if (rcount > 0) {
+				found = true;
+				for (j = 0; j < rcount; j++) {
+					rc = add_nid_to_tree(path, rnids[j],
+							     root, detail,
+							     err_str);
+					if (rc == LUSTRE_CFG_RC_OUT_OF_MEM)
+						goto out;
+					else if (rc < 0)
+						cYAML_build_error(rc, seq_no,
+								  "stats", "net",
+								  err_str,
+								  err_rc);
+				}
+			}
+		} else {
+			/* if the input nid is not a range then
+			 * check the if the input nid is among the
+			 * list of configured nids.
+			 */
+			for (k = 0; k < ni_count; k++) {
+				if (strcmp(nid[i], config_nids[k]) == 0) {
+					found = true;
+					rc = add_nid_to_tree(path, nid[i],
+							     root, detail,
+							     err_str);
+					if (rc == LUSTRE_CFG_RC_OUT_OF_MEM)
+						goto out;
+					else if (rc < 0)
+						cYAML_build_error(rc, seq_no,
+								  "stats", "net",
+								  err_str,
+								  err_rc);
+					break;
+				}
+			}
+		}
+
+		if (found == false) {
+			snprintf(err_str, sizeof(err_str),
+				 "\"NID not configured '%s'\"", nid[i]);
+			rc = LUSTRE_CFG_RC_BAD_PARAM;
+			cYAML_build_error(rc, seq_no, "stats", "net", err_str,
+					  err_rc);
+			continue;
+		}
+	}
+
+success:
+	if (rc2 == LUSTRE_CFG_RC_NO_ERR && rc == LUSTRE_CFG_RC_NO_ERR)
+		snprintf(err_str, sizeof(err_str), "\"success\"");
+
+out:
+	free(path);
+
+	if (show_rc == NULL || !found ||
+	    (rc != LUSTRE_CFG_RC_NO_ERR && rc2 != LUSTRE_CFG_RC_NO_ERR)) {
+		cYAML_free_tree(root);
+	} else if (show_rc != NULL && *show_rc != NULL) {
+		struct cYAML *show_node;
+		/* find the net node, if one doesn't exist then
+		 * insert one.  Otherwise add to the one there
+		 */
+		show_node = cYAML_get_object_item(*show_rc, "net");
+		if (show_node != NULL && cYAML_is_sequence(show_node)) {
+			cYAML_insert_child(show_node, first_seq);
+			free(net_root);
+			free(root);
+		} else if (show_node == NULL) {
+			cYAML_insert_sibling((*show_rc)->cy_child, net_root);
+			free(root);
+		} else {
+			cYAML_free_tree(root);
+		}
+	} else {
+		*show_rc = root;
+	}
+
+	if (rc != LUSTRE_CFG_RC_NO_ERR)
+		return rc;
+	else if (rc2 != LUSTRE_CFG_RC_NO_ERR)
+		return rc2;
 
 	return rc;
 }
