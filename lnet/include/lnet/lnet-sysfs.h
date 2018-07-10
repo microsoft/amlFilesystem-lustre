@@ -49,7 +49,6 @@
 #include <uapi/linux/lnet/lnet-dlc.h>
 #include <uapi/linux/lnet/lnet-types.h>
 
-
 extern struct kobject *lnet_kobj;               /* Sysfs lnet kobject */
 
 struct sysfs_lnd_conn {
@@ -157,4 +156,28 @@ int lnet_peer_ni_sysfs_setup(struct lnet_peer_ni *lpni, struct lnet_peer *lp);
  */
 void lnet_peer_ni_sysfs_cleanup(struct lnet_sysfs_peer *spni);
 
+/*
+ * lnd_peer_sysfs_setup
+ *
+ * Setup the sysfs hierarchy for lnd peer stats.
+ * Create kobject for the peer_nid, kobject for the
+ * local_nid and the attribute files for the peer_ni.
+ *
+ * peer_nid - peer ni NID
+ * nid      - local ni
+ * peer_ni  - LND peer ni for which stats are being created
+ */
+extern int lnd_peer_sysfs_setup(lnet_nid_t peer_nid, struct lnet_ni *ni,
+				struct sysfs_lnd_peer *peer_ni);
+
+/*
+ * lnd_peer_sysfs_cleanup
+ *
+ * Cleanup the sysfs hierarchy for lnd peer stats.
+ * Remove the kobject for the lnd peer_ni and the
+ * attribute files for that peer_ni.
+ *
+ * peer_ni - LND peer_ni for which stats are being cleaned up
+ */
+extern void lnd_peer_sysfs_cleanup(struct sysfs_lnd_peer *peer_ni);
 #endif

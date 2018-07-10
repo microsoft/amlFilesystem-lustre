@@ -318,6 +318,7 @@ kiblnd_create_peer(struct lnet_ni *ni, struct kib_peer_ni **peerp,
 	struct kib_peer_ni *peer_ni;
 	struct kib_net *net = ni->ni_data;
 	int cpt = lnet_cpt_of_nid(nid, ni);
+	int rc = 0;
 	unsigned long flags;
 
 	LASSERT(net != NULL);
@@ -328,6 +329,12 @@ kiblnd_create_peer(struct lnet_ni *ni, struct kib_peer_ni **peerp,
                 CERROR("Cannot allocate peer_ni\n");
                 return -ENOMEM;
         }
+
+	rc = set_sysfs_peer(ni, nid, &peer_ni->ibp_sysfs);
+	if (rc) {
+		LIBCFS_FREE(peer_ni, sizeof(*peer_ni));
+		return rc;
+	}
 
 	peer_ni->ibp_ni = ni;
 	peer_ni->ibp_nid = nid;
@@ -365,6 +372,9 @@ kiblnd_destroy_peer(struct kib_peer_ni *peer_ni)
 	LASSERT(!kiblnd_peer_active(peer_ni));
 	LASSERT(kiblnd_peer_idle(peer_ni));
 	LASSERT(list_empty(&peer_ni->ibp_tx_queue));
+
+	/* clean up the o2iblnd sysfs structure */
+	lnd_peer_sysfs_cleanup(&peer_ni->ibp_sysfs);
 
 	LIBCFS_FREE(peer_ni, sizeof(*peer_ni));
 

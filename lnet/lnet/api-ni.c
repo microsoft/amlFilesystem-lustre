@@ -856,8 +856,10 @@ EXPORT_SYMBOL(lnet_register_lnd);
 void
 lnet_unregister_lnd(struct lnet_lnd *lnd)
 {
-	kset_put(lnd->lnd_peers_kset);
-	kobject_put(lnd->lnd_kobj);
+	if (lnd->lnd_type != LOLND) {
+		kset_put(lnd->lnd_peers_kset);
+		kobject_put(lnd->lnd_kobj);
+	}
 
 	mutex_lock(&the_lnet.ln_lnd_mutex);
 

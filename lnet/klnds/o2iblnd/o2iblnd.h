@@ -77,6 +77,7 @@
 
 #include <libcfs/libcfs.h>
 #include <lnet/lib-lnet.h>
+#include <lnet/lnet-sysfs.h>
 
 #define IBLND_PEER_HASH_SIZE		101	/* # peer_ni lists */
 /* # scheduler loops before reschedule */
@@ -758,6 +759,9 @@ struct kib_peer_ni {
 	/* sysfs lnd peer structure */
 	struct sysfs_lnd_peer   ibp_sysfs;
 };
+
+extern int set_sysfs_peer(struct lnet_ni *ni, lnet_nid_t nid,
+			  struct sysfs_lnd_peer *peer);
 
 #ifndef HAVE_IB_INC_RKEY
 /**

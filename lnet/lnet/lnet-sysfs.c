@@ -952,3 +952,93 @@ void lnet_peer_ni_sysfs_cleanup(struct lnet_sysfs_peer *spni)
 
 	LIBCFS_FREE(spni, sizeof(*spni));
 }
+
+/*
+ * LND Peer sysfs structure APIs
+ */
+
+int lnd_peer_sysfs_setup(lnet_nid_t peer_nid, struct lnet_ni *ni,
+			 struct sysfs_lnd_peer *lnd_peer)
+{
+	struct kset *peers_kset = ni->ni_net->net_lnd->lnd_peers_kset;
+	struct kobject *peers_kobj = &peers_kset->kobj;
+	struct kobject *local_ni_dir;
+	char *pnid = libcfs_nid2str(peer_nid);
+	char *local_nid = libcfs_nid2str(ni->ni_nid);
+	int rc = 0;
+
+	/* Before creating the peer_ni kobject, check if it already exists.
+	 * If it exists then compensate for a ref up due to
+	 * kset_find_obj() */
+	lnd_peer->peer_ni_kobj = kset_find_obj(peers_kset, pnid);
+	if (lnd_peer->peer_ni_kobj) {
+		kobject_put(lnd_peer->peer_ni_kobj);
+		return rc;
+	}
+
+	lnd_peer->peer_ni_kobj = kobject_create_and_add(pnid, peers_kobj);
+	if (!lnd_peer->peer_ni_kobj) {
+		CERROR("Cannot add new kobject for %s\n", pnid);
+		return -ENOMEM;
+	}
+
+	local_ni_dir = kobject_create_and_add("local_ni",
+					      lnd_peer->peer_ni_kobj);
+	if (!local_ni_dir) {
+		CERROR("Cannot create directory 'local_ni'\n");
+		rc = -ENOMEM;
+		goto deref_peer_ni;
+	}
+
+	lnd_peer->local_ni_kobj = kobject_create_and_add(local_nid,
+							 local_ni_dir);
+	if (!lnd_peer->local_ni_kobj) {
+		CERROR("Cannot add new kobject for %s\n", local_nid);
+		rc = -ENOMEM;
+		goto deref_local_ni_dir;
+	}
+
+	init_completion(&lnd_peer->stats_kobj_unregister);
+
+	rc = kobject_init_and_add(&lnd_peer->stats_kobj, lnd_peer->stats_ktype,
+				  lnd_peer->local_ni_kobj, "%s", "stats");
+	if (rc) {
+		CERROR("Cannot add new kobject for stats under %s\n", local_nid);
+		goto deref_local_ni;
+	}
+
+	lnd_peer->peer_conns_kobj = kobject_create_and_add("conns",
+							   lnd_peer->local_ni_kobj);
+	if (!lnd_peer->peer_conns_kobj) {
+		CERROR("Could not add kobject for conns under %s\n", local_nid);
+		rc = -ENOMEM;
+		goto deref_stats;
+	}
+
+	return rc;
+
+deref_stats:
+	kobject_put(&lnd_peer->stats_kobj);
+deref_local_ni:
+	kobject_put(lnd_peer->local_ni_kobj);
+deref_local_ni_dir:
+	kobject_put(local_ni_dir);
+deref_peer_ni:
+	kobject_put(lnd_peer->peer_ni_kobj);
+
+	return rc;
+}
+EXPORT_SYMBOL(lnd_peer_sysfs_setup);
+
+void lnd_peer_sysfs_cleanup(struct sysfs_lnd_peer *peer_ni)
+{
+	struct kobject *local_ni_dir = peer_ni->local_ni_kobj->parent;
+
+	kobject_put(peer_ni->peer_conns_kobj);
+	kobject_put(&peer_ni->stats_kobj);
+	wait_for_completion(&peer_ni->stats_kobj_unregister);
+	kobject_put(peer_ni->local_ni_kobj);
+	kobject_put(local_ni_dir);
+	kobject_put(peer_ni->peer_ni_kobj);
+}
+EXPORT_SYMBOL(lnd_peer_sysfs_cleanup);
