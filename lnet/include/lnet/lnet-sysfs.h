@@ -180,4 +180,30 @@ extern int lnd_peer_sysfs_setup(lnet_nid_t peer_nid, struct lnet_ni *ni,
  * peer_ni - LND peer_ni for which stats are being cleaned up
  */
 extern void lnd_peer_sysfs_cleanup(struct sysfs_lnd_peer *peer_ni);
+
+/*
+ * lnd_conn_sysfs_setup
+ *
+ * Setup the sysfs hierarchy for lnd connection stats.
+ * Create kobject for the conn_id, kobject for the
+ * stats under conn_id and the attribute files for the
+ * connection.
+ *
+ * peer_ni  - LND peer ni under which the conn is created
+ * lnd_conn - LND conn for which attribute files are created
+ */
+extern int lnd_conn_sysfs_setup(struct sysfs_lnd_peer *peer_ni,
+				struct sysfs_lnd_conn *lnd_conn);
+
+/*
+ * lnd_conn_sysfs_cleanup
+ *
+ * Cleanup the sysfs hierarchy for lnd peer stats.
+ * Remove the kobject for the lnd peer_ni and the
+ * attribute files for that peer_ni.
+ *
+ * conn - LND conn for which stats are being cleaned up
+ *
+ */
+extern void lnd_conn_sysfs_cleanup(struct sysfs_lnd_conn *conn);
 #endif

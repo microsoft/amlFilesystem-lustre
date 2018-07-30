@@ -835,18 +835,22 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 	INIT_LIST_HEAD(&conn->ibc_zombie_txs);
 	spin_lock_init(&conn->ibc_lock);
 
+	rc = set_sysfs_conn(&peer_ni->ibp_sysfs, &conn->ibc_sysfs);
+	if (rc)
+		goto failed_2;
+
 	LIBCFS_CPT_ALLOC(conn->ibc_connvars, lnet_cpt_table(), cpt,
 			 sizeof(*conn->ibc_connvars));
 	if (conn->ibc_connvars == NULL) {
 		CERROR("Can't allocate in-progress connection state\n");
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
 	write_lock_irqsave(glock, flags);
 	if (dev->ibd_failover) {
 		write_unlock_irqrestore(glock, flags);
 		CERROR("%s: failover in progress\n", dev->ibd_ifname);
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
 	if (dev->ibd_hdev->ibh_ibdev != cmid->device) {
@@ -860,7 +864,7 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 		write_unlock_irqrestore(glock, flags);
 		CERROR("cmid HCA(%s), kib_dev(%s) need failover\n",
 		       cmid->device->name, dev->ibd_ifname);
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
         kiblnd_hdev_addref_locked(dev->ibd_hdev);
@@ -891,7 +895,7 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 		 */
 		CERROR("Failed to create CQ with %d CQEs: %ld\n",
 			IBLND_CQ_ENTRIES(conn), PTR_ERR(cq));
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
         conn->ibc_cq = cq;
@@ -899,7 +903,7 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 	rc = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP);
 	if (rc != 0) {
 		CERROR("Can't request completion notification: %d\n", rc);
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
 	init_qp_attr->event_handler = kiblnd_qp_event;
@@ -931,7 +935,7 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 		       init_qp_attr->cap.max_recv_wr,
 		       init_qp_attr->cap.max_send_sge,
 		       init_qp_attr->cap.max_recv_sge);
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
 	if (conn->ibc_queue_depth != peer_ni->ibp_queue_depth)
@@ -945,13 +949,13 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 			 IBLND_RX_MSGS(conn) * sizeof(struct kib_rx));
 	if (conn->ibc_rxs == NULL) {
 		CERROR("Cannot allocate RX buffers\n");
-		goto failed_2;
+		goto sysfs_cleanup;
 	}
 
 	rc = kiblnd_alloc_pages(&conn->ibc_rx_pages, cpt,
 				IBLND_RX_MSG_PAGES(conn));
 	if (rc != 0)
-		goto failed_2;
+		goto sysfs_cleanup;
 
 	kiblnd_map_rx_descs(conn);
 
@@ -999,6 +1003,8 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 	atomic_inc(&net->ibn_nconns);
         return conn;
 
+ sysfs_cleanup:
+	lnd_conn_sysfs_cleanup(&conn->ibc_sysfs);
  failed_2:
 	kiblnd_destroy_conn(conn);
 	LIBCFS_FREE(conn, sizeof(*conn));

@@ -29,7 +29,6 @@
  *   Sonia Sharma <sonia.sharma@intel.com>
  */
 
-
 #include <lnet/lib-lnet.h>
 #include <lnet/lnet-sysfs.h>
 
@@ -1042,3 +1041,49 @@ void lnd_peer_sysfs_cleanup(struct sysfs_lnd_peer *peer_ni)
 	kobject_put(peer_ni->peer_ni_kobj);
 }
 EXPORT_SYMBOL(lnd_peer_sysfs_cleanup);
+
+/*
+ * LND Connection sysfs setup/cleanup APIs
+ */
+
+int lnd_conn_sysfs_setup(struct sysfs_lnd_peer *peer_ni,
+			 struct sysfs_lnd_conn *lnd_conn)
+{
+	struct kobject *conn_id_kobj;
+	char conn_id[LNET_MAX_STR_LEN];
+	int rc = 0;
+	s64 timens = ktime_get_ns();
+
+	snprintf(conn_id, LNET_MAX_STR_LEN, "%lld", timens);
+	conn_id_kobj = kobject_create_and_add(conn_id,
+					      peer_ni->peer_conns_kobj);
+	if (!conn_id_kobj) {
+		CERROR("Cannot create koject for the connection of %s",
+		       peer_ni->peer_ni_kobj->name);
+		return rc;
+	}
+
+	init_completion(&lnd_conn->stats_kobj_unregister);
+
+	rc = kobject_init_and_add(&lnd_conn->stats_kobj, lnd_conn->stats_ktype,
+				  conn_id_kobj, "%s", "stats");
+	if (rc) {
+		CERROR("Cannot create koject for stats under connection  %s",
+		       conn_id);
+		kobject_put(conn_id_kobj);
+		return rc;
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL(lnd_conn_sysfs_setup);
+
+void lnd_conn_sysfs_cleanup(struct sysfs_lnd_conn *lnd_conn)
+{
+	struct kobject *conn_id_kobj = lnd_conn->stats_kobj.parent;
+
+	kobject_put(&lnd_conn->stats_kobj);
+	wait_for_completion(&lnd_conn->stats_kobj_unregister);
+	kobject_put(conn_id_kobj);
+}
+EXPORT_SYMBOL(lnd_conn_sysfs_cleanup);

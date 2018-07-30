@@ -712,6 +712,9 @@ struct kib_conn {
 	struct sysfs_lnd_conn   ibc_sysfs;
 };
 
+extern int set_sysfs_conn(struct sysfs_lnd_peer *kib_peer,
+			  struct sysfs_lnd_conn *conn);
+
 #define IBLND_CONN_INIT               0         /* being initialised */
 #define IBLND_CONN_ACTIVE_CONNECT     1         /* active sending req */
 #define IBLND_CONN_PASSIVE_WAIT       2         /* passive waiting for rtu */
@@ -847,6 +850,7 @@ do {									\
 	       (conn), atomic_read(&(conn)->ibc_refcount));		\
 	LASSERT_ATOMIC_POS(&(conn)->ibc_refcount);			\
 	if (atomic_dec_and_test(&(conn)->ibc_refcount)) {		\
+		lnd_conn_sysfs_cleanup(&conn->ibc_sysfs);		\
 		spin_lock_irqsave(&kiblnd_data.kib_connd_lock, flags);	\
 		list_add_tail(&(conn)->ibc_list,			\
 				  &kiblnd_data.kib_connd_zombies);	\
