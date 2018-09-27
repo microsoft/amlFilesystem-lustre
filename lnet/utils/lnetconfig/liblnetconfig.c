@@ -3285,8 +3285,160 @@ out:
 	return rc;
 }
 
+static int build_lnd_peer_tree(char *nidp, struct cYAML *root, char *err_str)
+{
+	struct cYAML *lnd_seq = NULL, *lpeer = NULL;
+	struct dirent *dent;
+	DIR *srcdir;
+	char *net = NULL, *temp = NULL, *dirpath = NULL, *nipath = NULL,
+	     *path = NULL;
+	char val[LNET_MAX_STR_LEN];
+	long long int lltmp;
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int tmp;
+
+	net = strchr(nidp, '@');
+	if (!net)
+		return LUSTRE_CFG_RC_BAD_PARAM;
+
+	net = net + 1;
+
+	if (strncmp(net, "tcp", 3) == 0)
+		temp = "/sys/fs/lnet/socklnd/peers/";
+	else if (strncmp(net, "o2ib", 4) == 0)
+		temp = "/sys/fs/lnet/ko2iblnd/peers/";
+	else {
+		snprintf(err_str, LNET_MAX_STR_LEN,
+			 "\"No LND peer stats for the network type %s\"", net);
+		return LUSTRE_CFG_RC_BAD_PARAM;
+	}
+
+	dirpath = concat_dir(temp, nidp);
+	if (!dirpath)
+		return LUSTRE_CFG_RC_OUT_OF_MEM;
+
+	srcdir = opendir(dirpath);
+	if (!srcdir)
+		goto out;
+
+	lnd_seq = cYAML_create_seq(root, "LND stats");
+	if (!lnd_seq)
+		goto out;
+
+	lpeer = cYAML_create_seq_item(lnd_seq);
+	if (!lpeer)
+		goto out;
+
+	rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			nipath = concat_dir(dirpath, dent->d_name);
+			if (!nipath)
+				goto out;
+
+			path = concat_dir(nipath, "stats");
+			if (!path)
+				goto out;
+
+			if (!cYAML_create_string(lpeer, "nid", dent->d_name))
+				goto out;
+
+			if (!read_sysfs_file(path, "ibp_conns", val, 1,
+					     sizeof(val))) {
+				tmp = atoi(val);
+				if (!cYAML_create_number(lpeer, "ibp_conns",
+							 tmp))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			if (!read_sysfs_file(path, "ibp_tx_queue", val, 1,
+					     sizeof(val))) {
+				tmp = atoi(val);
+				if (!cYAML_create_number(lpeer, "ibp_tx_queue",
+							 tmp))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			if (!read_sysfs_file(path, "ibp_accepting", val, 1,
+					     sizeof(val))) {
+				tmp = atoi(val);
+				if (!cYAML_create_number(lpeer, "ibp_accepting",
+							 tmp))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			if (!read_sysfs_file(path, "ibp_connecting", val, 1,
+					     sizeof(val))) {
+				tmp = atoi(val);
+				if (!cYAML_create_number(lpeer,
+							 "ibp_connecting", tmp))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			if (!read_sysfs_file(path, "ibp_races", val, 1,
+					     sizeof(val))) {
+				if (!cYAML_create_string(lpeer, "ibp_races",
+							 val))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			if (!read_sysfs_file(path, "ibp_last_alive", val, 1,
+					     sizeof(val))) {
+				lltmp = atoll(val);
+				if (!cYAML_create_number(lpeer, "ibp_last_alive",
+							 lltmp))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			if (!read_sysfs_file(path, "ibp_refcount", val, 1,
+					     sizeof(val))) {
+				tmp = atoi(val);
+				if (!cYAML_create_number(lpeer, "ibp_refcount",
+							 tmp))
+					goto out;
+			}
+			memset(&val[0], 0, sizeof(val));
+
+			free(path);
+			free(nipath);
+		}
+	}
+
+	free(dirpath);
+	closedir(srcdir);
+
+	rc = LUSTRE_CFG_RC_NO_ERR;
+	return rc;
+
+out:
+	free(path);
+	free(nipath);
+	free(dirpath);
+
+	if (srcdir)
+		closedir(srcdir);
+
+	return rc;
+}
+
 static int build_peer_stats_tree(char *path, struct cYAML *root, char *parent,
-				 char *nid, int detail, char *err_str)
+				 char *nid, bool lnd, int detail, char *err_str)
 {
 	struct cYAML *tree = NULL, *item = NULL, *item1 = NULL, *peer_ni = NULL,
 		     *send = NULL, *recv = NULL, *drop = NULL, *health = NULL,
@@ -3345,6 +3497,11 @@ add_nid_tree:
 
 	if (cYAML_create_string(peer_ni, "nid", nid) == NULL)
 		goto out;
+
+	if (lnd) {
+		rc = build_lnd_peer_tree(nid, peer_ni, err_str);
+		goto out;
+	}
 
 	if (!detail) {
 		if (!read_sysfs_file(stats_path, "peer_total_send_count", val,
@@ -3559,8 +3716,8 @@ out:
 }
 
 static int traverse_sysfs_nids(char *path, char *peer, char *parent,
-			       struct cYAML *root, int detail, bool *found,
-			       char *err_str)
+			       struct cYAML *root, bool lnd, int detail,
+			       bool *found, char *err_str)
 {
 	struct dirent *dent;
 	DIR *srcdir = opendir(path);
@@ -3590,7 +3747,7 @@ static int traverse_sysfs_nids(char *path, char *peer, char *parent,
 			if (peer && (strcmp(dent->d_name, peer) == 0) &&
 			    !(*found)) {
 				rc = build_peer_stats_tree(nipath, root, parent,
-							   dent->d_name,
+							   dent->d_name, lnd,
 							   detail, err_str);
 				if (rc != LUSTRE_CFG_RC_NO_ERR)
 					goto out;
@@ -3604,8 +3761,8 @@ static int traverse_sysfs_nids(char *path, char *peer, char *parent,
 				continue;
 			} else {
 				rc = build_peer_stats_tree(nipath, root, parent,
-							   dent->d_name, detail,
-							   err_str);
+							   dent->d_name, lnd,
+							   detail, err_str);
 				if (rc != LUSTRE_CFG_RC_NO_ERR)
 					goto out;
 				free(nipath);
@@ -3625,8 +3782,8 @@ out:
 }
 
 static int traverse_sysfs_peer_path(const char *path, char *peer,
-				    struct cYAML *root, int detail, bool *found,
-				    char *err_str)
+				    struct cYAML *root, bool lnd, int detail,
+				    bool *found, char *err_str)
 {
 	struct dirent *dent;
 	DIR *srcdir = opendir(path);
@@ -3663,7 +3820,8 @@ static int traverse_sysfs_peer_path(const char *path, char *peer,
 				*found = true;
 
 			rc = traverse_sysfs_nids(pnis_dir, peer, dent->d_name,
-						 root, detail, found, err_str);
+						 root, lnd, detail, found,
+						 err_str);
 
 			free(pnis_dir);
 			free(nipath);
@@ -3697,8 +3855,9 @@ out:
 	return rc;
 }
 
-int lustre_lnet_stats_peer(char **nid, int num_nids, int detail, int seq_no,
-			   struct cYAML **show_rc, struct cYAML **err_rc)
+int lustre_lnet_stats_peer(char **nid, int num_nids, bool lnd, int detail,
+			   int seq_no, struct cYAML **show_rc,
+			   struct cYAML **err_rc)
 {
 	struct cYAML *root = NULL, *peer_root = NULL, *first_seq = NULL;
 	char err_str[LNET_MAX_STR_LEN];
@@ -3732,19 +3891,18 @@ int lustre_lnet_stats_peer(char **nid, int num_nids, int detail, int seq_no,
 		goto out;
 
 	if (!nid) {
-		rc = traverse_sysfs_peer_path(path, NULL, root, detail, &found,
-					      err_str);
+		rc = traverse_sysfs_peer_path(path, NULL, root, lnd, detail,
+					      &found, err_str);
 		rc2 = rc;
 		if (rc != LUSTRE_CFG_RC_NO_ERR || !found) {
 			cYAML_build_error(rc, seq_no, "stats", "peer", err_str,
 					  err_rc);
 			goto out;
 		}
-
 	} else {
 		for (i = 0; i < num_nids ; i++) {
 			rc2 = rc;
-			rc = traverse_sysfs_peer_path(path, nid[i], root,
+			rc = traverse_sysfs_peer_path(path, nid[i], root, lnd,
 						      detail, &found, err_str);
 			if (rc != LUSTRE_CFG_RC_NO_ERR) {
 				cYAML_build_error(rc, seq_no, "stats", "peer",

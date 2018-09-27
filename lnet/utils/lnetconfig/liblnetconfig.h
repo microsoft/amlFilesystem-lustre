@@ -557,13 +557,15 @@ int lustre_lnet_show_peer(char *knid, int detail, int seq_no,
  *
  *   nid - list of nids (can be list of primary nids)
  *   num_nids - number of nids in the nid array
+ *   lnd - if set then display lnd peer stats
  *   detail - display detailed statistics
  *   seq_no - sequence number of the command
  *   show_rc - YAML structure of the resultant show
  *   err_rc - YAML strucutre of the resultant return code.
  */
-int lustre_lnet_stats_peer(char **nid, int num_nids, int detail, int seq_no,
-			   struct cYAML **show_rc, struct cYAML **err_rc);
+int lustre_lnet_stats_peer(char **nid, int num_nids, bool lnd, int detail,
+			   int seq_no, struct cYAML **show_rc,
+			   struct cYAML **err_rc);
 
 /*
  * lustre_lnet_list_peer

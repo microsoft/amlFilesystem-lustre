@@ -1959,11 +1959,12 @@ static int jt_stats_peer(int argc, char **argv)
 	long int detail = 0;
 	int size = 0;
 	int rc = LUSTRE_CFG_RC_NO_ERR, opt, i;
-	bool nid_list = false, prim_nid_present = false;
+	bool lnd = false, nid_list = false, prim_nid_present = false;
 
-	const char *const short_opts = "hk:n:v";
+	const char *const short_opts = "hlk:n:v";
 	const struct option long_opts[] = {
 	{ .name = "help",	.has_arg = no_argument,		.val = 'h' },
+	{ .name = "lnd",	.has_arg = no_argument,		.val = 'l' },
 	{ .name = "prim_nid",   .has_arg = required_argument,   .val = 'k' },
 	{ .name = "nid",	.has_arg = required_argument,	.val = 'n' },
 	{ .name = "verbose",	.has_arg = optional_argument,	.val = 'v' },
@@ -1976,6 +1977,8 @@ static int jt_stats_peer(int argc, char **argv)
 	while ((opt = getopt_long(argc, argv, short_opts,
 				  long_opts, NULL)) != -1) {
 		switch (opt) {
+		case 'l':
+			lnd = true;
 		case 'k':
 			prim_nid_present = true;
 			if (nid_list) {
@@ -2033,7 +2036,7 @@ static int jt_stats_peer(int argc, char **argv)
 		nids = nids2;
 	}
 
-	rc = lustre_lnet_stats_peer(nids, size, (int) detail, -1, &show_rc,
+	rc = lustre_lnet_stats_peer(nids, size, lnd, (int) detail, -1, &show_rc,
 				    &err_rc);
 
 	if (show_rc)
