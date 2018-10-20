@@ -3285,9 +3285,195 @@ out:
 	return rc;
 }
 
+static int get_conn_list(const char *path, char **conn_list)
+{
+	struct dirent *dent;
+	DIR *srcdir = opendir(path);
+	int rc;
+	int i = 0;
+
+	if (!srcdir)
+		return -EINVAL;
+
+	while ((dent = readdir(srcdir)) != NULL) {
+		struct stat st;
+
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..")
+		    == 0)
+			continue;
+
+		 if (fstatat(dirfd(srcdir), dent->d_name, &st, 0) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode)) {
+			conn_list[i] = dent->d_name;
+			i++;
+		}
+	}
+
+	if (i == 0)
+		rc = -ENOENT;
+	else
+		rc = i;
+
+	return rc;
+}
+
+static int build_lnd_conn_tree(char *path, struct cYAML *root)
+{
+	char *conn_list[4];
+	char *conns_dir = NULL, *conn_path = NULL, *stats = NULL;
+	char val[LNET_MAX_STR_LEN];
+	int rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+	int i, j, tmp, count;
+
+	conns_dir = concat_dir(path, "conns");
+	if (!conns_dir)
+		return rc;
+
+	rc = get_conn_list(conns_dir, conn_list);
+	if (rc < 0)
+		goto out;
+	else
+		count = rc;
+
+	rc = LUSTRE_CFG_RC_OUT_OF_MEM;
+
+	for (i = 0; i < count; i++) {
+		conn_path = concat_dir(conns_dir, conn_list[i]);
+		if (!conn_path)
+			goto out;
+
+		stats = concat_dir(conn_path, "stats");
+		if (!stats)
+			goto out;
+
+		j = i + 1;
+
+		if (!cYAML_create_number(root, "conn", j))
+			goto out;
+
+		if (!read_sysfs_file(stats, "ibc_refcount", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_refcount", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_state", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_state", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_nsends_posted", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_nsends_posted", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_noops_posted", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_noops_posted", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_credits", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_credits", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_outstanding_credits", val,
+				     1, sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_outstanding_credits",
+						 tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_reserved_credits", val, 1,
+				      sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_reserved_credits",
+						tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_comms_error", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_comms_error", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_tx_queue", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_tx_queue", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_tx_nocred_queue", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_tx_nocred_queue",
+						tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_tx_rsrvd_queue", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_tx_rsrvd_queue",
+						tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		if (!read_sysfs_file(stats, "ibc_active_txs", val, 1,
+				     sizeof(val))) {
+			tmp = atoi(val);
+			if (!cYAML_create_number(root, "ibc_active_txs", tmp))
+				goto out;
+		}
+		memset(&val[0], 0, sizeof(val));
+
+		free(stats);
+		free(conn_path);
+	}
+
+	free(conns_dir);
+
+	rc = LUSTRE_CFG_RC_NO_ERR;
+	return rc;
+
+out:
+	free(stats);
+	free(conn_path);
+
+	free(conns_dir);
+	return rc;
+}
+
 static int build_lnd_peer_tree(char *nidp, struct cYAML *root, char *err_str)
 {
-	struct cYAML *lnd_seq = NULL, *lpeer = NULL;
+	struct cYAML *lnd_seq = NULL, *lpeer = NULL, *conn = NULL,
+		     *conn_seq = NULL;
 	struct dirent *dent;
 	DIR *srcdir;
 	char *net = NULL, *temp = NULL, *dirpath = NULL, *nipath = NULL,
@@ -3414,6 +3600,18 @@ static int build_lnd_peer_tree(char *nidp, struct cYAML *root, char *err_str)
 					goto out;
 			}
 			memset(&val[0], 0, sizeof(val));
+
+			conn = cYAML_create_seq(lpeer, "conn stats");
+			if (!conn)
+				goto out;
+
+			conn_seq = cYAML_create_seq_item(conn);
+			if (!conn_seq)
+				goto out;
+
+			rc = build_lnd_conn_tree(nipath, conn_seq);
+			if (rc != LUSTRE_CFG_RC_NO_ERR)
+				goto out;
 
 			free(path);
 			free(nipath);
