@@ -37,6 +37,7 @@
 #include <linux/ktime.h>
 #include <linux/moduleparam.h>
 #include <linux/uaccess.h>
+#include <linux/inetdevice.h>
 
 #include <lnet/lib-lnet.h>
 
@@ -515,10 +516,42 @@ lnet_get_routes(void)
 }
 
 static char *
+get_first_intf(void)
+{
+	struct net_device *dev;
+
+	rtnl_lock();
+
+	for_each_netdev(&init_net, dev) {
+		struct in_device *in_dev;
+		if (strcmp(dev->name, "lo") == 0) /* skip the loopback IF */
+			continue;
+
+		if (!(dev_get_flags(dev) & IFF_UP)) {
+			CWARN("Ignoring interface %s (down)\n", dev->name);
+			continue;
+		}
+
+		in_dev = __in_dev_get_rtnl(dev);
+		if (!in_dev) {
+			CWARN("Interface %s has no IPv4 status.\n", dev->name);
+			continue;
+		}
+
+		rtnl_unlock();
+		return dev->name;
+	}
+
+	rtnl_unlock();
+	return NULL;
+}
+
+static char *
 lnet_get_networks(void)
 {
-	char   *nets;
-	int	rc;
+	static char network[LNET_MAX_STR_LEN];
+	char *nets, *intf;
+	int rc;
 
 	if (*networks != 0 && *ip2nets != 0) {
 		LCONSOLE_ERROR_MSG(0x101, "Please specify EITHER 'networks' or "
@@ -534,7 +567,13 @@ lnet_get_networks(void)
 	if (*networks != 0)
 		return networks;
 
-	return "tcp";
+	intf = get_first_intf();
+	if (!intf)
+		return NULL;
+
+	snprintf(network, sizeof(network), "tcp(%s)", intf);
+
+	return network;
 }
 
 static void

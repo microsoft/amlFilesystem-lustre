@@ -594,9 +594,9 @@ int ptlrpc_ni_init(void)
         CDEBUG(D_NET, "My pid is: %x\n", pid);
 
         /* We're not passing any limits yet... */
-        rc = LNetNIInit(pid);
-        if (rc < 0) {
-                CDEBUG (D_NET, "Can't init network interface: %d\n", rc);
+	rc = LNetNIInit(pid);
+	if (rc < 0) {
+		CDEBUG(D_NET, "Can't init network interface: %d\n", rc);
 		return rc;
         }
 
@@ -611,7 +611,8 @@ int ptlrpc_ni_init(void)
                 return 0;
 
         CERROR ("Failed to allocate event queue: %d\n", rc);
-        LNetNIFini();
+
+	LNetNIFini();
 
 	return rc;
 }

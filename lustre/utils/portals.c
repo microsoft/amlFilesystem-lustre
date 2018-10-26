@@ -292,7 +292,6 @@ int ptl_initialize(int argc, char **argv)
         return 0;
 }
 
-
 int jt_ptl_network(int argc, char **argv)
 {
 	struct libcfs_ioctl_data data;
@@ -327,7 +326,6 @@ int jt_ptl_network(int argc, char **argv)
 	} else if (!strcmp(argv[1], "configure") || !strcmp(argv[1], "up")) {
 		LIBCFS_IOC_INIT(data);
 		rc = l_ioctl(LNET_DEV_ID, IOC_LIBCFS_CONFIGURE, &data);
-
 		if (rc == 0) {
 			printf("LNET configured\n");
 			return 0;
