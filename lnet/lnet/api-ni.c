@@ -2501,13 +2501,14 @@ void lnet_lib_exit(void)
 int
 LNetNIInit(lnet_pid_t requested_pid)
 {
-	int			im_a_router = 0;
-	int			rc;
-	int			ni_count;
-	struct lnet_ping_buffer	*pbuf;
-	struct lnet_handle_md	ping_mdh;
-	struct list_head	net_head;
-	struct lnet_net		*net;
+	int im_a_router = 0;
+	int rc;
+	int ni_count;
+	struct lnet_ni *ni;
+	struct lnet_ping_buffer *pbuf;
+	struct lnet_handle_md ping_mdh;
+	struct list_head net_head;
+	struct lnet_net *net;
 
 	INIT_LIST_HEAD(&net_head);
 
@@ -2535,8 +2536,9 @@ LNetNIInit(lnet_pid_t requested_pid)
 	}
 
 	/* Add in the loopback NI */
-	if (lnet_ni_alloc(net, NULL, NULL) == NULL) {
-		rc = -ENOMEM;
+	ni = lnet_ni_alloc(net, NULL, "lo");
+	if (IS_ERR(ni)) {
+		rc = PTR_ERR(ni);
 		goto err_empty_list;
 	}
 
@@ -3160,8 +3162,8 @@ int lnet_dyn_add_ni(struct lnet_ioctl_config_ni *conf)
 
 	ni = lnet_ni_alloc_w_cpt_array(net, conf->lic_cpts, conf->lic_ncpts,
 				       conf->lic_ni_intf[0]);
-	if (!ni)
-		return -ENOMEM;
+	if (IS_ERR(ni))
+		return PTR_ERR(ni);
 
 	mutex_lock(&the_lnet.ln_api_mutex);
 

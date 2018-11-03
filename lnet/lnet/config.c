@@ -438,22 +438,22 @@ lnet_ni_add_interface(struct lnet_ni *ni, char *iface)
 static struct lnet_ni *
 lnet_ni_alloc_common(struct lnet_net *net, char *iface)
 {
-	struct lnet_tx_queue	*tq;
-	struct lnet_ni		*ni;
-	int			i;
+	struct lnet_tx_queue *tq;
+	struct lnet_ni *ni;
+	int rc = -ENOMEM;
+	int i;
 
-	if (iface != NULL)
-		/* make sure that this NI is unique in the net it's
-		 * being added to */
-		if (!lnet_ni_unique_net(&net->net_ni_added, iface))
-			return NULL;
+	/* make sure that this NI is unique in the net it's
+	 * being added to */
+	if (!lnet_ni_unique_net(&net->net_ni_added, iface))
+		return ERR_PTR(-EEXIST);
 
 	LIBCFS_ALLOC(ni, sizeof(*ni));
 	if (ni == NULL) {
 		CERROR("Out of memory creating network interface %s%s\n",
 		       libcfs_net2str(net->net_id),
 		       (iface != NULL) ? iface : "");
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 	}
 
 	spin_lock_init(&ni->ni_lock);
@@ -486,30 +486,26 @@ lnet_ni_alloc_common(struct lnet_net *net, char *iface)
 	ni->ni_state = LNET_NI_STATE_INIT;
 	list_add_tail(&ni->ni_netlist, &net->net_ni_added);
 
-	/*
-	 * if an interface name is provided then make sure to add in that
-	 * interface name in NI
-	 */
-	if (iface)
-		if (lnet_ni_add_interface(ni, iface) != 0)
-			goto failed;
+	rc = lnet_ni_add_interface(ni, iface);
+	if (rc != 0)
+		goto failed;
 
 	return ni;
 failed:
 	lnet_ni_free(ni);
-	return NULL;
+	return ERR_PTR(rc);
 }
 
 /* allocate and add to the provided network */
 struct lnet_ni *
 lnet_ni_alloc(struct lnet_net *net, struct cfs_expr_list *el, char *iface)
 {
-	struct lnet_ni		*ni;
-	int			rc;
+	struct lnet_ni *ni;
+	int rc;
 
 	ni = lnet_ni_alloc_common(net, iface);
-	if (!ni)
-		return NULL;
+	if (IS_ERR(ni))
+		return ni;
 
 	if (!el) {
 		ni->ni_cpts  = NULL;
@@ -539,19 +535,19 @@ lnet_ni_alloc(struct lnet_net *net, struct cfs_expr_list *el, char *iface)
 	return ni;
 failed:
 	lnet_ni_free(ni);
-	return NULL;
+	return ERR_PTR(rc);
 }
 
 struct lnet_ni *
 lnet_ni_alloc_w_cpt_array(struct lnet_net *net, __u32 *cpts, __u32 ncpts,
 			  char *iface)
 {
-	struct lnet_ni		*ni;
-	int			rc;
+	struct lnet_ni *ni;
+	int rc = -ENOMEM;
 
 	ni = lnet_ni_alloc_common(net, iface);
-	if (!ni)
-		return NULL;
+	if (IS_ERR(ni))
+		return ni;
 
 	if (ncpts == 0) {
 		ni->ni_cpts  = NULL;
@@ -572,7 +568,7 @@ lnet_ni_alloc_w_cpt_array(struct lnet_net *net, __u32 *cpts, __u32 ncpts,
 	return ni;
 failed:
 	lnet_ni_free(ni);
-	return NULL;
+	return ERR_PTR(rc);
 }
 
 /*
@@ -585,13 +581,13 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 {
 	struct cfs_expr_list *net_el = NULL;
 	struct cfs_expr_list *ni_el = NULL;
-	int		tokensize;
-	char		*tokens;
-	char		*str;
+	int tokensize;
+	char *tokens;
+	char *str;
 	struct lnet_net *net;
-	struct lnet_ni	*ni = NULL;
-	__u32		net_id;
-	int		nnets = 0;
+	struct lnet_ni *ni = NULL;
+	__u32 net_id;
+	int nnets = 0;
 
 	if (networks == NULL) {
 		CERROR("networks string is undefined\n");
@@ -627,6 +623,7 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 		char *elstr;
 		char *name;
 		int rc;
+		bool bond_ni_alloc = false;
 
 		/*
 		 * Parse a network string into its components.
@@ -644,7 +641,7 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 		while (isspace(*str))
 			*str++ = '\0';
 
-		/* Interface list (optional) */
+		/* Interface list (mandatory) */
 		if (*str == '(') {
 			*str++ = '\0';
 			nistr = str;
@@ -657,7 +654,10 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 				*str++ = '\0';
 			} while (isspace(*str));
 		} else {
-			nistr = NULL;
+			LCONSOLE_ERROR_MSG(0x114,
+					   "Missing network device info\n");
+			str = name;
+			goto failed_syntax;
 		}
 
 		/* CPT expression (optional) */
@@ -723,25 +723,6 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 		if (IS_ERR_OR_NULL(net))
 			goto failed;
 
-		if (!nistr ||
-		    (use_tcp_bonding && LNET_NETTYP(net_id) == SOCKLND)) {
-			/*
-			 * No interface list was specified, allocate a
-			 * ni using the defaults.
-			 */
-			ni = lnet_ni_alloc(net, net_el, NULL);
-			if (IS_ERR_OR_NULL(ni))
-				goto failed;
-
-			if (!nistr) {
-				if (net_el) {
-					cfs_expr_list_free(net_el);
-					net_el = NULL;
-				}
-				continue;
-			}
-		}
-
 		do {
 			elstr = NULL;
 
@@ -803,8 +784,7 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 				goto failed_syntax;
 			}
 
-			if (use_tcp_bonding &&
-			    LNET_NETTYP(net->net_id) == SOCKLND) {
+			if (bond_ni_alloc) {
 				rc = lnet_ni_add_interface(ni, name);
 				if (rc != 0)
 					goto failed;
@@ -813,6 +793,10 @@ lnet_parse_networks(struct list_head *netlist, char *networks,
 				if (IS_ERR_OR_NULL(ni))
 					goto failed;
 			}
+
+			if (!bond_ni_alloc && use_tcp_bonding &&
+			    LNET_NETTYP(net->net_id) == SOCKLND)
+				bond_ni_alloc = true;
 
 			if (ni_el) {
 				if (ni_el != net_el) {
