@@ -1226,8 +1226,9 @@ static void cl_dio_aio_end(const struct lu_env *env, struct cl_sync_io *anchor)
 
 	ENTRY;
 
-	if (!aio->cda_no_aio_complete)
-		dio_aio_complete(aio->cda_iocb, ret ?: aio->cda_bytes);
+	/* release pages */
+	while (aio->cda_pages.pl_nr > 0) {
+		struct cl_page *page = cl_page_list_first(&aio->cda_pages);
 
 	EXIT;
 }
@@ -1273,9 +1274,13 @@ struct cl_dio_aio *cl_dio_aio_alloc(struct kiocb *iocb, struct cl_object *obj,
 		 * no one is waiting (in the kernel) for this to complete
 		 *
 		 * in other cases, the last user is cl_sync_io_wait, and in
-		 * that case, the creator frees the struct after that call
+		 * that case, the caller frees the aio struct after that call
+		 * completes
 		 */
-		aio->cda_creator_free = !is_aio;
+		if (ll_aio || !is_sync_kiocb(iocb))
+			aio->cda_no_aio_free = 0;
+		else
+			aio->cda_no_aio_free = 1;
 
 		cl_object_get(obj);
 		aio->cda_obj = obj;
@@ -1284,29 +1289,14 @@ struct cl_dio_aio *cl_dio_aio_alloc(struct kiocb *iocb, struct cl_object *obj,
 }
 EXPORT_SYMBOL(cl_dio_aio_alloc);
 
-struct cl_sub_dio *cl_sub_dio_alloc(struct cl_dio_aio *ll_aio, bool sync)
-{
-	struct cl_sub_dio *sdio;
-
-	OBD_SLAB_ALLOC_PTR_GFP(sdio, cl_sub_dio_kmem, GFP_NOFS);
-	if (sdio != NULL) {
-		/*
-		 * Hold one ref so that it won't be released until
-		 * every pages is added.
-		 */
-		cl_sync_io_init_notify(&sdio->csd_sync, 1, sdio,
-				       cl_sub_dio_end);
-		cl_page_list_init(&sdio->csd_pages);
-
-		sdio->csd_ll_aio = ll_aio;
-		atomic_add(1,  &ll_aio->cda_sync.csi_sync_nr);
-		sdio->csd_creator_free = sync;
+		if (ll_aio)
+			atomic_add(1,  &ll_aio->cda_sync.csi_sync_nr);
 	}
 	return sdio;
 }
 EXPORT_SYMBOL(cl_sub_dio_alloc);
 
-void cl_dio_aio_free(const struct lu_env *env, struct cl_dio_aio *aio)
+void cl_aio_free(const struct lu_env *env, struct cl_dio_aio *aio)
 {
 	if (aio) {
 		cl_object_put(env, aio->cda_obj);
@@ -1315,12 +1305,6 @@ void cl_dio_aio_free(const struct lu_env *env, struct cl_dio_aio *aio)
 }
 EXPORT_SYMBOL(cl_dio_aio_free);
 
-void cl_sub_dio_free(struct cl_sub_dio *sdio)
-{
-	if (sdio)
-		OBD_SLAB_FREE_PTR(sdio, cl_sub_dio_kmem);
-}
-EXPORT_SYMBOL(cl_sub_dio_free);
 /*
  * ll_release_user_pages - tear down page struct array
  * @pages: array of page struct pointers underlying target buffer
@@ -1366,10 +1350,7 @@ void cl_sync_io_note(const struct lu_env *env, struct cl_sync_io *anchor,
 	LASSERT(atomic_read(&anchor->csi_sync_nr) > 0);
 	if (atomic_dec_and_lock(&anchor->csi_sync_nr,
 				&anchor->csi_waitq.lock)) {
-		struct cl_sub_dio *sub_dio_aio = NULL;
-		struct cl_dio_aio *dio_aio = NULL;
-		void *csi_dio_aio = NULL;
-		bool creator_free = true;
+		struct cl_dio_aio *aio = NULL;
 
 		cl_sync_io_end_t *end_io = anchor->csi_end_io;
 
@@ -1385,9 +1366,7 @@ void cl_sync_io_note(const struct lu_env *env, struct cl_sync_io *anchor,
 		if (end_io)
 			end_io(env, anchor);
 
-		csi_dio_aio = anchor->csi_dio_aio;
-		sub_dio_aio = csi_dio_aio;
-		dio_aio = csi_dio_aio;
+		aio = anchor->csi_aio;
 
 		if (csi_dio_aio && end_io == cl_dio_aio_end)
 			creator_free = dio_aio->cda_creator_free;
@@ -1396,15 +1375,8 @@ void cl_sync_io_note(const struct lu_env *env, struct cl_sync_io *anchor,
 
 		spin_unlock(&anchor->csi_waitq.lock);
 
-		if (csi_dio_aio) {
-			if (end_io == cl_dio_aio_end) {
-				if (!creator_free)
-					cl_dio_aio_free(env, dio_aio);
-			} else if (end_io == cl_sub_dio_end) {
-				if (!creator_free)
-					cl_sub_dio_free(sub_dio_aio);
-			}
-		}
+		if (aio && !aio->cda_no_aio_free)
+			cl_aio_free(env, aio);
 	}
 	EXIT;
 }
