@@ -560,7 +560,9 @@ ll_direct_IO_impl(struct kiocb *iocb, struct iov_iter *iter, int rw)
 		result = ll_get_user_pages(rw, iter, &pages,
 					   &pvec->ldp_count, count);
 		if (unlikely(result <= 0)) {
-			cl_sync_io_note(env, &ldp_aio->cda_sync, result);
+			cl_sync_io_note(env, &ldp_aio->csd_sync, result);
+			if (sync_submit)
+				cl_sub_dio_free(ldp_aio, true);
 			GOTO(out, result);
 		}
 
@@ -575,6 +577,13 @@ ll_direct_IO_impl(struct kiocb *iocb, struct iov_iter *iter, int rw)
 		 */
 		cl_sync_io_note(env, &ldp_aio->csd_sync, result);
 
+		if (sync_submit) {
+			rc2 = cl_sync_io_wait(env, &ldp_aio->csd_sync,
+					     0);
+			if (result == 0 && rc2)
+				result = rc2;
+			cl_sub_dio_free(ldp_aio, true);
+		}
 		if (unlikely(result < 0))
 			GOTO(out, result);
 
