@@ -1317,7 +1317,7 @@ static int lfsck_namespace_insert_normal(const struct lu_env *env,
 		}
 	}
 
-	if (unlikely(!dt_try_as_dir(env, parent)))
+	if (unlikely(!dt_try_as_dir(env, parent, true)))
 		GOTO(unlock, rc = -ENOTDIR);
 
 	th = lfsck_trans_create(env, dev, lfsck);
@@ -1479,7 +1479,7 @@ static int lfsck_namespace_create_orphan_dir(const struct lu_env *env,
 		if (IS_ERR(parent))
 			GOTO(log, rc = PTR_ERR(parent));
 
-		if (unlikely(!dt_try_as_dir(env, parent)))
+		if (unlikely(!dt_try_as_dir(env, parent, true)))
 			GOTO(log, rc = -ENOTDIR);
 	} else {
 		if (unlikely(lfsck->li_lpf_obj == NULL))
@@ -1551,7 +1551,7 @@ again:
 	if (rc != 0)
 		GOTO(stop, rc);
 
-	if (unlikely(!dt_try_as_dir(env, orphan)))
+	if (unlikely(!dt_try_as_dir(env, orphan, false)))
 		GOTO(stop, rc = -ENOTDIR);
 
 	rc = dt_declare_ref_add(env, orphan, th);
@@ -1953,7 +1953,7 @@ static int lfsck_namespace_replace_cond(const struct lu_env *env,
 	if (IS_ERR(parent))
 		GOTO(log, rc = PTR_ERR(parent));
 
-	if (unlikely(!dt_try_as_dir(env, parent)))
+	if (unlikely(!dt_try_as_dir(env, parent, true)))
 		GOTO(log, rc = -ENOTDIR);
 
 	rc = lfsck_lock(env, lfsck, parent, name, pllh,
@@ -2225,7 +2225,7 @@ int lfsck_namespace_repair_dirent(const struct lu_env *env,
 	if (IS_ERR(parent))
 		GOTO(log, rc = PTR_ERR(parent));
 
-	if (unlikely(!dt_try_as_dir(env, parent)))
+	if (unlikely(!dt_try_as_dir(env, parent, true)))
 		GOTO(log, rc = -ENOTDIR);
 
 	if (!update || strcmp(name, name2) == 0)
@@ -2656,7 +2656,7 @@ lost_parent:
 	} /* !dt_object_exists(parent) */
 
 	/* The unique linkEA entry with bad parent will be handled as orphan. */
-	if (unlikely(!dt_try_as_dir(env, parent))) {
+	if (unlikely(!dt_try_as_dir(env, parent, true))) {
 		if (!lustre_handle_is_used(lh) && retry != NULL)
 			*retry = true;
 		else
@@ -2912,7 +2912,7 @@ again:
 		}
 
 		/* The linkEA entry with bad parent will be removed. */
-		if (unlikely(!dt_try_as_dir(env, parent))) {
+		if (unlikely(!dt_try_as_dir(env, parent, true))) {
 			lfsck_object_put(env, parent);
 			lfsck_linkea_del_buf(ldata, cname);
 			continue;
@@ -3255,7 +3255,7 @@ static int lfsck_namespace_double_scan_dir(const struct lu_env *env,
 		RETURN(0);
 	}
 
-	if (unlikely(!dt_try_as_dir(env, child)))
+	if (unlikely(!dt_try_as_dir(env, child, true)))
 		GOTO(out, rc = -ENOTDIR);
 
 	/* We only take ldlm lock on the @child when required. When the
@@ -3864,7 +3864,7 @@ lost_parent:
 		} /* !dt_object_exists(parent) */
 
 		/* The linkEA entry with bad parent will be removed. */
-		if (unlikely(!dt_try_as_dir(env, parent))) {
+		if (unlikely(!dt_try_as_dir(env, parent, true))) {
 			lfsck_object_put(env, parent);
 			rc = lfsck_namespace_shrink_linkea(env, com, child,
 						&ldata, cname, pfid, true);
@@ -4240,7 +4240,7 @@ static int lfsck_namespace_reset(const struct lu_env *env,
 	if (IS_ERR(root))
 		GOTO(log, rc = PTR_ERR(root));
 
-	if (unlikely(!dt_try_as_dir(env, root)))
+	if (unlikely(!dt_try_as_dir(env, root, true)))
 		GOTO(put, rc = -ENOTDIR);
 
 	down_write(&com->lc_sem);
@@ -5326,7 +5326,7 @@ int lfsck_namespace_repair_dangling(const struct lu_env *env,
 	if (IS_ERR(parent))
 		GOTO(log, rc = PTR_ERR(parent));
 
-	if (unlikely(!dt_try_as_dir(env, parent)))
+	if (unlikely(!dt_try_as_dir(env, parent, true)))
 		GOTO(log, rc = -ENOTDIR);
 
 	child = lfsck_object_locate(dev, child);
@@ -5398,7 +5398,7 @@ int lfsck_namespace_repair_dangling(const struct lu_env *env,
 		GOTO(stop, rc);
 
 	if (S_ISDIR(type)) {
-		if (unlikely(!dt_try_as_dir(env, child)))
+		if (unlikely(!dt_try_as_dir(env, child, false)))
 			GOTO(stop, rc = -ENOTDIR);
 
 		/* 2a. increase child nlink */
@@ -6284,7 +6284,7 @@ static void lfsck_namespace_scan_local_lpf(const struct lu_env *env,
 	if (!dt_object_exists(parent))
 		GOTO(out, rc = 0);
 
-	if (unlikely(!dt_try_as_dir(env, parent)))
+	if (unlikely(!dt_try_as_dir(env, parent, true)))
 		GOTO(out, rc = -ENOTDIR);
 
 	CDEBUG(D_LFSCK, "%s: start to scan backend /lost+found\n",
@@ -7114,7 +7114,7 @@ int lfsck_namespace_setup(const struct lu_env *env,
 	if (IS_ERR(root))
 		GOTO(out, rc = PTR_ERR(root));
 
-	if (unlikely(!dt_try_as_dir(env, root)))
+	if (unlikely(!dt_try_as_dir(env, root, true)))
 		GOTO(out, rc = -ENOTDIR);
 
 	obj = local_index_find_or_create(env, lfsck->li_los, root,
