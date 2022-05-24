@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "##[debug]Fetching branches and tags from $(lustre_upstream_url)"
-          git remote add upstream $(lustre_upstream_url)
+          echo "Fetching branches and tags from $lustre_upstream_url"
+          git remote add upstream $lustre_upstream_url
           git fetch upstream
           git fetch --tags upstream
         name: "Fetch the latest changes and tags from upstream"
@@ -32,7 +32,7 @@ jobs:
       - run: |
           git push origin --tags
           for b in $(ls .git/refs/remotes/upstream); do
-            echo "##[debug]Pushing updates to branch ${b}"
+            echo "Pushing updates to branch $b"
             git push -f origin upstream/${b}:refs/heads/upstream/${b};
           done
         name: "Push tags and changes from the upstream branches"
