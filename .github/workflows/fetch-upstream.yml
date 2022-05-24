@@ -1,0 +1,38 @@
+#
+# fetch-upstream..yml
+#
+# Copyright (c) Microsoft Corporation. All rights reserved.
+#
+# Github action to push the latest upstream changes to our repo.
+#
+
+# Every day at midnight, run this.
+name: Fetch Upstream
+on:
+  schedule:
+  - cron: "0 0 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  Refresh-Upstream:
+    name: update_upstream_branches
+    env:
+      lustre_upstream_url: "git://git.whamcloud.com/fs/lustre-release.git"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "##[debug]Fetching branches and tags from $(lustre_upstream_url)"
+          git remote add upstream $(lustre_upstream_url)
+          git fetch upstream
+          git fetch --tags upstream
+        name: "Fetch the latest changes and tags from upstream"
+
+      - run: |
+          git push origin --tags
+          for b in $(ls .git/refs/remotes/upstream); do
+            echo "##[debug]Pushing updates to branch ${b}"
+            git push -f origin upstream/${b}:refs/heads/upstream/${b};
+          done
+        name: "Push tags and changes from the upstream branches"
