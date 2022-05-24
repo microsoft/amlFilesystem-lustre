@@ -20,10 +20,11 @@ jobs:
     name: update_upstream_branches
     env:
       upstream_project_name: "lustre-release"
-      lustre_upstream_url: "git://git.whamcloud.com/fs/$upstream_project_name.git"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Set repo URL
+        run: echo "git://git.whamcloud.com/fs/$upstream_project_name.git" >> $GITHUB_ENV
       - run: |
           echo "Fetching branches and tags from $lustre_upstream_url"
           cd $upstream_project_name
