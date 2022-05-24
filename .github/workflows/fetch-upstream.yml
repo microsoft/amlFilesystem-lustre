@@ -18,17 +18,17 @@ on:
 jobs:
   Refresh-Upstream:
     name: update_upstream_branches
-    env:
-      upstream_project_name: "lustre-release"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Set repo name
+        run: echo "UPSTREAM_PROJECT_NAME=lustre-release" >> $GITHUB_ENV
       - name: Set repo URL
-        run: echo "git://git.whamcloud.com/fs/$upstream_project_name.git" >> $GITHUB_ENV
+        run: echo "LUSTRE_UPSTREAM_URL=git://git.whamcloud.com/fs/$UPSTREAM_PROJECT_NAME.git" >> $GITHUB_ENV
       - run: |
-          echo "Fetching branches and tags from $lustre_upstream_url"
-          cd $upstream_project_name
-          git remote add upstream $lustre_upstream_url
+          echo "Fetching branches and tags from $LUSTRE_UPSTREAM_URL"
+          cd $UPSTREAM_PROJECT_NAME
+          git remote add upstream $LUSTRE_UPSTREAM_URL
           git fetch upstream
           git fetch --tags upstream
         name: "Fetch the latest changes and tags from upstream"
