@@ -19,11 +19,14 @@ jobs:
   Refresh-Upstream:
     name: update_upstream_branches
     env:
-      lustre_upstream_url: "git://git.whamcloud.com/fs/lustre-release.git"
+      upstream_project_name: "lustre-release"
+      lustre_upstream_url: "git://git.whamcloud.com/fs/$upstream_project_name.git"
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
       - run: |
           echo "Fetching branches and tags from $lustre_upstream_url"
+          cd $upstream_project_name
           git remote add upstream $lustre_upstream_url
           git fetch upstream
           git fetch --tags upstream
