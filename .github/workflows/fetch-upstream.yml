@@ -21,13 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          #ref: master
       - name: Set repo name
         run: echo "UPSTREAM_PROJECT_NAME=lustre-release" >> $GITHUB_ENV
       - name: Set repo URL
         run: echo "LUSTRE_UPSTREAM_URL=git://git.whamcloud.com/fs/$UPSTREAM_PROJECT_NAME.git" >> $GITHUB_ENV
       - run: |
           echo "Fetching branches and tags from $LUSTRE_UPSTREAM_URL"
-          cd $UPSTREAM_PROJECT_NAME
+          #cd $UPSTREAM_PROJECT_NAME
           git remote add upstream $LUSTRE_UPSTREAM_URL
           git fetch upstream
           git fetch --tags upstream
