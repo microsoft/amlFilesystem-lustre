@@ -1503,6 +1503,14 @@ int nodemap_index_read(struct lu_env *env,
 	if (rc >= 0)
 		ii->ii_version = version;
 
+	/*
+	 * For partial lu_idxpage filling of the end system page,
+	 * init the header of the remain lu_idxpages.
+	 */
+	if (rc > 0)
+		dt_index_page_adjust(rdpg->rp_pages, rdpg->rp_npages,
+				     ii->ii_count);
+
 	dt_read_unlock(env, nodemap_idx);
 	return rc;
 }
@@ -1565,6 +1573,7 @@ int nodemap_get_config_req(struct obd_device *mgs_obd,
 	nodemap_ii.ii_flags = II_FL_NOHASH;
 	nodemap_ii.ii_version = rqexp_ted->ted_nodemap_version;
 	nodemap_ii.ii_attrs = body->mcb_nm_cur_pass;
+	nodemap_ii.ii_count = 0;
 
 	bytes = nodemap_index_read(req->rq_svc_thread->t_env,
 				   mgs_obd->u.obt.obt_nodemap_config_file,
