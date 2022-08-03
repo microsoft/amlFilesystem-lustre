@@ -1736,7 +1736,7 @@ restart:
 		rc = io->ci_result;
 	}
 
-	if (is_parallel_dio) {
+	if (io->ci_dio_aio && !is_aio) {
 		struct cl_sync_io *anchor = &io->ci_dio_aio->cda_sync;
 
 		/* for dio, EIOCBQUEUED is an implementation detail,
