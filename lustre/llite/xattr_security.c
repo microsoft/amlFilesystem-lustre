@@ -50,7 +50,8 @@
 /*
  * Check for LL_SBI_FILE_SECCTX before calling.
  */
-int ll_dentry_init_security(struct dentry *dentry, int mode, struct qstr *name,
+int ll_dentry_init_security(struct inode *parent, struct dentry *dentry,
+			    int mode, struct qstr *name,
 			    const char **secctx_name, void **secctx,
 			    __u32 *secctx_size)
 {
@@ -72,9 +73,19 @@ int ll_dentry_init_security(struct dentry *dentry, int mode, struct qstr *name,
 
 	if (!selinux_is_enabled())
 		return 0;
+	rc = security_inode_listsecurity(parent, NULL, 0);
+	/* xattr name length == 0 means SELinux is disabled */
+	if (rc == 0)
+		return 0;
+	/* we support SELinux only */
+	if (rc != strlen(XATTR_NAME_SELINUX) + 1)
+		return -EOPNOTSUPP;
 
-	rc = security_dentry_init_security(dentry, mode, name, secctx,
-					   secctx_size);
+	rc = security_dentry_init_security(dentry, mode, name,
+#ifdef HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG
+					   secctx_name,
+#endif
+					   secctx, secctx_size);
 	/* Usually, security_dentry_init_security() returns -EOPNOTSUPP when
 	 * SELinux is disabled.
 	 * But on some kernels (e.g. rhel 8.5) it returns 0 when SELinux is
@@ -86,7 +97,9 @@ int ll_dentry_init_security(struct dentry *dentry, int mode, struct qstr *name,
 	if (rc < 0)
 		return rc;
 
+#ifndef HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG
 	*secctx_name = XATTR_NAME_SELINUX;
+#endif
 
 	return 0;
 }
