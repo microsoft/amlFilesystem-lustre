@@ -184,6 +184,7 @@ dkms-srpm: $(PACKAGE)-dkms.spec dist Makefile
 		--define "_tmppath $$rpmbuilddir/TMP" \
 		--define "_topdir $$rpmbuilddir" \
 		--define "_sourcedir $(top_srcdir)" \
+		--define "kver ${kver}" \
 		--without servers \
 		--bs $(PACKAGE)-dkms.spec || exit 1; \
 	cp $$rpmbuilddir/SRPMS/*.src.rpm $(top_srcdir) || exit 1; \
@@ -230,6 +231,7 @@ srpm: @PACKAGE_TARNAME@.spec dist Makefile
 		--define "_tmppath $$rpmbuilddir/TMP" \
 		--define "_topdir $$rpmbuilddir" \
 		--define "dist %{nil}" \
+		--define "kver ${kver}" \
 		-ts $(distdir).tar.gz || exit 1; \
 	cp $$rpmbuilddir/SRPMS/$(distdir)-*.src.rpm $(top_srcdir) || exit 1; \
 	rm -rf $$rpmbuilddir
