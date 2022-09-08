@@ -206,7 +206,7 @@ struct lprocfs_stats {
 	/* 1 + the biggest cpu # whose ls_percpu slot has been allocated */
 	unsigned short			ls_biggest_alloc_num;
 	enum lprocfs_stats_flags	ls_flags;
-	ktime_t				ls_init;
+	struct timespec64		ls_init;
 	/* Lock used when there are no percpu stats areas; For percpu stats,
 	 * it is used to protect ls_biggest_alloc_num change */
 	spinlock_t			ls_lock;
@@ -408,7 +408,7 @@ struct brw_stats_props {
 };
 
 struct brw_stats {
-	ktime_t			bs_init;
+	struct timespec64	bs_init;
 	struct obd_hist_pcpu	bs_hist[BRW_RW_STATS_NUM];
 	struct brw_stats_props	bs_props[BRW_RW_STATS_NUM / 2];
 };
@@ -588,8 +588,8 @@ extern int lprocfs_seq_create(struct proc_dir_entry *parent, const char *name,
 extern int lprocfs_obd_seq_create(struct obd_device *obd, const char *name,
 				  mode_t mode, const struct proc_ops *seq_fops,
 				  void *data);
-extern void lprocfs_stats_header(struct seq_file *seq, ktime_t now,
-				 ktime_t ts_init, int width, const char *colon,
+extern void lprocfs_stats_header(struct seq_file *seq, struct timespec64 now,
+				 struct timespec64 ts_init, int width, const char *colon,
 				 bool show_units);
 
 /* Generic callbacks */

@@ -112,9 +112,11 @@ static void display_rename_stats(struct seq_file *seq, char *name,
 static void rename_stats_show(struct seq_file *seq,
 			      struct rename_stats *rename_stats)
 {
+	struct timespec64 now;
 	/* this sampling races with updates */
 	seq_puts(seq, "rename_stats:\n- ");
-	lprocfs_stats_header(seq, ktime_get(), rename_stats->rs_init, 15, ":",
+	ktime_get_real_ts64(&now);
+	lprocfs_stats_header(seq, now, rename_stats->rs_init, 15, ":",
 			     false);
 
 	display_rename_stats(seq, "same_dir",
@@ -144,7 +146,7 @@ mdt_rename_stats_seq_write(struct file *file, const char __user *buf,
 
 	for (i = 0; i < RENAME_LAST; i++)
 		lprocfs_oh_clear(&mdt->mdt_rename_stats.rs_hist[i]);
-	mdt->mdt_rename_stats.rs_init = ktime_get();
+	ktime_get_real_ts64(&mdt->mdt_rename_stats.rs_init);
 
 	return len;
 }
@@ -156,6 +158,7 @@ static int lproc_mdt_attach_rename_seqstat(struct mdt_device *mdt)
 
 	for (i = 0; i < RENAME_LAST; i++)
 		spin_lock_init(&mdt->mdt_rename_stats.rs_hist[i].oh_lock);
+	ktime_get_real_ts64(&mdt->mdt_rename_stats.rs_init);
 
 	return lprocfs_obd_seq_create(mdt2obd_dev(mdt), "rename_stats", 0644,
 				      &mdt_rename_stats_fops, mdt);

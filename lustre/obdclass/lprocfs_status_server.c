@@ -773,10 +773,12 @@ static const struct brw_stats_props brw_props[] = {
 static int brw_stats_seq_show(struct seq_file *seq, void *v)
 {
 	struct brw_stats *brw_stats = seq->private;
+	struct timespec64 now;
 	int i;
 
 	/* this sampling races with updates */
-	lprocfs_stats_header(seq, ktime_get(), brw_stats->bs_init, 25, ":", 1);
+	ktime_get_real_ts64(&now);
+	lprocfs_stats_header(seq, now, brw_stats->bs_init, 25, ":", 1);
 
 	for (i = 0; i < ARRAY_SIZE(brw_stats->bs_props); i++) {
 		if (!brw_stats->bs_props[i].bsp_name)
@@ -802,6 +804,7 @@ static ssize_t brw_stats_seq_write(struct file *file,
 
 	for (i = 0; i < BRW_RW_STATS_NUM; i++)
 		lprocfs_oh_clear_pcpu(&brw_stats->bs_hist[i]);
+	ktime_get_real_ts64(&brw_stats->bs_init);
 
 	return len;
 }
@@ -838,7 +841,6 @@ void ldebugfs_register_osd_stats(struct dentry *parent,
 	int i;
 
 	LASSERT(brw_stats);
-	brw_stats->bs_init = ktime_get();
 	for (i = 0; i < BRW_RW_STATS_NUM; i++) {
 		struct brw_stats_props *props = brw_stats->bs_props;
 
@@ -848,6 +850,7 @@ void ldebugfs_register_osd_stats(struct dentry *parent,
 			props[i / 2].bsp_scale = brw_props[i / 2].bsp_scale;
 		}
 	}
+	ktime_get_real_ts64(&brw_stats->bs_init);
 
 	if (!parent)
 		return;

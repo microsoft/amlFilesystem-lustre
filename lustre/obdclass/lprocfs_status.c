@@ -1241,6 +1241,8 @@ struct lprocfs_stats *lprocfs_alloc_stats(unsigned int num,
 				goto fail;
 	}
 
+	ktime_get_real_ts64(&stats->ls_init);
+
 	return stats;
 
 fail:
@@ -1326,6 +1328,8 @@ void lprocfs_clear_stats(struct lprocfs_stats *stats)
 		}
 	}
 
+	ktime_get_real_ts64(&stats->ls_init);
+
 	lprocfs_stats_unlock(stats, LPROCFS_GET_NUM_CPU, &flags);
 }
 EXPORT_SYMBOL(lprocfs_clear_stats);
@@ -1360,19 +1364,17 @@ static void *lprocfs_stats_seq_next(struct seq_file *p, void *v, loff_t *pos)
 	return lprocfs_stats_seq_start(p, pos);
 }
 
-void lprocfs_stats_header(struct seq_file *seq, ktime_t now, ktime_t ts_init,
+void lprocfs_stats_header(struct seq_file *seq, struct timespec64 now, struct timespec64 ts_init,
 			  int width, const char *colon, bool show_units)
 {
 	const char *units = show_units ? " secs.nsecs" : "";
 	struct timespec64 ts;
 
-	ts = ktime_to_timespec64(now);
 	seq_printf(seq, "%-*s%s %llu.%09lu%s\n", width,
-		   "snapshot_time", colon, (s64)ts.tv_sec, ts.tv_nsec, units);
-	ts = ktime_to_timespec64(ts_init);
+		   "snapshot_time", colon, (s64)now.tv_sec, now.tv_nsec, units);
 	seq_printf(seq, "%-*s%s %llu.%09lu%s\n", width,
-		   "start_time", colon, (s64)ts.tv_sec, ts.tv_nsec, units);
-	ts = ktime_to_timespec64(ktime_sub(now, ts_init));
+		   "start_time", colon, (s64)ts_init.tv_sec, ts_init.tv_nsec, units);
+	ts = timespec64_sub(now, ts_init);
 	seq_printf(seq, "%-*s%s %llu.%09lu%s\n", width,
 		   "elapsed_time", colon, (s64)ts.tv_sec, ts.tv_nsec, units);
 }
@@ -1384,10 +1386,13 @@ static int lprocfs_stats_seq_show(struct seq_file *p, void *v)
 	struct lprocfs_stats *stats = p->private;
 	struct lprocfs_counter_header *hdr;
 	struct lprocfs_counter ctr;
+	struct timespec64 now;
 	int idx = *(loff_t *)v;
 
-	if (idx == 0)
-		lprocfs_stats_header(p, ktime_get(), stats->ls_init, 25, "", 1);
+	if (idx == 0) {
+		ktime_get_real_ts64(&now);
+		lprocfs_stats_header(p, now, stats->ls_init, 25, "", 1);
+	}
 
 	hdr = &stats->ls_cnt_header[idx];
 	lprocfs_stats_collect(stats, idx, &ctr);
@@ -1620,6 +1625,7 @@ void lprocfs_init_ldlm_stats(struct lprocfs_stats *ldlm_stats)
 			     LPROCFS_TYPE_REQS, "ldlm_cp_callback");
 	lprocfs_counter_init(ldlm_stats, LDLM_GL_CALLBACK - LDLM_FIRST_OPC,
 			     LPROCFS_TYPE_REQS, "ldlm_gl_callback");
+	ktime_get_real_ts64(&ldlm_stats->ls_init);
 }
 EXPORT_SYMBOL(lprocfs_init_ldlm_stats);
 

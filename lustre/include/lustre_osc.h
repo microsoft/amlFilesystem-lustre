@@ -103,9 +103,9 @@ struct osc_device {
 
 	/* Write stats is actually protected by client_obd's lock. */
 	struct osc_stats {
-		ktime_t		os_init;
-		uint64_t	os_lockless_writes;    /* by bytes */
-		uint64_t	os_lockless_reads;     /* by bytes */
+		struct timespec64	os_init;
+		uint64_t		os_lockless_writes;    /* by bytes */
+		uint64_t		os_lockless_reads;     /* by bytes */
 	} od_stats;
 
 	/* configuration item(s) */

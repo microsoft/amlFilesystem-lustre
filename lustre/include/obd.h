@@ -279,7 +279,7 @@ struct client_obd {
 	u32			cl_max_pages_per_rpc;
 	u32			cl_max_rpcs_in_flight;
 	u32			cl_max_short_io_bytes;
-	ktime_t			cl_stats_init;
+	struct timespec64	cl_stats_init;
 	struct obd_histogram	cl_read_rpc_hist;
 	struct obd_histogram	cl_write_rpc_hist;
 	struct obd_histogram	cl_read_page_hist;
@@ -334,7 +334,7 @@ struct client_obd {
 	__u16			 cl_close_rpcs_in_flight;
 	wait_queue_head_t	 cl_mod_rpcs_waitq;
 	unsigned long		*cl_mod_tag_bitmap;
-	ktime_t			 cl_mod_rpcs_init;
+	struct timespec64	 cl_mod_rpcs_init;
 	struct obd_histogram	 cl_mod_rpcs_hist;
 
 	/* mgc datastruct */

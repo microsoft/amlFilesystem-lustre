@@ -621,7 +621,7 @@ struct per_process_info {
 
 /* pp_extents[LL_PROCESS_HIST_MAX] will hold the combined process info */
 struct ll_rw_extents_info {
-	ktime_t pp_init;
+	struct timespec64 pp_init;
 	struct per_process_info pp_extents[LL_PROCESS_HIST_MAX + 1];
 };
 
@@ -742,7 +742,7 @@ struct ll_sb_info {
 	unsigned int		  ll_offset_process_count;
 	struct ll_rw_process_info *ll_rw_process_info;
 	struct ll_rw_process_info *ll_rw_offset_info;
-	ktime_t			  ll_process_stats_init;
+	struct timespec64	  ll_process_stats_init;
 	unsigned int		  ll_rw_offset_entry_count;
 	int			  ll_stats_track_id;
 	enum stats_track_type	  ll_stats_track_type;

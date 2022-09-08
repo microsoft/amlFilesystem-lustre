@@ -482,6 +482,8 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 
 	cli->cl_max_short_io_bytes = OBD_DEF_SHORT_IO_BYTES;
 
+	ktime_get_real_ts64(&cli->cl_stats_init);
+
 	/*
 	 * set cl_chunkbits default value to PAGE_SHIFT,
 	 * it will be updated at OSC connection time.
@@ -510,6 +512,7 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 	cli->cl_close_rpcs_in_flight = 0;
 	init_waitqueue_head(&cli->cl_mod_rpcs_waitq);
 	cli->cl_mod_tag_bitmap = NULL;
+	ktime_get_real_ts64(&cli->cl_mod_rpcs_init);
 
 	INIT_LIST_HEAD(&cli->cl_chg_dev_linkage);
 

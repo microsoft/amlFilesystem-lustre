@@ -66,8 +66,8 @@ struct job_stat {
 	struct list_head	js_list;	/* on ojs_list, with ojs_lock */
 	atomic_t		js_refcount;	/* num users of this struct */
 	char			js_jobid[LUSTRE_JOBID_SIZE]; /* job name + NUL*/
-	ktime_t			js_time_init;	/* time of initial stat*/
-	ktime_t			js_time_latest;	/* time of most recent stat*/
+	struct timespec64	js_time_init;	/* time in epoch time of initial stat*/
+	ktime_t			js_time_latest;	/* time since boot of most recent stat*/
 	struct lprocfs_stats	*js_stats;	/* per-job statistics */
 	struct obd_job_stats	*js_jobstats;	/* for accessing ojs_lock */
 };
@@ -263,8 +263,8 @@ static struct job_stat *job_alloc(char *jobid, struct obd_job_stats *jobs)
 	jobs->ojs_cntr_init_fn(job->js_stats, 0);
 
 	memcpy(job->js_jobid, jobid, sizeof(job->js_jobid));
-	job->js_time_init = ktime_get();
-	job->js_time_latest = job->js_time_init;
+	ktime_get_real_ts64(&job->js_time_init);
+	job->js_time_latest = ktime_get();
 	job->js_jobstats = jobs;
 	INIT_HLIST_NODE(&job->js_hash);
 	INIT_LIST_HEAD(&job->js_list);
@@ -442,6 +442,7 @@ static int lprocfs_jobstats_seq_show(struct seq_file *p, void *v)
 	char escaped[LUSTRE_JOBID_SIZE * 4] = "";
 	char *quote = "", *c, *end;
 	int i, joblen = 0;
+	struct timespec64 now;
 
 	if (v == SEQ_START_TOKEN) {
 		seq_printf(p, "job_stats:\n");
@@ -468,7 +469,8 @@ static int lprocfs_jobstats_seq_show(struct seq_file *p, void *v)
 
 	seq_printf(p, "- %-16s %s%*s%s\n",
 		   "job_id:", quote, joblen, escaped, quote);
-	lprocfs_stats_header(p, job->js_time_latest, job->js_time_init, 16,
+	ktime_get_real_ts64(&now);
+	lprocfs_stats_header(p, now, job->js_time_init, 16,
 			     ":", true);
 
 	s = job->js_stats;

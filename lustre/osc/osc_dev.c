@@ -224,6 +224,8 @@ static struct lu_device *osc_device_alloc(const struct lu_env *env,
                 RETURN(ERR_PTR(rc));
         }
         od->od_exp = obd->obd_self_export;
+        ktime_get_real_ts64(&od->od_stats.os_init);
+
         RETURN(d);
 }
 

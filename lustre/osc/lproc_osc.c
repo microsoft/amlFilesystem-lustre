@@ -708,12 +708,13 @@ static int osc_rpc_stats_seq_show(struct seq_file *seq, void *v)
 {
 	struct obd_device *obd = seq->private;
 	struct client_obd *cli = &obd->u.cli;
+	struct timespec64 now;
 	unsigned long read_tot = 0, write_tot = 0, read_cum, write_cum;
 	int i;
 
+	ktime_get_real_ts64(&now);
 	spin_lock(&cli->cl_loi_list_lock);
-
-	lprocfs_stats_header(seq, ktime_get(), cli->cl_stats_init, 25, ":", 1);
+	lprocfs_stats_header(seq, now, cli->cl_stats_init, 25, ":", 1);
 	seq_printf(seq, "read RPCs in flight:  %d\n",
 		   cli->cl_r_in_flight);
 	seq_printf(seq, "write RPCs in flight: %d\n",
@@ -811,7 +812,7 @@ static ssize_t osc_rpc_stats_seq_write(struct file *file,
 	lprocfs_oh_clear(&cli->cl_write_page_hist);
 	lprocfs_oh_clear(&cli->cl_read_offset_hist);
 	lprocfs_oh_clear(&cli->cl_write_offset_hist);
-	cli->cl_stats_init = ktime_get();
+	ktime_get_real_ts64(&cli->cl_stats_init);
 
 	return len;
 }
@@ -821,8 +822,10 @@ static int osc_stats_seq_show(struct seq_file *seq, void *v)
 {
 	struct obd_device *obd = seq->private;
 	struct osc_stats *stats = &obd2osc_dev(obd)->od_stats;
+	struct timespec64 now;
 
-	lprocfs_stats_header(seq, ktime_get(), stats->os_init, 25, ":", true);
+	ktime_get_real_ts64(&now);
+	lprocfs_stats_header(seq, now, stats->os_init, 25, ":", true);
 	seq_printf(seq, "lockless_write_bytes\t\t%llu\n",
 		   stats->os_lockless_writes);
 	seq_printf(seq, "lockless_read_bytes\t\t%llu\n",
@@ -839,7 +842,7 @@ static ssize_t osc_stats_seq_write(struct file *file,
 	struct osc_stats *stats = &obd2osc_dev(obd)->od_stats;
 
 	memset(stats, 0, sizeof(*stats));
-	stats->os_init = ktime_get();
+	ktime_get_real_ts64(&stats->os_init);
 
 	return len;
 }
@@ -891,6 +894,7 @@ int osc_tunables_init(struct obd_device *obd)
 	rc = lprocfs_obd_setup(obd, false);
 	if (rc)
 		return rc;
+
 #ifdef CONFIG_PROC_FS
 	/* If the basic OSC proc tree construction succeeded then
 	 * lets do the rest.
