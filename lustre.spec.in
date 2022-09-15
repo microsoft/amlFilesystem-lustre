@@ -174,7 +174,11 @@
 Summary: Lustre File System
 Name: %{lustre_name}
 Version: %{version}
+%if %{defined pkg_release_ver}
+Release: %{pkg_release_ver}
+%else
 Release: 1%{?dist}
+%endif
 License: GPL
 Group: System Environment/Kernel
 Source: lustre-%{version}.tar.gz
