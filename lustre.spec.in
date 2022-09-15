@@ -228,12 +228,19 @@
 Summary: Lustre File System
 Name: %{lustre_name}
 Version: %{version}
+%if %{defined pkg_release_ver}
+Release: %{pkg_release_ver}
+%else
 Release: %{release_id}%{?dist}
+%endif
 License: GPL-2.0-only AND LGPL-2.1-or-later
 %if 0%{?suse_version} >= 1310
 # SUSE needs Group for the kernel_module_package macro
 Group: System/Kernel
 %endif
+%endif
+License: GPL
+Group: System Environment/Kernel
 Source: lustre-%{version}.tar.gz
 Source1: kmp-lustre.preamble
 Source2: kmp-lustre.files
