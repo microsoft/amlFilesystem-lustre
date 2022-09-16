@@ -1826,6 +1826,27 @@ AC_DEFUN([LIBCFS_HAVE_PROC_OPS], [
 ]) # LIBCFS_HAVE_PROC_OPS
 
 #
+# LIBCFS_IP6_SET_PREF
+#
+# kernel v5.8-rc1~165^2~71^2~3 commit 18d5ad62327576cbb1e5b9938a59d63ac0c15832
+# ipv6: add ip6_sock_set_addr_preferences
+#
+AC_DEFUN([LIBCFS_IP6_SET_PREF], [
+tmp_flags="$EXTRA_KCFLAGS"
+EXTRA_KCFLAGS="-Werror"
+LB_CHECK_COMPILE([if ip6_sock_set_addr_preferences() exists],
+ip6_set_pref_test, [
+	#include <net/ipv6.h>
+],[
+	ip6_sock_set_addr_preferences(NULL, 0);
+],[
+	AC_DEFINE(HAVE_IP6_SET_PREF, 1,
+		[if ip6_sock_set_addr_preferences exists])
+])
+EXTRA_KCFLAGS="$tmp_flags"
+]) # LIBCFS_IP6_SET_PREF
+
+#
 # LIBCFS_VMALLOC_2ARGS
 #
 # kernel v5.8-rc1~201^2~19
@@ -2484,6 +2505,9 @@ LIBCFS_HAVE_WAIT_BIT_HEADER
 LIBCFS_EXPORT_SAVE_STACK_TRACE_TSK
 # 5.7 - Export Check and Header Check
 LIBCFS_KALLSYMS_LOOKUP
+# 5.8
+LIBCFS_IP6_SET_PREF
+# 5.10
 LIBCFS_HAVE_CRYPTO_SHA2_HEADER
 # 5.12 - Header Check
 LIBCFS_HAVE_CIPHER_HEADER
