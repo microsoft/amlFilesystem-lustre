@@ -67,6 +67,10 @@ Requires:	libyaml-devel
 Requires:	zlib-devel
 # for netlink support
 Requires:	libnl3-devel
+Requires:   gcc
+Requires:   flex
+Requires:   bison
+Requires:   libmount-devel
 %if %{with servers}
 # If client package is installed when installing server, remove it since
 # the server package also includes the client.  This can be removed if/when
