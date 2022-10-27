@@ -519,6 +519,9 @@ debs: undef.h debs_common
 	if test "x@TESTS_FALSE@" = "x"; then \
 		export DEB_BUILD_PROFILES="$${DEB_BUILD_PROFILES} notests"; \
 	fi; \
+	if test "x@TESTS_FALSE@" = "x"; then \
+		export DEB_BUILD_PROFILES="$${DEB_BUILD_PROFILES} notests"; \
+	fi; \
 	export KERNEL_OBJ="$(LINUX_OBJ)"; \
 	export KERNEL_SRC="$(LINUX)"; \
 	echo "Enabled Build Profiles: $${DEB_BUILD_PROFILES}"; \
@@ -585,6 +588,7 @@ debs: undef.h debs_common
 	   ../lustre_$${VER}.tar.gz ../lustre-*-modules-$${KVERS}_$${VER}_*.deb \
 	   ../lustre-*-dbgsym_$${VER}_*.ddeb ../lustre_$${VER}_*.buildinfo \
 	   ../lustre-*-dbgsym_$${VER}_*.deb \
+	   ../lustre-*-dbgsym_$${VER}[-_]*.ddeb \
 	   debs/ 2> /dev/null || true
 
 dkms-debs: undef.h debs_common
