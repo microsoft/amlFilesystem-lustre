@@ -490,6 +490,9 @@ kdist_config: prep-deb-files patch-stamp
 	if echo "$${DEB_BUILD_PROFILES}" | grep -q "o2ib"; then \
 		export EXTRAFLAGS="$${EXTRAFLAGS} --with-o2ib=$${O2IB_SRC}"; \
 	fi; \
+	if echo "$${DEB_BUILD_PROFILES}" | grep -q "notests"; then \
+		export EXTRAFLAGS="$${EXTRAFLAGS} --disable-tests"; \
+	fi; \
 	if echo "$${DEB_BUILD_PROFILES}" | grep -qw "crypto"; then \
 		export EXTRAFLAGS="$${EXTRAFLAGS} --enable-crypto"; \
 	elif echo "$${DEB_BUILD_PROFILES}" | grep -qw "nocrypto"; then \
@@ -510,7 +513,6 @@ kdist_config: prep-deb-files patch-stamp
 		--disable-doc  \
 		--disable-iokit \
 		--disable-snmp \
-		--disable-tests \
 		--enable-quota \
 		--with-kmp-moddir=updates \
 		$${EXTRAFLAGS} \
