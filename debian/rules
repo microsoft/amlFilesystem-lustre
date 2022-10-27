@@ -348,9 +348,9 @@ binary-$(DEV_PKG): build-stamp
 	dh_builddeb -p $(DEV_PKG)
 
 binary-$(SOURCE_PKG): build-stamp
-	dh_testdir 
+	dh_testdir
 	dh_testroot
-	# Copy everything 
+	# Copy everything
 	dh_installdirs -p $(SOURCE_PKG) usr/src/modules/lustre/debian
 	rsync -av --exclude='debian/$(SOURCE_PKG)/*' \
 	      --link-dest=$(PWD) \
@@ -361,14 +361,14 @@ binary-$(SOURCE_PKG): build-stamp
 	sed -i -e 's/FULLCLEAN=full-clean/FULLCLEAN=/' debian/$(SOURCE_PKG)/usr/src/modules/lustre/debian/rules
 	# clean up dest
 	rm -rf debian/$(SOURCE_PKG)/usr/src/modules/lustre/debian/patched \
-	       debian/$(SOURCE_PKG)/usr/src/modules/lustre/debian/patches/* 
+	       debian/$(SOURCE_PKG)/usr/src/modules/lustre/debian/patches/*
 	$(MAKE) -C debian/$(SOURCE_PKG)/usr/src/modules/lustre -f debian/rules clean
 	# Create the module-source tarball.
 	cd debian/$(SOURCE_PKG)/usr/src && tar --exclude-vcs -jcf lustre-$${SRC_GIT_HASH}.tar.bz2 modules
 	rm -rf debian/$(SOURCE_PKG)/usr/src/modules
 	dh_install -p$(SOURCE_PKG)
 	dh_installchangelogs -p $(SOURCE_PKG) lustre/ChangeLog
-	dh_installdocs -p $(SOURCE_PKG) 
+	dh_installdocs -p $(SOURCE_PKG)
 	dh_link -p $(SOURCE_PKG) /usr/share/modass/packages/default.sh /usr/share/modass/overrides/lustre-source
 	dh_compress -p $(SOURCE_PKG)
 	dh_installdeb -p $(SOURCE_PKG)
@@ -440,7 +440,7 @@ binary-$(MODS_PKG): build-stamp
 # kdist* rules. It is responsible for cleaning up any changes that have
 # been made by the other kdist_commands (except for the .deb files created)
 
-kdist_clean: 
+kdist_clean:
 	# can't dh_clean here or we remove the build artifacts for the other packages
 	# still in progress
 	#dh_clean
@@ -459,7 +459,7 @@ kdist_clean:
 # # The kdist_configure target is called by make-kpkg modules_config and
 # # by kdist* rules by dependency. It should configure the module so it is
 # # ready for compilation (mostly useful for calling configure).
-# # prep-deb-files from module-assistant creates the neccessary debian/ 
+# # prep-deb-files from module-assistant creates the neccessary debian/
 kdist_config: prep-deb-files patch-stamp
 	#  Check build dependencies again, needs to be done since we just
 	# replaced the control file.
@@ -504,6 +504,9 @@ kdist_config: prep-deb-files patch-stamp
 			export EXTRAFLAGS="$${EXTRAFLAGS} --disable-$${option}"; \
 		fi; \
 	done; \
+	if echo "$${DEB_BUILD_PROFILES}" | grep -q "notests"; then \
+		export EXTRAFLAGS="$${EXTRAFLAGS} --disable-tests"; \
+	fi; \
 	if [ -f "$${CONFIG_CACHE_FILE}" ]; then \
 		export TMP_CACHE_FILE=$$(mktemp --tmpdir newconfig-XXXXXXXX.cache); \
 		sed -e "/ac_cv_env/d" \
@@ -519,7 +522,6 @@ kdist_config: prep-deb-files patch-stamp
 		--disable-doc  \
 		--disable-iokit \
 		--disable-snmp \
-		--disable-tests \
 		--enable-quota \
 		--with-kmp-moddir=updates \
 		$${EXTRAFLAGS} \
