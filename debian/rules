@@ -55,7 +55,7 @@ ARCH=$(shell dpkg --print-architecture)
 TOP_DIR:=$(shell pwd)
 
 # This is the Lustre version
-VERSION=$(shell sed -n -e '1s/.*(\(.*\)) .*/\1/p' debian/changelog)
+VERSION=$(VER)
 UPVERSION=$(shell echo $(VERSION) | sed -e 's/-[^-]*$$//')
 
 # KVER is set to LINUXRELEASE being by autoconf which is either
