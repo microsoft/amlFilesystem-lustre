@@ -305,6 +305,9 @@ debs: undef.h debs_common
 	if test "x@systemdsystemunitdir@" != "x"; then \
 		export DEB_BUILD_PROFILES="$${DEB_BUILD_PROFILES} systemd"; \
 	fi; \
+	if test "x@TESTS_FALSE@" = "x"; then \
+		export DEB_BUILD_PROFILES="$${DEB_BUILD_PROFILES} notests"; \
+	fi; \
 	export KERNEL_OBJ="$(LINUX_OBJ)"; \
 	export KERNEL_SRC="$(LINUX)"; \
 	echo "Enabled Build Profiles: $${DEB_BUILD_PROFILES}"; \
@@ -361,6 +364,7 @@ debs: undef.h debs_common
 	   ../lustre-*-utils_$${VER}_*.deb $${DEB_SERVER_PKG} \
 	   ../lustre_$${VER}.dsc ../lustre_$${VER}_*.changes \
 	   ../lustre_$${VER}.tar.gz ../lustre-*-modules-$${KVERS}_$${VER}_*.deb \
+	   ../lustre-*-dbgsym_$${VER}[-_]*.ddeb \
 	   debs/
 
 dkms-debs: undef.h debs_common
