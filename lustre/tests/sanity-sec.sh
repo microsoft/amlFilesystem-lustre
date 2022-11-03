@@ -5077,6 +5077,69 @@ test_60() {
 }
 run_test 60 "Subdirmount of encrypted dir"
 
+test_61() {
+	local testfile=$DIR/$tdir/$tfile
+	local readonly
+
+	readonly=$(do_facet mgs \
+			lctl get_param -n nodemap.default.readonly_mount)
+	[ -n "$readonly" ] ||
+		skip "Server does not have readonly_mount nodemap flag"
+
+	stack_trap cleanup_nodemap_after_enc_tests EXIT
+	umount_client $MOUNT || error "umount $MOUNT failed (1)"
+
+	# Activate nodemap, and mount rw.
+	# Should succeed as rw mount is not forbidden on default nodemap
+	# by default.
+	do_facet mgs $LCTL nodemap_activate 1
+	wait_nm_sync active
+	do_facet mgs $LCTL nodemap_modify --name default \
+		--property admin --value 1
+	do_facet mgs $LCTL nodemap_modify --name default \
+		--property trusted --value 1
+	wait_nm_sync default admin_nodemap
+	wait_nm_sync default trusted_nodemap
+	readonly=$(do_facet mgs \
+			lctl get_param -n nodemap.default.readonly_mount)
+	[ $readonly -eq 0 ] || error "wrong default value for readonly_mount"
+
+	mount_client $MOUNT ${MOUNT_OPTS},rw ||
+		error "mount '-o rw' failed with default"
+	wait_ssk
+	findmnt $MOUNT --output=options -n -f | grep -q "rw," ||
+		error "should be rw mount"
+	mkdir -p $DIR/$tdir || error "mkdir $DIR/$tdir failed"
+	echo a > $testfile || error "write $testfile failed"
+	umount_client $MOUNT || error "umount $MOUNT failed (2)"
+
+	# Now enforce read-only, and retry.
+	do_facet mgs $LCTL nodemap_modify --name default \
+		--property readonly_mount --value 1
+	wait_nm_sync default readonly_mount
+	mount_client $MOUNT ${MOUNT_OPTS} ||
+		error "mount failed"
+	findmnt $MOUNT --output=options -n -f | grep -q "ro," ||
+		error "mount should have been turned into ro"
+	cat $testfile || error "read $testfile failed (1)"
+	echo b > $testfile && error "write $testfile should fail (1)"
+	umount_client $MOUNT || error "umount $MOUNT failed (3)"
+	mount_client $MOUNT ${MOUNT_OPTS},rw ||
+		error "mount '-o rw' failed"
+	findmnt $MOUNT --output=options -n -f | grep -q "ro," ||
+		error "mount rw should have been turned into ro"
+	cat $testfile || error "read $testfile failed (2)"
+	echo b > $testfile && error "write $testfile should fail (2)"
+	umount_client $MOUNT || error "umount $MOUNT failed (4)"
+	mount_client $MOUNT ${MOUNT_OPTS},ro ||
+		error "mount '-o ro' failed"
+	wait_ssk
+	cat $testfile || error "read $testfile failed (3)"
+	echo b > $testfile && error "write $testfile should fail (3)"
+	umount_client $MOUNT || error "umount $MOUNT failed (5)"
+}
+run_test 61 "Nodemap enforces read-only mount"
+
 test_62() {
 	local testdir=$DIR/$tdir/mytestdir
 	local testfile=$DIR/$tdir/$tfile
@@ -5116,6 +5179,147 @@ test_62() {
 	setupall || error "remounting the filesystem failed"
 }
 run_test 62 "e2fsck with encrypted files"
+
+create_files() {
+	local path
+
+	for path in "${paths[@]}"; do
+		touch $path
+	done
+}
+
+build_fids() {
+	local path
+
+	for path in "${paths[@]}"; do
+		fids+=("$(lfs path2fid $path)")
+	done
+}
+
+check_fids() {
+	for fid in "${fids[@]}"; do
+		echo $fid
+		respath=$(lfs fid2path $MOUNT $fid)
+		echo -e "\t" $respath
+		ls -li $respath >/dev/null
+		[ $? -eq 0 ] || error "fid2path $fid failed"
+	done
+}
+
+test_63() {
+	declare -a fids
+	declare -a paths
+	local vaultdir1=$DIR/$tdir/vault1==dir
+	local vaultdir2=$DIR/$tdir/vault2==dir
+	local longfname1="longfilenamewitha=inthemiddletotestbehaviorregardingthedigestedform"
+	local longdname="longdirectorynamewitha=inthemiddletotestbehaviorregardingthedigestedform"
+	local longfname2="$longdname/${longfname1}2"
+
+	(( $MDS1_VERSION > $(version_code 2.15.53) )) ||
+		skip "Need MDS version at least 2.15.53"
+
+	$LCTL get_param mdc.*.import | grep -q client_encryption ||
+		skip "client encryption not supported"
+
+	mount.lustre --help |& grep -q "test_dummy_encryption:" ||
+		skip "need dummy encryption support"
+
+	which fscrypt || skip "This test needs fscrypt userspace tool"
+
+	yes | fscrypt setup --force --verbose ||
+		echo "fscrypt global setup already done"
+	sed -i 's/\(.*\)policy_version\(.*\):\(.*\)\"[0-9]*\"\(.*\)/\1policy_version\2:\3"2"\4/' \
+		/etc/fscrypt.conf
+	yes | fscrypt setup --verbose $MOUNT ||
+		echo "fscrypt setup $MOUNT already done"
+
+	# enable_filename_encryption tunable only available for client
+	# built against embedded llcrypt. If client is built against in-kernel
+	# fscrypt, file names are always encrypted.
+	$LCTL get_param mdc.*.connect_flags | grep -q name_encryption &&
+	  nameenc=$(lctl get_param -n llite.*.enable_filename_encryption |
+			head -n1)
+	if [ -n "$nameenc" ]; then
+		do_facet mgs $LCTL set_param -P \
+			llite.*.enable_filename_encryption=1
+		[ $? -eq 0 ] ||
+			error "set_param -P \
+				llite.*.enable_filename_encryption=1 failed"
+
+		wait_update_facet --verbose client \
+			"$LCTL get_param -n llite.*.enable_filename_encryption \
+			| head -n1" 1 30 ||
+			error "enable_filename_encryption not set on client"
+	fi
+
+	mkdir -p $vaultdir1
+	echo -e 'mypass\nmypass' | fscrypt encrypt --verbose \
+		--source=custom_passphrase --name=protector_63_1 $vaultdir1 ||
+		error "fscrypt encrypt $vaultdir1 failed"
+
+	mkdir $vaultdir1/dirA
+	mkdir $vaultdir1/$longdname
+	paths=("$vaultdir1/fileA")
+	paths+=("$vaultdir1/dirA/fileB")
+	paths+=("$vaultdir1/$longfname1")
+	paths+=("$vaultdir1/$longfname2")
+	create_files
+
+	paths+=("$vaultdir1/dirA")
+	paths+=("$vaultdir1/$longdname")
+
+	build_fids
+	check_fids
+
+	fscrypt lock --verbose $vaultdir1 ||
+		error "fscrypt lock $vaultdir1 failed (1)"
+
+	check_fids
+
+	if [ -z "$nameenc" ]; then
+		echo "Rest of the test requires disabling name encryption"
+		exit 0
+	fi
+
+	# disable name encryption
+	do_facet mgs $LCTL set_param -P llite.*.enable_filename_encryption=0
+	[ $? -eq 0 ] ||
+		error "set_param -P llite.*.enable_filename_encryption=0 failed"
+
+	wait_update_facet --verbose client \
+		"$LCTL get_param -n llite.*.enable_filename_encryption \
+		| head -n1" 0 30 ||
+		error "enable_filename_encryption not set back to default"
+
+	mkdir -p $vaultdir2
+	echo -e 'mypass\nmypass' | fscrypt encrypt --verbose \
+		--source=custom_passphrase --name=protector_63_2 $vaultdir2 ||
+		error "fscrypt encrypt $vaultdir2 failed"
+
+	mkdir $vaultdir2/dirA
+	mkdir $vaultdir2/$longdname
+	paths=()
+	fids=()
+	paths=("$vaultdir2/fileA")
+	paths+=("$vaultdir2/dirA/fileB")
+	paths+=("$vaultdir2/$longfname1")
+	paths+=("$vaultdir2/$longfname2")
+	create_files
+
+	paths+=("$vaultdir2/dirA")
+	paths+=("$vaultdir2/$longdname")
+
+	build_fids
+	check_fids
+
+	fscrypt lock --verbose $vaultdir2 ||
+		error "fscrypt lock $vaultdir2 failed (2)"
+
+	check_fids
+
+	rm -rf $MOUNT/.fscrypt
+}
+run_test 63 "fid2path with encrypted files"
 
 log "cleanup: ======================================================"
 
