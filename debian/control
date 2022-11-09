@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Brian J. Murrell <brian.murrell@intel.com>
 Uploaders: Brian J. Murrell <brian.murrell@intel.com>
 Standards-Version: 3.8.3
-Build-Depends: module-assistant, libreadline-dev, debhelper (>= 11), dpatch, automake (>=1.7) | automake1.7 | automake1.8 | automake1.9, pkg-config, libtool, libyaml-dev, libnl-genl-3-dev, libselinux-dev, libsnmp-dev, mpi-default-dev, bzip2, quilt, linux-headers-generic | linux-headers-amd64 | linux-headers-arm64 | linux-headers-azure, rsync, libssl-dev, libpython3-dev, swig, libmount-dev, ed
+Build-Depends: module-assistant, libreadline-dev, debhelper (>= 11), dpatch, automake (>=1.7) | automake1.7 | automake1.8 | automake1.9, pkg-config, libtool, libyaml-dev, libnl-genl-3-dev, libselinux-dev, libsnmp-dev, mpi-default-dev, bzip2, quilt, linux-headers-generic | linux-headers-amd64 | linux-headers-arm64, rsync, libssl-dev, libpython3-dev, swig, libmount-dev, ed
 Homepage: https://wiki.whamcloud.com/
 Vcs-Git: git://git.whamcloud.com/fs/lustre-release.git
 
@@ -108,7 +108,7 @@ Package: lustre-client-modules-dkms
 Section: admin
 Architecture: i386 armhf powerpc ppc64el amd64 ia64
 Priority: optional
-Depends: autoconf, automake, bison, build-essential, dkms, flex, gcc, libaio-dev, libkeyutils-dev, libkrb5-dev, libtool, libselinux-dev, libssl-dev, libyaml-dev, linux-base, linux-image | linux-image-amd64 | linux-image-arm64 | linux-image-azure, linux-headers-generic | linux-headers-amd64 | linux-headers-azure, module-assistant, pkg-config, python3-distutils | python3-distutils-extra, python3-dev, libnl-genl-3-dev, zlib1g-dev, libmount1, libmount-dev, libkeyutils1, libkeyutils-dev
+Depends: autoconf, automake, bison, build-essential, dkms, flex, gcc, libaio-dev, libkeyutils-dev, libkrb5-dev, libtool, libselinux-dev, libssl-dev, libyaml-dev, linux-base, linux-image | linux-image-amd64 | linux-image-arm64 | linux-image-azure, linux-headers-generic | linux-headers-amd64, module-assistant, pkg-config, python3-distutils | python3-distutils-extra, python3-dev, libnl-genl-3-dev, zlib1g-dev, libmount1, libmount-dev, libkeyutils1, libkeyutils-dev
 Provides: lustre-client-modules
 Description: Lustre Linux kernel module (DKMS)
  This package contains the loadable kernel modules for the patchless client
