@@ -2183,12 +2183,6 @@ AC_DEFUN([LC_IOP_GENERIC_READLINK], [
 	])
 ]) # LC_IOP_GENERIC_READLINK
 
-#
-# LC_HAVE_VM_FAULT_ADDRESS
-#
-# Kernel version 4.10 commit 1a29d85eb0f19b7d8271923d8917d7b4f5540b3e
-# removed virtual_address field. Need to use address field instead
-#
 AC_DEFUN([LC_SRC_HAVE_VM_FAULT_ADDRESS], [
 	LB2_LINUX_TEST_SRC([vm_fault_address], [
 		#include <linux/mm.h>
@@ -2197,6 +2191,13 @@ AC_DEFUN([LC_SRC_HAVE_VM_FAULT_ADDRESS], [
 		(void)vaddr;
 	])
 ])
+
+#
+# LC_HAVE_VM_FAULT_ADDRESS
+#
+# Kernel version 4.10 commit 1a29d85eb0f19b7d8271923d8917d7b4f5540b3e
+# removed virtual_address field. Need to use address field instead
+#
 AC_DEFUN([LC_HAVE_VM_FAULT_ADDRESS], [
 	AC_MSG_CHECKING([if 'struct vm_fault' replaced virtual_address with address field])
 	LB2_LINUX_TEST_RESULT([vm_fault_address], [
@@ -2205,12 +2206,6 @@ AC_DEFUN([LC_HAVE_VM_FAULT_ADDRESS], [
 	])
 ]) # LC_HAVE_VM_FAULT_ADDRESS
 
-#
-# LC_INODEOPS_ENHANCED_GETATTR
-#
-# Kernel version 4.11 commit a528d35e8bfcc521d7cb70aaf03e1bd296c8493f
-# expanded getattr to be able to get more stat information.
-#
 AC_DEFUN([LC_SRC_INODEOPS_ENHANCED_GETATTR], [
 	LB2_LINUX_TEST_SRC([getattr_path], [
 		#include <linux/fs.h>
@@ -2220,6 +2215,12 @@ AC_DEFUN([LC_SRC_INODEOPS_ENHANCED_GETATTR], [
 		((struct inode_operations *)1)->getattr(&path, NULL, 0, 0);
 	])
 ])
+
+# LC_INODEOPS_ENHANCED_GETATTR
+#
+# Kernel version 4.11 commit a528d35e8bfcc521d7cb70aaf03e1bd296c8493f
+# expanded getattr to be able to get more stat information.
+#
 AC_DEFUN([LC_INODEOPS_ENHANCED_GETATTR], [
 	AC_MSG_CHECKING([if 'inode_operations' getattr member can gather advance stats])
 	LB2_LINUX_TEST_RESULT([getattr_path], [
@@ -2915,6 +2916,35 @@ AC_DEFUN([LC_FSCRYPT_IS_NOKEY_NAME], [
 			[fscrypt_is_nokey_name() exists])
 	])
 ]) # LC_FSCRYPT_IS_NOKEY_NAME
+
+#
+# LC_BIO_SET_DEV
+#
+# Linux: v5.11-rc5-9-g309dca309fc3
+#   block: store a block_device pointer in struct bio
+# created bio_set_dev macro
+# Linux: v5.15-rc6-127-gcf6d6238cdd3
+#   block: turn macro helpers into inline functions
+# created inline function(s).
+#
+# Only provide a bio_set_dev it is is not proveded by the kernel
+#
+AC_DEFUN([LC_BIO_SET_DEV], [
+tmp_flags="$EXTRA_KCFLAGS"
+EXTRA_KCFLAGS="-Werror"
+	LB_CHECK_COMPILE([if 'bio_set_dev' is available],
+	[bio_set_dev], [
+		#include <linux/bio.h>
+	],[
+		struct bio *bio = NULL;
+		struct block_device *bdev = NULL;
+
+		bio_set_dev(bio, bdev);
+	],[
+		AC_DEFINE(HAVE_BIO_SET_DEV, 1, ['bio_set_dev' is available])
+	])
+EXTRA_KCFLAGS="$tmp_flags"
+]) # LC_BIO_SET_DEV
 
 #
 # LC_HAVE_USER_NAMESPACE_ARG
@@ -3852,6 +3882,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 
 	# 5.10
 	LC_FSCRYPT_IS_NOKEY_NAME
+	LC_HAVE_ITER_FILE_SPLICE_WRITE
+
+	# 5.11
+	LC_BIO_SET_DEV
 
 	# 5.12
 	LC_HAVE_USER_NAMESPACE_ARG
