@@ -2216,6 +2216,28 @@ AC_DEFUN([LIBCFS_PDE_DATA_EXISTS],[
 	])
 ]) # LIBCFS_PDE_DATA_EXISTS
 
+#
+# LIBCFS_BIO_ALLOC_WITH_BDEV
+#
+# Linux commit v5.17-rc2-21-g07888c665b40
+#   block: pass a block_device and opf to bio_alloc
+#
+AC_DEFUN([LIBCFS_BIO_ALLOC_WITH_BDEV],[
+LB_CHECK_COMPILE([does bio_alloc() takes a struct block_device],
+bio_alloc_with_bdev, [
+		#include <linux/bio.h>
+	],[
+		struct block_device *bdev = NULL;
+		unsigned short nr_vecs = 1;
+		gfp_t gfp = GFP_KERNEL;
+		struct bio *bio = bio_alloc(bdev, nr_vecs, REQ_OP_WRITE, gfp);
+		(void) bio;
+	],[
+		AC_DEFINE(HAVE_BIO_ALLOC_WITH_BDEV, 1,
+			[bio_alloc() takes a struct block_device])
+	])
+]) # LIBCFS_BIO_ALLOC_WITH_BDEV
+
 dnl #
 dnl # Generate and compile all of the kernel API test cases to determine
 dnl # which interfaces are available.  By invoking the kernel build system
@@ -2532,6 +2554,8 @@ LIBCFS_LINUX_STDARG_HEADER
 LIBCFS_HAVE_PANIC_NOTIFIER_HEADER
 # 5.15 - Header Check
 LIBCFS_LINUX_BLK_INTEGRITY_HEADER
+# 5.17
+LIBCFS_BIO_ALLOC_WITH_BDEV
 ]) # LIBCFS_PROG_LINUX
 
 #
