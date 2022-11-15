@@ -1511,6 +1511,15 @@ bool bio_integrity_enabled(struct bio *bio);
 # define bio_get_queue(bio)	(bio_get_disk(bio)->queue)
 #endif
 
+#ifdef HAVE_EXT4_JOURNAL_GET_WRITE_ACCESS_4ARGS
+# define osd_ldiskfs_journal_get_write_access(handle, sb, bh, flags) \
+	 ldiskfs_journal_get_write_access((handle), (sb), (bh), (flags))
+#else
+# define LDISKFS_JTR_NONE	0
+# define osd_ldiskfs_journal_get_write_access(handle, sb, bh, flags) \
+	 ldiskfs_journal_get_write_access((handle), (bh))
+#endif /* HAVE_EXT4_JOURNAL_GET_WRITE_ACCESS_4ARGS */
+
 #ifdef HAVE_EXT4_INC_DEC_COUNT_2ARGS
 #define osd_ldiskfs_inc_count(h, inode)		ldiskfs_inc_count((h), (inode))
 #define osd_ldiskfs_dec_count(h, inode)		ldiskfs_dec_count((h), (inode))
@@ -1639,7 +1648,30 @@ struct osd_bio_private {
 int osd_get_integrity_profile(struct osd_device *osd,
 			      integrity_gen_fn **generate_fn,
 			      integrity_vrfy_fn **verify_fn);
-#endif /* HAVE_BIO_INTEGRITY_PREP_FN */
+#else
+#define integrity_gen_fn void
+#define integrity_vrfy_fn int
+static inline int osd_get_integrity_profile(struct osd_device *osd,
+					    integrity_gen_fn **generate_fn,
+					    integrity_vrfy_fn **verify_fn)
+{
+	return 0;
+}
+
+static inline int bio_integrity_prep_fn(struct bio *bio,
+					 integrity_gen_fn *generate_fn,
+					 integrity_vrfy_fn *verify_fn)
+{
+#ifdef HAVE_BIO_INTEGRITY_PREP_FN_RETURNS_BOOL
+	if (bio_integrity_prep(bio))
+		return 0;
+	else
+		return -EIO;
+#else
+	return bio_integrity_prep(bio);
+#endif
+}
+#endif /* HAVE_EXT4_INC_DEC_COUNT_2ARGS */
 
 #ifdef HAVE_BIO_BI_PHYS_SEGMENTS
 #define osd_bio_nr_segs(bio)		((bio)->bi_phys_segments)
