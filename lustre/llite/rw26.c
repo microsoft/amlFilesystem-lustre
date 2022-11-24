@@ -258,8 +258,15 @@ static ssize_t ll_get_user_pages(int rw, struct iov_iter *iter,
 	/*
 	 * iov_iter_get_pages_alloc() is introduced in 3.16 similar
 	 * to HAVE_DIO_ITER.
+	 * Linux commit v5.19-10313-geba2d3d79829
+	 *   get rid of non-advancing variants
+	 * iov_iter_get_pages_alloc() -> iov_iter_get_pages_alloc2()
 	 */
+#ifdef HAVE_IOV_ITER_GET_PAGES_ALLOC2
+	result = iov_iter_get_pages_alloc2(iter, pages, maxsize, &start);
+#else
 	result = iov_iter_get_pages_alloc(iter, pages, maxsize, &start);
+#endif
 	if (result > 0)
 		*npages = DIV_ROUND_UP(result + start, PAGE_SIZE);
 
@@ -990,7 +997,19 @@ out:
 	RETURN(result >= 0 ? copied : result);
 }
 
-#ifdef CONFIG_MIGRATION
+#ifdef HAVE_AOPS_MIGRATE_FOLIO
+
+/*
+ * Linux commit v5.19-rc3-392-g5490da4f06d1
+ *  fs: Add aops->migrate_folio
+ */
+static int ll_migrate_folio(struct address_space *mapping, struct folio *dst,
+			    struct folio *src, enum migrate_mode mode)
+{
+        /* Always fail page migration until we have a proper implementation */
+	return -EIO;
+}
+#elif defined(CONFIG_MIGRATION)
 static int ll_migratepage(struct address_space *mapping,
 			  struct page *newpage, struct page *page,
 			  enum migrate_mode mode)
@@ -1026,7 +1045,9 @@ const struct address_space_operations ll_aops = {
 	.writepages		= ll_writepages,
 	.write_begin		= ll_write_begin,
 	.write_end		= ll_write_end,
-#ifdef CONFIG_MIGRATION
+#ifdef HAVE_AOPS_MIGRATE_FOLIO
+	.migrate_folio		= ll_migrate_folio,
+#elif defined(CONFIG_MIGRATION)
 	.migratepage		= ll_migratepage,
 #endif
 };

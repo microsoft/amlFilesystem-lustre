@@ -475,12 +475,20 @@ static inline int ll_vfs_getxattr(struct dentry *dentry, struct inode *inode,
 #endif
 }
 
+/*
+ * v5.19-rc5-17-g0c5fd887d2bb
+ *   acl: move idmapped mount fixup into vfs_{g,s}etxattr()
+ *
+ * v6.0-rc3-6-g6344e66970c6
+ *   xattr: constify value argument in vfs_setxattr()
+ */
 static inline int ll_vfs_setxattr(struct dentry *dentry, struct inode *inode,
 				  const char *name,
 				  const void *value, size_t size, int flags)
 {
 #ifdef HAVE_USER_NAMESPACE_ARG
-	return vfs_setxattr(&init_user_ns, dentry, name, value, size, flags);
+	return vfs_setxattr(&init_user_ns, dentry, name,
+			    VFS_SETXATTR_VALUE(value), size, flags);
 #elif defined(HAVE_VFS_SETXATTR)
 	return __vfs_setxattr(dentry, inode, name, value, size, flags);
 #else
@@ -529,7 +537,9 @@ static inline bool is_root_inode(struct inode *inode)
 }
 #endif
 
-#ifndef HAVE_REGISTER_SHRINKER_RET
+#ifdef HAVE_REGISTER_SHRINKER_FORMAT_NAMED
+#define register_shrinker(_s) register_shrinker((_s), "%ps", (_s))
+#elif !defined(HAVE_REGISTER_SHRINKER_RET)
 #define register_shrinker(_s) (register_shrinker(_s), 0)
 #endif
 
