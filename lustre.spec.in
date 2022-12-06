@@ -688,6 +688,7 @@ This survey tests LNet performance between a group of clients and servers.
 %endif
 %prep
 %setup -qn lustre-%{version}
+sh ./autogen.sh
 ln lustre/ChangeLog ChangeLog-lustre-%{version}
 ln lnet/ChangeLog ChangeLog-lnet-%{version}
 
