@@ -449,6 +449,7 @@ clients in order to run
 %endif
 %prep
 %setup -qn lustre-%{version}
+sh ./autogen.sh
 ln lustre/ChangeLog ChangeLog-lustre
 ln lnet/ChangeLog ChangeLog-lnet
 
