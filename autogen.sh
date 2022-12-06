@@ -10,8 +10,9 @@ done
 
 # avoid the "modules.order: No such file or directory" failure
 touch modules.order
+# Force libtoolize to reinit
+libtoolize -q --force
 
-libtoolize -q
 aclocal -I $pw/config $ACLOCAL_FLAGS
 autoheader
 automake -a -c
