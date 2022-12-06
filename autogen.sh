@@ -8,7 +8,7 @@ for dir in libcfs lnet lustre snmp ; do
 	ACLOCAL_FLAGS="$ACLOCAL_FLAGS -I $pw/$dir/autoconf"
 done
 
-libtoolize -q
+libtoolize -q --force
 aclocal -I $pw/config $ACLOCAL_FLAGS
 autoheader
 automake -a -c
