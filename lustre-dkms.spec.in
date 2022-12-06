@@ -124,6 +124,7 @@ the repository with other debuginfo rpms.
 
 %prep
 %setup -q -n @PACKAGE@-%{version}
+sh ./autogen.sh
 
 %build
 %{mkconf} -n %{module} -v %{version} -f dkms.conf %{mkconf_options}
