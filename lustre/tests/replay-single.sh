@@ -3557,6 +3557,7 @@ test_100c() {
 	replay_barrier mds2
 	$LFS mkdir -i1 -c2 $striped_dir
 
+	stack_trap fail_abort_cleanup RETURN
 	fail_abort mds2 abort_recov_mdt
 
 	createmany -o $striped_dir/f-%d 20 &&
@@ -3564,13 +3565,10 @@ test_100c() {
 
 	fail mds2
 
-	# $striped_dir creation partly fails due to abort_recov_mdt,
-	# but at least this directory should be able to be deleted
-	#$LFS rm_entry $striped_dir
-	rm -rf $DIR/$tdir/* || true
-	find $DIR/$tdir -depth | while read D; do
-		rmdir "$D" || $LFS rm_entry "$D" || error "rm $D failed"
-	done
+	# LU-16159 abort_recovery will cancel update logs, the second recovery
+	# won't replay $striped_dir creation
+	(( $MDS1_VERSION >= $(version_code 2.15.7) )) ||
+		striped_dir_check_100 || error "striped dir check failed"
 }
 run_test 100c "DNE: create striped dir, abort_recov_mdt mds2"
 
@@ -3599,6 +3597,7 @@ test_100d() {
 	count=$(do_facet $mdt "$LCTL --device $devname llog_print update_log |
 		grep -c index")
 	(( count > 0 )) || error "no update logs found"
+	stack_trap fail_abort_cleanup RETURN
 	fail_abort $mdt || error "fail_abort $mdt failed"
 	wait_update_facet $mdt "$LCTL --device $devname llog_print update_log |
 		grep -c index" 0 60 || error "update logs not canceled"
@@ -4792,6 +4791,7 @@ test_120() {
 		}
 	done
 
+	stack_trap fail_abort_cleanup RETURN
 	fail_abort mds1
 
 	for ((i = 0; i < 20; i++)); do
@@ -5070,10 +5070,6 @@ test_202() {
 	(( $before == $after )) || error "layout gen changed: $before -> $after"
 }
 run_test 202 "pfl replay should recovery layout generation"
-
-# LU-16159 abort_recovery may cause directory unlink fail, now that LFSCK can't
-# fix all the inconsistencies, formatall so it won't fail in cleanup
-(( $MDS1_VERSION >= $(version_code 2.15.7) )) && formatall
 
 complete $SECONDS
 check_and_cleanup_lustre
