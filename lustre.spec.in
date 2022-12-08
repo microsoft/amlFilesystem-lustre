@@ -190,6 +190,9 @@ Source4: kmp-lustre-osd-ldiskfs.files
 Source5: kmp-lustre-osd-zfs.preamble
 Source6: kmp-lustre-osd-zfs.files
 Source7: kmp-lustre-tests.files
+%if %{defined source_rpm}
+Source RPM: %{source_rpm}
+%endif
 URL: https://wiki.whamcloud.com/
 BuildRoot: %{_tmppath}/lustre-%{version}-root
 %if %{with lustre_modules}
