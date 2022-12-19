@@ -1648,30 +1648,7 @@ struct osd_bio_private {
 int osd_get_integrity_profile(struct osd_device *osd,
 			      integrity_gen_fn **generate_fn,
 			      integrity_vrfy_fn **verify_fn);
-#else
-#define integrity_gen_fn void
-#define integrity_vrfy_fn int
-static inline int osd_get_integrity_profile(struct osd_device *osd,
-					    integrity_gen_fn **generate_fn,
-					    integrity_vrfy_fn **verify_fn)
-{
-	return 0;
-}
-
-static inline int bio_integrity_prep_fn(struct bio *bio,
-					 integrity_gen_fn *generate_fn,
-					 integrity_vrfy_fn *verify_fn)
-{
-#ifdef HAVE_BIO_INTEGRITY_PREP_FN_RETURNS_BOOL
-	if (bio_integrity_prep(bio))
-		return 0;
-	else
-		return -EIO;
-#else
-	return bio_integrity_prep(bio);
-#endif
-}
-#endif /* HAVE_EXT4_INC_DEC_COUNT_2ARGS */
+#endif /* HAVE_BIO_INTEGRITY_PREP_FN */
 
 #ifdef HAVE_BIO_BI_PHYS_SEGMENTS
 #define osd_bio_nr_segs(bio)		((bio)->bi_phys_segments)
