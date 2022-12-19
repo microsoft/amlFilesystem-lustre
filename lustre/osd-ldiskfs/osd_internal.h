@@ -101,7 +101,7 @@ extern struct kmem_cache *dynlock_cachep;
 #define OSD_DEFAULT_EXTENT_BYTES	(1U << 20)
 
 /* check if ldiskfs support project quota */
-#ifndef LDISKFS_IOC_FSSETXATTR
+#if LDISKFS_MAXQUOTAS < 3
 #undef HAVE_PROJECT_QUOTA
 #endif
 
@@ -249,14 +249,18 @@ struct osd_obj_orphan {
 };
 
 enum osd_t10_type {
-	OSD_T10_TYPE_UNKNOWN	= 0,
-	OSD_T10_TYPE1		= 0x1,
-	OSD_T10_TYPE3		= 0x2,
-	OSD_T10_TYPE_CRC	= 0x4,
+	OSD_T10_TYPE_UNKNOWN	= 0x00,
+	OSD_T10_TYPE1		= 0x01,
+	OSD_T10_TYPE2		= 0x02,
+	OSD_T10_TYPE3		= 0x04,
+	OSD_T10_TYPE_CRC	= 0x08,
+	OSD_T10_TYPE_IP		= 0x10,
 	OSD_T10_TYPE1_CRC	= OSD_T10_TYPE1 | OSD_T10_TYPE_CRC,
+	OSD_T10_TYPE2_CRC	= OSD_T10_TYPE2 | OSD_T10_TYPE_CRC,
 	OSD_T10_TYPE3_CRC	= OSD_T10_TYPE3 | OSD_T10_TYPE_CRC,
-	OSD_T10_TYPE1_IP	= OSD_T10_TYPE1,
-	OSD_T10_TYPE3_IP	= OSD_T10_TYPE3,
+	OSD_T10_TYPE1_IP	= OSD_T10_TYPE1 | OSD_T10_TYPE_IP,
+	OSD_T10_TYPE2_IP	= OSD_T10_TYPE2 | OSD_T10_TYPE_IP,
+	OSD_T10_TYPE3_IP	= OSD_T10_TYPE3 | OSD_T10_TYPE_IP,
 };
 
 /*
@@ -861,10 +865,10 @@ void osd_scrub_stop(struct osd_device *dev);
 int osd_scrub_setup(const struct lu_env *env, struct osd_device *dev,
 		    bool restored);
 void osd_scrub_cleanup(const struct lu_env *env, struct osd_device *dev);
-int osd_oii_insert(struct osd_device *dev, const struct lu_fid *fid,
+int osd_scrub_oi_insert(struct osd_device *dev, const struct lu_fid *fid,
 		   struct osd_inode_id *id, int insert);
-int osd_oii_lookup(struct osd_device *dev, const struct lu_fid *fid,
-		   struct osd_inode_id *id);
+void osd_scrub_oi_resurrect(struct lustre_scrub *scrub,
+			    const struct lu_fid *fid);
 void osd_scrub_dump(struct seq_file *m, struct osd_device *dev);
 
 struct dentry *osd_lookup_one_len_unlocked(struct osd_device *dev,
@@ -1498,10 +1502,22 @@ bool bio_integrity_enabled(struct bio *bio);
 # define bio_get_dev(bio)	((bio)->bi_bdev)
 # define bio_get_disk(bio)	(bio_get_dev(bio)->bd_disk)
 # define bio_get_queue(bio)	bdev_get_queue(bio_get_dev(bio))
-# define bio_set_dev(bio, bdev) (bio_get_dev(bio) = (bdev))
+
+# ifndef HAVE_BIO_SET_DEV
+#  define bio_set_dev(bio, bdev) (bio_get_dev(bio) = (bdev))
+# endif
 #else
 # define bio_get_disk(bio)	((bio)->bi_disk)
 # define bio_get_queue(bio)	(bio_get_disk(bio)->queue)
+#endif
+
+#ifdef HAVE_EXT4_JOURNAL_GET_WRITE_ACCESS_4ARGS
+# define osd_ldiskfs_journal_get_write_access(handle, sb, bh, flags) \
+	 ldiskfs_journal_get_write_access((handle), (sb), (bh), (flags))
+#else
+# define LDISKFS_JTR_NONE	0
+# define osd_ldiskfs_journal_get_write_access(handle, sb, bh, flags) \
+	 ldiskfs_journal_get_write_access((handle), (bh))
 #endif
 
 #ifdef HAVE_EXT4_INC_DEC_COUNT_2ARGS
@@ -1625,33 +1641,14 @@ struct osd_bio_private {
 };
 
 #ifdef HAVE_BIO_INTEGRITY_PREP_FN
+# ifdef HAVE_BLK_INTEGRITY_ITER
+#  define integrity_gen_fn integrity_processing_fn
+#  define integrity_vrfy_fn integrity_processing_fn
+# endif
 int osd_get_integrity_profile(struct osd_device *osd,
 			      integrity_gen_fn **generate_fn,
 			      integrity_vrfy_fn **verify_fn);
-#else
-#define integrity_gen_fn void
-#define integrity_vrfy_fn int
-static inline int osd_get_integrity_profile(struct osd_device *osd,
-					    integrity_gen_fn **generate_fn,
-					    integrity_vrfy_fn **verify_fn)
-{
-	return 0;
-}
-
-static inline int bio_integrity_prep_fn(struct bio *bio,
-					 integrity_gen_fn *generate_fn,
-					 integrity_vrfy_fn *verify_fn)
-{
-#ifdef HAVE_BIO_INTEGRITY_PREP_FN_RETURNS_BOOL
-	if (bio_integrity_prep(bio))
-		return 0;
-	else
-		return -EIO;
-#else
-	return bio_integrity_prep(bio);
-#endif
-}
-#endif
+#endif /* HAVE_EXT4_INC_DEC_COUNT_2ARGS */
 
 #ifdef HAVE_BIO_BI_PHYS_SEGMENTS
 #define osd_bio_nr_segs(bio)		((bio)->bi_phys_segments)
