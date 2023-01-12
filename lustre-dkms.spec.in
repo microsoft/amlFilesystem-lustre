@@ -34,7 +34,7 @@
 #for Suse / Ubuntu
 %else
 	%global kmod_name %{lustre_name}-kmp
-	%define mkconf_options "-k updates"
+	%define mkconf_options -k updates
 %endif
 
 %define buildid 1
@@ -124,6 +124,7 @@ the repository with other debuginfo rpms.
 
 %prep
 %setup -q -n @PACKAGE@-%{version}
+sh ./autogen.sh
 
 %build
 %{mkconf} -n %{module} -v %{version} -f dkms.conf %{mkconf_options}
