@@ -786,6 +786,9 @@ AC_DEFUN([LC_SRC_VFS_RENAME_5ARGS], [
 		#include <linux/fs.h>
 	],[
 		vfs_rename(NULL, NULL, NULL, NULL, NULL);
+	], [
+		AC_DEFINE(HAVE_VFS_RENAME_5ARGS, 1,
+			[kernel has vfs_rename with 5 args])
 	])
 ])
 AC_DEFUN([LC_VFS_RENAME_5ARGS], [
@@ -2177,18 +2180,21 @@ AC_DEFUN([LC_POSIX_ACL_UPDATE_MODE], [
 # mm: don't cap request size based on read-ahead setting
 # This patch introduces a bdi hint, io_pages.
 #
-AC_DEFUN([LC_HAVE_BDI_IO_PAGES], [
-LB_CHECK_COMPILE([if 'struct backing_dev_info' has 'io_pages' field],
-bdi_has_io_pages, [
-	#include <linux/backing-dev.h>
-],[
-	struct backing_dev_info info;
+AC_DEFUN([LC_SRC_HAVE_BDI_IO_PAGES], [
+	LB2_LINUX_TEST_SRC([bdi_has_io_pages], [
+		#include <linux/backing-dev.h>
+	],[
+		struct backing_dev_info info;
 
-	info.io_pages = 0;
-],[
-	AC_DEFINE(HAVE_BDI_IO_PAGES, 1,
-		[backing_dev_info has io_pages])
+		info.io_pages = 0;
+	])
 ])
+AC_DEFUN([LC_HAVE_BDI_IO_PAGES], [
+	AC_MSG_CHECKING([if 'struct backing_dev_info' has 'io_pages' field])
+	LB2_LINUX_TEST_RESULT([bdi_has_io_pages], [
+		AC_DEFINE(HAVE_BDI_IO_PAGES, 1,
+			[backing_dev_info has io_pages])
+	])
 ]) # LC_HAVE_BDI_IO_PAGES
 
 #
@@ -2228,6 +2234,15 @@ AC_DEFUN([LC_SRC_HAVE_VM_FAULT_ADDRESS], [
 # Kernel version 4.10 commit 1a29d85eb0f19b7d8271923d8917d7b4f5540b3e
 # removed virtual_address field. Need to use address field instead
 #
+AC_DEFUN([LC_SRC_HAVE_VM_FAULT_ADDRESS], [
+	LB2_LINUX_TEST_SRC([vm_fault_address], [
+		#include <linux/mm.h>
+	],[
+		struct vm_fault vmf = { 0 };
+		unsigned long addr = (unsigned long)vmf.address;
+		(void)addr;
+	])
+])
 AC_DEFUN([LC_HAVE_VM_FAULT_ADDRESS], [
 	AC_MSG_CHECKING([if 'struct vm_fault' replaced virtual_address with address field])
 	LB2_LINUX_TEST_RESULT([vm_fault_address], [
@@ -2251,6 +2266,15 @@ AC_DEFUN([LC_SRC_INODEOPS_ENHANCED_GETATTR], [
 # Kernel version 4.11 commit a528d35e8bfcc521d7cb70aaf03e1bd296c8493f
 # expanded getattr to be able to get more stat information.
 #
+AC_DEFUN([LC_SRC_INODEOPS_ENHANCED_GETATTR], [
+	LB2_LINUX_TEST_SRC([getattr_path], [
+		#include <linux/fs.h>
+	],[
+		struct path path;
+
+		((struct inode_operations *)1)->getattr(&path, NULL, 0, 0);
+	])
+])
 AC_DEFUN([LC_INODEOPS_ENHANCED_GETATTR], [
 	AC_MSG_CHECKING([if 'inode_operations' getattr member can gather advance stats])
 	LB2_LINUX_TEST_RESULT([getattr_path], [
@@ -3103,21 +3127,21 @@ EXTRA_KCFLAGS="$tmp_flags"
 #
 # Only provide a bio_set_dev it is is not proveded by the kernel
 #
-AC_DEFUN([LC_BIO_SET_DEV], [
-tmp_flags="$EXTRA_KCFLAGS"
-EXTRA_KCFLAGS="-Werror"
-	LB_CHECK_COMPILE([if 'bio_set_dev' is available],
-	[bio_set_dev], [
+AC_DEFUN([LC_SRC_BIO_SET_DEV], [
+	LB2_LINUX_TEST_SRC([bio_set_dev], [
 		#include <linux/bio.h>
 	],[
 		struct bio *bio = NULL;
 		struct block_device *bdev = NULL;
 
 		bio_set_dev(bio, bdev);
-	],[
+	],[-Werror])
+])
+AC_DEFUN([LC_BIO_SET_DEV], [
+	AC_MSG_CHECKING([if 'bio_set_dev' is available])
+	LB2_LINUX_TEST_RESULT([bio_set_dev], [
 		AC_DEFINE(HAVE_BIO_SET_DEV, 1, ['bio_set_dev' is available])
 	])
-EXTRA_KCFLAGS="$tmp_flags"
 ]) # LC_BIO_SET_DEV
 
 #
@@ -3794,14 +3818,14 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_DIR_CONTEXT
 	LC_SRC_D_COMPARE_5ARGS
 	LC_SRC_HAVE_DCOUNT
-	LC_SRC_HAVE_DENTRY_D_U_D_ALIAS_LIST
-	LC_SRC_HAVE_DENTRY_D_U_D_ALIAS_HLIST
-	LC_SRC_HAVE_DENTRY_D_CHILD
 	LC_SRC_PID_NS_FOR_CHILDREN
 
 	# 3.12
 	LC_SRC_OLDSIZE_TRUNCATE_PAGECACHE
 	LC_SRC_PTR_ERR_OR_ZERO_MISSING
+	LC_SRC_HAVE_DENTRY_D_U_D_ALIAS_LIST
+	LC_SRC_HAVE_DENTRY_D_U_D_ALIAS_HLIST
+	LC_SRC_HAVE_DENTRY_D_CHILD
 	LC_SRC_KIOCB_KI_LEFT
 	LC_SRC_REGISTER_SHRINKER_RET
 
@@ -3864,6 +3888,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_LOCKS_LOCK_FILE_WAIT
 	LC_SRC_HAVE_KEY_PAYLOAD_DATA_ARRAY
 	LC_SRC_HAVE_XATTR_HANDLER_NAME
+	LC_SRC_BIO_INTEGRITY_PREP_FN_RETURNS_BOOL
 	LC_SRC_HAVE_BI_OPF
 	LC_SRC_HAVE_SUBMIT_BIO_2ARGS
 	LC_SRC_HAVE_CLEAN_BDEV_ALIASES
@@ -3897,6 +3922,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_GROUP_INFO_GID
 	LC_SRC_VFS_SETXATTR
 	LC_SRC_POSIX_ACL_UPDATE_MODE
+	LC_SRC_HAVE_BDI_IO_PAGES
 
 	# 4.10
 	LC_SRC_IOP_GENERIC_READLINK
@@ -3939,6 +3965,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_SUNRPC_CACHE_HASH_LOCK_IS_A_SPINLOCK
 
 	# 5.1
+	LC_SRC_HAS_LINUX_SELINUX_ENABLED
 	LC_SRC_HAVE_BVEC_ITER_ALL
 
 	# 5.2
@@ -3960,6 +3987,9 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 5.10
 	LC_SRC_FSCRYPT_IS_NOKEY_NAME
 
+	# 5.11
+	LC_SRC_BIO_SET_DEV
+
 	# 5.12
 	LC_SRC_HAVE_USER_NAMESPACE_ARG
 
@@ -3976,6 +4006,8 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 
 	# 5.18
 	LC_SRC_HAVE_ALLOC_INODE_SB
+	LC_SRC_HAVE_INVALIDATE_FOLIO
+	LC_SRC_HAVE_DIRTY_FOLIO
 
 	# 5.19
 	LC_SRC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
@@ -4001,6 +4033,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_GET_RANDOM_U32_AND_U64
 	LC_SRC_NFS_FILLDIR_USE_CTX_RETURN_BOOL
 	LC_SRC_HAVE_FILEMAP_GET_FOLIOS_CONTIG
+
 
 	# kernel patch to extend integrity interface
 	LC_SRC_BIO_INTEGRITY_PREP_FN
