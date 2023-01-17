@@ -274,7 +274,6 @@ Requires: lustre-osd-mount
 Obsoletes: lustre-server < %{version}
 Provides: lustre-server = %{version}-%{release}
 %endif
-Obsoletes: lustre-client < %{version}
 Provides: lustre-client = %{version}-%{release}
 # Lustre modules
 %if %{with lustre_modules}
