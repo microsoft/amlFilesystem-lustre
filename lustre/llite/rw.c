@@ -1842,11 +1842,13 @@ int ll_readpage(struct file *file, struct page *vmpage)
 	struct inode *inode = file_inode(file);
 	struct cl_object *clob = ll_i2info(inode)->lli_clob;
 	struct ll_sb_info *sbi = ll_i2sbi(inode);
-	const struct lu_env *env = NULL;
+	const struct lu_env  *env = NULL;
 	struct cl_read_ahead ra = { 0 };
 	struct ll_cl_context *lcc;
-	struct cl_io *io = NULL;
+	struct cl_io   *io = NULL;
+	struct iov_iter *iter;
 	struct cl_page *page;
+	struct kiocb *iocb;
 	int result;
 	ENTRY;
 
@@ -1953,8 +1955,11 @@ int ll_readpage(struct file *file, struct page *vmpage)
 	}
 
 	if (lcc && lcc->lcc_type != LCC_MMAP) {
-		CDEBUG(D_VFSTRACE, "pgno:%ld, beyond read end_index:%ld\n",
-		       vmpage->index, lcc->lcc_end_index);
+		iocb = lcc->lcc_iocb;
+		iter = lcc->lcc_iter;
+
+		CDEBUG(D_VFSTRACE, "pgno:%ld, cnt:%ld, pos:%lld\n",
+		       vmpage->index, iter->count, iocb->ki_pos);
 
 		/*
 		 * This handles a kernel bug introduced in kernel 5.12:
@@ -1980,7 +1985,7 @@ int ll_readpage(struct file *file, struct page *vmpage)
 		 * This should never occur except in kernels with the bug
 		 * mentioned above.
 		 */
-		if (vmpage->index >= lcc->lcc_end_index) {
+		if (cl_offset(clob, vmpage->index) >= iter->count + iocb->ki_pos) {
 			result = cl_io_read_ahead(env, io, vmpage->index, &ra);
 			if (result < 0 || vmpage->index > ra.cra_end_idx) {
 				cl_read_ahead_release(env, &ra);
@@ -2026,14 +2031,6 @@ int ll_readpage(struct file *file, struct page *vmpage)
 out:
 	if (ra.cra_release != NULL)
 		cl_read_ahead_release(env, &ra);
-
-	/* this delay gives time for the actual read of the page to finish and
-	 * unlock the page in vvp_page_completion_read before we return to our
-	 * caller and the caller tries to use the page, allowing us to test
-	 * races with the page being unlocked after readpage() but before it's
-	 * used by the caller
-	 */
-	OBD_FAIL_TIMEOUT(OBD_FAIL_LLITE_READPAGE_PAUSE2, cfs_fail_val);
 
 	RETURN(result);
 }

@@ -812,7 +812,6 @@ static int vvp_io_read_start(const struct lu_env *env,
 	size_t cnt = io->u.ci_rd.rd.crw_count;
 	size_t tot = vio->vui_tot_count;
 	struct ll_cl_context *lcc;
-	unsigned int seq;
 	int exceed = 0;
 	int result;
 	int total_bytes_read = 0;
@@ -881,27 +880,12 @@ static int vvp_io_read_start(const struct lu_env *env,
 	iter = *vio->vui_iter;
 
 	lcc = ll_cl_find(inode);
-	lcc->lcc_end_index = DIV_ROUND_UP(pos + iter.count, PAGE_SIZE);
-	CDEBUG(D_VFSTRACE, "count:%ld iocb pos:%lld\n", iter.count, pos);
+	lcc->lcc_iter = &iter;
+	lcc->lcc_iocb = vio->vui_iocb;
+	CDEBUG(D_VFSTRACE, "cnt:%ld,iocb pos:%lld\n", lcc->lcc_iter->count,
+	       lcc->lcc_iocb->ki_pos);
 
-	/* this seqlock lets us notice if a page has been deleted on this inode
-	 * during the fault process, allowing us to catch an erroneous short
-	 * read or EIO
-	 * See LU-16160
-	 */
-	do {
-		seq = read_seqbegin(&ll_i2info(inode)->lli_page_inv_lock);
-		result = generic_file_read_iter(vio->vui_iocb, &iter);
-		if (result >= 0) {
-			io->ci_nob += result;
-			total_bytes_read += result;
-		}
-	/* if we got a short read or -EIO and we raced with page invalidation,
-	 * retry
-	 */
-	} while (read_seqretry(&ll_i2info(inode)->lli_page_inv_lock, seq) &&
-		 ((result >= 0 && iov_iter_count(&iter) > 0)
-		  || result == -EIO));
+	result = generic_file_read_iter(vio->vui_iocb, &iter);
 
 out:
 	if (result >= 0) {
