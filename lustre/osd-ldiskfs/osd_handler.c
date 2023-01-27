@@ -947,7 +947,7 @@ struct osd_check_lmv_buf {
  * \retval	-ve for failure
  */
 #ifdef HAVE_FILLDIR_USE_CTX
-static int osd_stripe_dir_filldir(struct dir_context *buf,
+static FILLDIR_TYPE do_osd_stripe_dir_filldir(struct dir_context *buf,
 #else
 static int osd_stripe_dir_filldir(void *buf,
 #endif
@@ -986,6 +986,8 @@ static int osd_stripe_dir_filldir(void *buf,
 
 	return 1;
 }
+
+WRAP_FILLDIR_FN(do_, osd_stripe_dir_filldir)
 
 /*
  * When lookup item under striped directory, we need to locate the master
@@ -6997,7 +6999,7 @@ struct osd_filldir_cbs {
  * \retval 1 on buffer full
  */
 #ifdef HAVE_FILLDIR_USE_CTX
-static int osd_ldiskfs_filldir(struct dir_context *ctx,
+static FILLDIR_TYPE do_osd_ldiskfs_filldir(struct dir_context *ctx,
 #else
 static int osd_ldiskfs_filldir(void *ctx,
 #endif
@@ -7068,6 +7070,8 @@ static int osd_ldiskfs_filldir(void *ctx,
 	it->oie_dirent = (void *)ent + cfs_size_round(sizeof(*ent) + ent->oied_namelen);
 	RETURN(0);
 }
+
+WRAP_FILLDIR_FN(do_, osd_ldiskfs_filldir)
 
 /**
  * Calls ->iterate*() to load a directory entry at a time
