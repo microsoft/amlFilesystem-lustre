@@ -159,6 +159,68 @@ static void ll_invalidatepage(struct page *vmpage,
 }
 #endif
 
+#ifdef HAVE_AOPS_RELEASE_FOLIO
+static bool ll_release_folio(struct folio *folio, gfp_t wait)
+{
+	struct lu_env *env;
+	struct cl_object *obj;
+	struct cl_page *clpage;
+	struct address_space *mapping;
+	struct page *vmpage;
+	int result = 0;
+
+	LASSERT(folio_test_locked(folio));
+	if (folio_test_writeback(folio) || folio_test_dirty(folio))
+		return 0;
+
+	mapping = folio->mapping;
+	if (mapping == NULL)
+		return 1;
+
+	obj = ll_i2info(mapping->host)->lli_clob;
+	if (obj == NULL)
+		return 1;
+
+	vmpage = folio_page(folio, 0);
+	clpage = cl_vmpage_page(vmpage, obj);
+	if (clpage == NULL)
+		return 1;
+
+	env = cl_env_percpu_get();
+	LASSERT(!IS_ERR(env));
+
+	/* we must not delete the cl_page if the vmpage is in use, otherwise we
+	 * disconnect the vmpage from Lustre while it's still alive(!), which
+	 * means we won't find it to discard on lock cancellation.
+	 *
+	 * References here are: caller + cl_page + page cache.
+	 * Any other references are potentially transient and must be ignored.
+	 */
+	if (!cl_page_in_use(clpage) && !vmpage_in_use(vmpage, 1)) {
+		result = 1;
+		cl_page_delete(env, clpage);
+	}
+
+	/* To use percpu env array, the call path can not be rescheduled;
+	 * otherwise percpu array will be messed if ll_releaspage() called
+	 * again on the same CPU.
+	 *
+	 * If this page holds the last refc of cl_object, the following
+	 * call path may cause reschedule:
+	 *   cl_page_put -> cl_page_free -> cl_object_put ->
+	 *     lu_object_put -> lu_object_free -> lov_delete_raid0.
+	 *
+	 * However, the kernel can't get rid of this inode until all pages have
+	 * been cleaned up. Now that we hold page lock here, it's pretty safe
+	 * that we won't get into object delete path.
+	 */
+	LASSERT(cl_object_refc(obj) > 1);
+	cl_page_put(env, clpage);
+
+	cl_env_percpu_put(env);
+	return result;
+}
+#else /* !HAVE_AOPS_RELEASE_FOLIO */
 #ifdef HAVE_RELEASEPAGE_WITH_INT
 #define RELEASEPAGE_ARG_TYPE int
 #else
@@ -222,6 +284,7 @@ static int ll_releasepage(struct page *vmpage, RELEASEPAGE_ARG_TYPE gfp_mask)
 	cl_env_percpu_put(env);
 	return result;
 }
+#endif /* HAVE_AOPS_RELEASE_FOLIO */
 
 static ssize_t ll_get_user_pages(int rw, struct iov_iter *iter,
 				struct page ***pages, ssize_t *npages,
@@ -701,7 +764,10 @@ static int ll_tiny_write_begin(struct page *vmpage, struct address_space *mappin
 }
 
 static int ll_write_begin(struct file *file, struct address_space *mapping,
-			  loff_t pos, unsigned len, unsigned flags,
+			  loff_t pos, unsigned int len,
+#ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+			  unsigned int flags,
+#endif
 			  struct page **pagep, void **fsdata)
 {
 	struct ll_cl_context *lcc = NULL;
@@ -774,8 +840,11 @@ again:
 			GOTO(out, result);
 
 		if (vmpage == NULL) {
-			vmpage = grab_cache_page_write_begin(mapping, index,
-							     flags);
+			vmpage = grab_cache_page_write_begin(mapping, index
+#ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+							     , flags
+#endif
+							     );
 			if (vmpage == NULL)
 				GOTO(out, result = -ENOMEM);
 		}
@@ -981,8 +1050,16 @@ const struct address_space_operations ll_aops = {
 #else
 	.invalidatepage		= ll_invalidatepage,
 #endif
+#ifdef HAVE_AOPS_READ_FOLIO
+	.read_folio		= ll_read_folio,
+#else
 	.readpage		= ll_readpage,
+#endif
+#ifdef HAVE_AOPS_RELEASE_FOLIO
+	.release_folio		= ll_release_folio,
+#else
 	.releasepage		= (void *)ll_releasepage,
+#endif
 	.direct_IO		= ll_direct_IO,
 	.writepage		= ll_writepage,
 	.writepages		= ll_writepages,

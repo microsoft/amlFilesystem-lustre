@@ -576,4 +576,27 @@ static inline void cfs_delete_from_page_cache(struct page *page)
 }
 #endif
 
+static inline struct page *ll_read_cache_page(struct address_space *mapping,
+					      pgoff_t index, filler_t *filler,
+					      void *data)
+{
+#ifdef HAVE_READ_CACHE_PAGE_WANTS_FILE
+	struct page *page = NULL;
+	struct file *dummy_file;
+
+	OBD_ALLOC_PTR(dummy_file);
+	if (!dummy_file)
+		return ERR_PTR(-ENOMEM);
+
+	dummy_file->f_ra.ra_pages = 32; /* unused, modified on ra error */
+	dummy_file->private_data = data;
+	page = read_cache_page(mapping, index, filler, dummy_file);
+	OBD_FREE_PTR(dummy_file);
+
+	return page;
+#else
+	return read_cache_page(mapping, index, filler, data);
+#endif /* HAVE_READ_CACHE_PAGE_WANTS_FILE */
+}
+
 #endif /* _LUSTRE_COMPAT_H */
