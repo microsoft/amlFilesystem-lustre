@@ -154,6 +154,10 @@ autodetect_distro() {
             "Fedora")
                 name="fc"
                 ;;
+            "Mariner")
+                version="$(lsb_release -s -r | cut --delimiter=. --fields=1)"
+                name="cm"
+                ;;
             *)
                 fatal 1 "I don't know what distro name $name and version $version is.\nEither update autodetect_distro() or use the --distro argument."
                 ;;
@@ -173,6 +177,10 @@ autodetect_distro() {
 		name=rhel
 		version=$(cat /etc/redhat-release |
 			  sed -e 's/^[^0-9.]*//g' | sed -e 's/[ ].*//')
+        fi
+        if [ -f /etc/mariner-release ]; then
+            version=$(sed -n -e 's/^CBL-Mariner\s+//p' /etc/mariner-release)
+            name="cm$version"
         fi
         if [ -z "$name" -o -z "$version" ]; then
             fatal 1 "I don't know how to determine distro type/version.\nEither update autodetect_distro() or use the --distro argument."
@@ -204,6 +212,7 @@ autodetect_target() {
         sles15.2) target="$(uname -r | cut -d . -f 1,2)-sles15sp2";;
         sles15.3) target="$(uname -r | cut -d . -f 1,2)-sles15sp3";;
           fc18)   target="3.x-fc18";;
+          cm2)    target="5.x-cm2";;
              *)   fatal 1 "I don't know what distro $distro is.\nEither update autodetect_target() or use the --target argument.";;
     esac
 

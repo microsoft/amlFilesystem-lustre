@@ -135,7 +135,7 @@
 # requires want to set a version including epoch
 %global krequires %(echo %{kver} | sed -e 's/\.x86_64$//' -e 's/\.i[3456]86$//' -e 's/-smp$//' -e 's/-bigsmp$//' -e 's/[-.]ppc64$//' -e 's/\.aarch64$//' -e 's/-default$//' -e 's/-%{_flavor}//')
 
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || "%{_vendor}" == "mariner"
 	%global requires_kmod_name kmod-%{lustre_name}
 	%global requires_kmod_osd_zfs_name kmod-%{lustre_name}-osd-zfs
 	%if %{with lustre_tests}
@@ -173,6 +173,14 @@
 %if 0%{?suse_version} >= 1310
 %define with_systemd 1
 %endif
+
+# Mariner always has support for systemd.
+%if "%{_vendor}" == "mariner"
+%define with_systemd 1
+%endif
+
+# TBD: after we have a mariner package for openmpi-devel, figure out how to add around line 380.
+# There are RH, Fedora, and a version check for Suse.
 
 %{!?mpi_name: %global mpi_name openmpi}
 
@@ -218,9 +226,14 @@ Obsoletes: lustre-server < %{version}
 Provides: lustre-server = %{version}-%{release}
 %endif
 Provides: lustre-client = %{version}-%{release}
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || "%{_vendor}" == "mariner"
 #suse don't support selinux
 BuildRequires: libselinux-devel
+%endif
+%if "%{_vendor}" == "mariner"
+BuildRequires: util-linux-devel
+%elif "%{_vendor}" == "redhat"
+BuildRequires: libmount-devel
 %endif
 %if %{with lustre_modules}
 %if %{with mofed}
@@ -620,7 +633,7 @@ echo '%{_sysconfdir}/ha.d/resource.d/Lustre.ha_v2' >>lustre.files
 echo '%{_sysconfdir}/ha.d/resource.d/Lustre' >>lustre.files
 %endif
 
-# systemd is on redhat, fedora, and suse
+# systemd is on redhat, fedora, suse, and mariner
 %if %{with systemd}
 echo '%{_unitdir}/lnet.service' >>lustre.files
 %endif

@@ -28,7 +28,7 @@
     %define lustre_name @PACKAGE@-client
 %endif
 
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || "%{_vendor}" == "mariner"
 	%global kmod_name kmod-%{lustre_name}
 	%define mkconf_options %{nil}
 #for Suse / Ubuntu

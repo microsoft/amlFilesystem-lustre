@@ -3194,6 +3194,7 @@ lustre/kernel_patches/targets/4.12-sles15sp1.target
 lustre/kernel_patches/targets/5.3-sles15sp2.target
 lustre/kernel_patches/targets/5.3-sles15sp3.target
 lustre/kernel_patches/targets/3.x-fc18.target
+lustre/kernel_patches/targets/5.15-cm2.target
 lustre/ldlm/Makefile
 lustre/fid/Makefile
 lustre/fid/autoMakefile
