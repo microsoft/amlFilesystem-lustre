@@ -1,0 +1,197 @@
+# vim:expandtab:shiftwidth=4:softtabstop=4:tabstop=4:
+
+# NOTE: This is a skeleton that is completely untested.
+
+# increment this if you have made a change that should force a new kernel
+# to build built for all releases of this distribution (only -- if you want
+# to force a kernel build on all distributions, update the BUILD_GEN variable
+# in build/lbuild)
+#BUILD_GEN+=".0"
+#BUILD_GEN+=".1"	# refactor both rhel5 and rhel6
+#BUILD_GEN+=".0"	# TT-107: don't cache the BUILD dir (reset major to 5)
+BUILD_GEN+=".2"	# LU-9850
+
+DEVEL_KERNEL_TYPE="devel"
+RPM_HELPERS_DIR="/usr/lib/rpm/mariner"
+
+# a method which can be overriden by the release specific code
+get_rpmbuildopts() {
+
+    return 0
+
+}
+
+# patching common to all releases
+patch_spec_common() {
+
+    sed -i -e '/Provides: kernel-uname-r =/a\
+Provides: kernel-lustre = %{KVRA}%{?1:.%{1}}\\' \
+           -e '/Provides: kernel-devel-uname-r =/a\
+Provides: kernel-devel-lustre = %{KVRA}%{?1:.%{1}}\\' \
+           -e '/find $RPM_BUILD_ROOT\/lib\/modules\/$KernelVer/a\
+    cp -a fs/ext3/* $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/fs/ext3 \
+    cp -a fs/ext4/* $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/fs/ext4' \
+          SPECS/$SPEC_NAME 2>&1 || \
+        fatal 1 "Error while editing SPECS/$SPEC_NAME"
+
+    # XXX - a building-on-Ubuntu hack
+    if grep -q "Ubuntu" /etc/issue; then
+        sed  -i -e 's/^\(BuildPreReq: .*\)$/#NOU \1/g' \
+               -e 's/^\(BuildRequires: .*\)$/#NOU \1/g' \
+               -e 's/sha512hmac/md5sum/g' \
+            SPECS/$SPEC_NAME 2>&1 || \
+                fatal 1 "Error while editing SPECS/$SPEC_NAME"
+    fi
+
+}
+
+prepare_and_build_srpm() {
+
+	pushd $TOPDIR >/dev/null
+	# create the buildid
+	if $ENABLE_KERNEL_DEBUG; then
+		local buildid="_lustre_debug${EXTRA_VERSION##*_lustre}"
+	else
+		local buildid="_lustre${EXTRA_VERSION##*_lustre}"
+	fi
+
+	# edit the SPEC with our changes
+	patch_spec
+	popd >/dev/null
+
+	# copy our .config into the RPM build tree
+	local cfg_file_name=kernel-${TARGET_ARCH}.config
+	(echo "# $(basearch ${TARGET_ARCH})"; cat $CONFIG_FILE) > \
+		SOURCES/$cfg_file_name
+
+	# XXX - hackity hack -- until we get (or generate from the base
+	#                       config) configs for xen and debug
+	local f=""
+	for f in SOURCES/kernel-*.config; do
+		grep -q "^CONFIG_SD_IOSTATS=y" $f || \
+		echo "CONFIG_SD_IOSTATS=y" >> $f
+	done
+
+    # do we need any special rpm build options
+    local rpmbuildopt="-bb"
+    if $DO_SRC; then
+        rpmbuildopt="-ba"
+    fi
+
+    # stupid Ubuntu's rpm doesn't do debuginfo properly
+    if [ ! -f /usr/lib/rpm/debugedit ]; then
+        rpmbuildopt="$rpmbuildopt --without debuginfo"
+    fi
+
+    # XXX - need to figure this kabichk crap out -- it fails the build
+    if ! $USE_KABI; then
+        rpmbuildopt="$rpmbuildopt --without kabichk"
+    fi
+
+    # get any release specific build options
+    rpmbuildopt="$rpmbuildopt $(get_rpmbuildopts)"
+
+	# now build it
+	if ! eval rpmbuild $rpmbuildopt --target ${TARGET_ARCH} \
+		--define \"_topdir $TOPDIR\" \
+		${buildid:+--define \"buildid $buildid\"} \
+		--define \"_tmppath $TMPDIR\" \
+		$TOPDIR/SPECS/$SPEC_NAME 2>&1; then
+		return 1
+	fi
+
+    # for informative purposes, display a diff between the .config that
+    # was actually built and what we proposed as a .config
+    echo "Diffs between $(basename $CONFIG_FILE) and the built kernel's .config:"
+    local rpmname="$TOPDIR/RPMS/${TARGET_ARCH}/kernel-${lnxmaj}-${lnxrel}${buildid}.${TARGET_ARCH}.rpm"
+    rpmcfg=$(rpm -qpl $rpmname | grep '/boot/config-')
+    rpm2cpio $rpmname | cpio -id .$rpmcfg
+    diff -u $CONFIG_FILE .$rpmcfg
+    rm -rf .$rpmcfg
+
+    return 0
+
+}
+
+devel_kernel_name() {
+    local lustre=${1:-false}
+
+    if $lustre; then
+        echo "kernel-lustre-$DEVEL_KERNEL_TYPE"
+    else
+        echo "kernel-$DEVEL_KERNEL_TYPE"
+    fi
+
+}
+
+rpm_BUILD_kernel_dirname() {
+    local rpmsmptype="$1"
+    local lnxmaj="$2"
+    local lnxmin="$3"
+    local arch="$4"
+
+    local lustre=""
+    if $KERNEL_LUSTRE_NAMING; then
+        $lustre="-lustre"
+    fi
+    echo kernel${lustre}${lnxmaj}${lnxmin}/linux-${lnxmaj}.$arch
+}
+
+find_linux_devel_paths() {
+    local path="$1"
+    local ARCH=$TARGET_ARCH
+
+    # If DEVEL_PATH_ARCH is set, use it. Added for fc11 as it needs i586 string for i686.
+    if [ $DEVEL_PATH_ARCH ];then
+        ARCH=$DEVEL_PATH_ARCH
+    fi
+
+    LINUX=$path/usr/src/kernels/${lnxmaj}${lnxmin}-${lnxrel}${DEVEL_PATH_ARCH_DELIMETER:-"-"}${ARCH}
+    # RHEL doesn't have the -obj tree
+    LINUXOBJ=""
+
+    return 0
+}
+
+unpack_linux_devel_rpm-cm2() {
+    local callers_rpm="$1"
+
+    # now just sanity check that everything needed to build properly versioned
+    # modules is in place
+    if [ ! -f usr/src/kernels/${lnxmaj}${lnxmin}-${lnxrel}${DEVEL_PATH_ARCH_DELIMETER:-"-"}$TARGET_ARCH/Module.symvers ]; then
+        fatal 1 "cannot build kernel modules: the Kernel's Module.symvers is missing."
+    fi
+
+    return 0
+
+}
+
+# this of course requires a sudo rule on the builder for real RHEL:
+# hudson ALL= NOPASSWD: /usr/bin/yumdownloader
+# also must disable the requiretty attribute in the sudoers file
+find_linux_rpm-cm2() {
+    local prefix="$1"
+    local wanted_kernel="$2"
+    local pathtorpms=${3:-"$KERNELRPMSBASE/$lnxmaj/$DISTROMAJ/$TARGET_ARCH"}
+
+    local tmpdir=$(mktemp -d $pathtorpms/yumXXXXXX)
+    local sudo=""
+    if [ "$(lsb_release -s -i)" = "RedHatEnterpriseServer" ]; then
+        sudo="sudo"
+    fi
+    if ! $sudo yumdownloader --destdir "$tmpdir" kernel-devel-"$wanted_kernel" > /dev/null; then
+        fatal 1 "failed to fetch kernel-devel-$wanted_kernel with yumdownloader."
+    fi
+    local rpm=$(cd $tmpdir; echo *)
+    mv "$tmpdir/$rpm" "$pathtorpms"
+    rmdir $tmpdir
+    echo "$rpm"
+
+    return 0
+
+}
+
+# This function digs out the linux release from the linux source tree
+find_linux_release() {
+	_find_linux_release $LINUX
+}

@@ -1,0 +1,39 @@
+# Copy/pasted file content.  May not be viable.
+
+lnxmaj="5.15"
+lnxmin=".18"
+lnxrel="32.1"
+# use this when there is an "RPM fix" which means that the name of the
+# (source) RPM has been updated but the version of the kernel inside the
+# RPM is not also updated
+rpmfix=".1"
+
+# this is the delimeter that goes before the "smp" at the end of the version
+# defaults to empty
+FLAVOR_DELIMITER="-"
+
+KERNEL_SRPM=kernel-source-${lnxmaj}${lnxmin}-${lnxrel}${rpmfix}.src.rpm
+SERIES=""
+VERSION=$lnxmaj
+EXTRA_VERSION="${lnxmin#.}-${lnxrel}_lustre.@VERSION@"
+LUSTRE_VERSION=@VERSION@
+
+OFED_VERSION=inkernel
+
+BASE_ARCHS="x86_64"
+BIGMEM_ARCHS=""
+BOOT_ARCHS=""
+JENSEN_ARCHS=""
+DEFAULT_ARCHS="x86_64"
+BIGSMP_ARCHS=""
+PSERIES64_ARCHS="ppc"
+UP_ARCHS=""
+SRC_ARCHS=""
+#RPMSMPTYPE="smp"
+
+for cc in gcc ; do
+    if which $cc >/dev/null 2>/dev/null ; then
+        export CC=$cc
+        break
+    fi
+done
