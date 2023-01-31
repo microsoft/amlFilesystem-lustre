@@ -22,7 +22,12 @@
 
 # LUTF Turn off brp-python-precompile script as we don't want the python files
 # to be compiled on installation
-%global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g')
+%if "%{_vendor}" != "mariner"
+	%global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g')
+%else
+	# Mariner enables this by default - simply disable it.
+	%global py_auto_byte_compile 0
+%endif
 
 # By default both gss and gss keyring are disabled.
 # gss keyring requires the gss core. If the builder
