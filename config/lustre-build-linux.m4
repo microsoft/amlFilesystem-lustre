@@ -92,6 +92,7 @@ AC_DEFUN([LB_LINUX_RELEASE], [
 	RHEL_KERNEL="no"
 	SUSE_KERNEL="no"
 	UBUNTU_KERNEL="no"
+	MARINER_KERNEL="no"
 	# And if any of the above kernels has been detected yet
 	KERNEL_FOUND="no"
 
@@ -179,8 +180,8 @@ AC_DEFUN([LB_LINUX_RELEASE], [
 		AS_IF([test x$RHEL_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
 		      [test x$SUSE_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
 		      [test x$UBUNTU_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
-			  [test x$MARINER_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
-		      [AC_MSG_WARN([Kernel Distro seems to be neither RedHat, SuSE nor Ubuntu])]
+			  [test x$MARINER_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
+		      [AC_MSG_WARN([Kernel Distro seems to be neither RedHat, SuSE, Ubuntu, nor Mariner])]
 		)
 		IN_KERNEL="${PACKAGE}"])
 	AC_MSG_RESULT($KMP_MODDIR)
