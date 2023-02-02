@@ -601,8 +601,6 @@ make install DESTDIR=$RPM_BUILD_ROOT
 # Lustre's build system.  This is not expected to bother SLES's
 # kernel_module_path macro.
 basemodpath=$RPM_BUILD_ROOT%{modules_fs_path}/%{name}
-echo "modules_fs_path=[%{modules_fs_path}]"
-echo "basemodpath=[%{basemodpath}]"
 %if %{with ldiskfs}
 mkdir -p $basemodpath-osd-ldiskfs/fs
 mv $basemodpath/fs/osd_ldiskfs.ko $basemodpath-osd-ldiskfs/fs/osd_ldiskfs.ko
