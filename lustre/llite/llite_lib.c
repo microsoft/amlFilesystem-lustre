@@ -510,7 +510,9 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 			LCONSOLE_WARN("%s: server %s does not support name encryption, not using it.\n",
 				      sbi->ll_fsname,
 				      sbi->ll_md_exp->exp_obd->obd_name);
+#ifdef CONFIG_LL_ENCRYPTION
 		lsi->lsi_flags &= ~LSI_FILENAME_ENC;
+#endif
 		lsi->lsi_flags &= ~LSI_FILENAME_ENC_B64_OLD_CLI;
 		ll_sbi_set_name_encrypt(sbi, false);
 	}
@@ -1103,8 +1105,13 @@ static int ll_options(char *options, struct super_block *sb)
 #else
 			struct lustre_sb_info *lsi = s2lsi(sb);
 
-			err = llcrypt_set_test_dummy_encryption(sb, &args[0],
-								&lsi->lsi_dummy_enc_ctx);
+			err = llcrypt_set_test_dummy_encryption(sb,
+#ifdef HAVE_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG
+								args->from,
+#else
+								&args[0],
+#endif
+								&lsi->lsi_dummy_enc_policy);
 			if (!err)
 				break;
 
@@ -1521,7 +1528,7 @@ void ll_put_super(struct super_block *sb)
 	}
 #endif
 
-	llcrypt_free_dummy_context(&lsi->lsi_dummy_enc_ctx);
+	llcrypt_free_dummy_policy(&lsi->lsi_dummy_enc_policy);
 	ll_free_sbi(sb);
 	lsi->lsi_llsbi = NULL;
 out_no_sbi:
