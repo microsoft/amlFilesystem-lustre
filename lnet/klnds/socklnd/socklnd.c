@@ -100,6 +100,13 @@ static int ksocknal_ip2index(struct sockaddr *addr, struct lnet_ni *ni)
 		in_dev_for_each_ifa_rcu(ifa, in_dev) {
 			if (ifa->ifa_local ==
 			    ((struct sockaddr_in *)addr)->sin_addr.s_addr)
+				/*
+				 * Need to iterate over these lists and determine if there's
+				 * a match somewhere in the namespace lists.
+				 * If not, continue.
+				 *
+				 * peer_ni->ksnp_ni->ni_net_ns.list, ni->ni_net_ns.list
+				 */
 				ret = dev->ifindex;
 		}
 		endfor_ifa(in_dev);
@@ -349,6 +356,14 @@ ksocknal_get_peer_info(struct lnet_ni *ni, int index,
 			if (conn_cb->ksnr_addr.ss_family == AF_INET) {
 				struct sockaddr_in *sa =
 					(void *)&conn_cb->ksnr_addr;
+
+				/*
+				 * Need to iterate over these lists and determine if there's
+				 * a match somewhere in the namespace lists.
+				 * If not, continue.
+				 *
+				 * peer_ni->ksnp_ni->ni_net_ns.list, ni->ni_net_ns.list
+				 */
 
 				rc = choose_ipv4_src(myip,
 						     conn_cb->ksnr_myiface,
@@ -1977,6 +1992,13 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 		}
 		in_dev_for_each_ifa_rtnl(ifa, in_dev) {
 			if (sa->sin_addr.s_addr == ifa->ifa_local)
+				/*
+				 * Need to iterate over these lists and determine if there's
+				 * a match somewhere in the namespace lists.
+				 * If not, don't set the found_ip flag.
+				 *
+				 * peer_ni->ksnp_ni->ni_net_ns.list, ni->ni_net_ns.list
+				 */
 				found_ip = true;
 		}
 		endfor_ifa(in_dev);
@@ -2028,6 +2050,13 @@ ksocknal_handle_inetaddr_change(struct in_ifaddr *ifa, unsigned long event)
 
 		if (ksi->ksni_index != ifindex ||
 		    strcmp(ksi->ksni_name, event_netdev->name))
+			/*
+			 * Need to iterate over these lists and determine if there's
+			 * a match somewhere in the namespace lists.
+			 * If not, continue.
+			 *
+			 * peer_ni->ksnp_ni->ni_net_ns.list, ni->ni_net_ns.list
+			 */
 			continue;
 
 		if (sa->sin_addr.s_addr == ifa->ifa_local) {
