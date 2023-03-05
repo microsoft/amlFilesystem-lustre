@@ -1965,6 +1965,56 @@ AC_DEFUN([LIBCFS_SEC_RELEASE_SECCTX], [
 ]) # LIBCFS_SEC_RELEASE_SECCTX
 
 #
+# LIBCFS_HAVE_LSMCONTEXT_INIT
+#
+# kernel linux-hwe-5.19
+# LSM: Removed scaffolding function lsmcontext_init
+#
+AC_DEFUN([LIBCFS_SRC_HAVE_LSMCONTEXT_INIT], [
+	LB2_LINUX_TEST_SRC([lsmcontext_init], [
+		#include <linux/security.h>
+	],[
+		struct lsmcontext ctx = {};
+
+		lsmcontext_init(&ctx, "", 0, 0);
+	],[])
+])
+AC_DEFUN([LIBCFS_HAVE_LSMCONTEXT_INIT], [
+	AC_MSG_CHECKING([if lsmcontext_init is available])
+	LB2_LINUX_TEST_RESULT([lsmcontext_init], [
+		AC_DEFINE(HAVE_LSMCONTEXT_INIT, 1,
+			[lsmcontext_init is available])
+	])
+]) # LIBCFS_HAVE_LSMCONTEXT_INIT
+
+#
+# LIBCFS_HAVE_LSMCONTEXT_INIT
+#
+# kernel linux-hwe-5.19
+# LSM: Use lsmcontext in security_dentry_init_security
+#
+AC_DEFUN([LIBCFS_SRC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX], [
+	LB2_LINUX_TEST_SRC([security_dentry_init_security_with_ctx], [
+		#include <linux/security.h>
+	],[
+		struct dentry *dentry = NULL;
+		const struct qstr *name = NULL;
+		struct lsmcontext *ctx = NULL;
+		const char *xattr_name = "";
+
+		(void)security_dentry_init_security(dentry, 0, name,
+						    &xattr_name, ctx);
+	],[-Werror])
+])
+AC_DEFUN([LIBCFS_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX], [
+	AC_MSG_CHECKING([if security_dentry_init_security needs lsmcontext])
+	LB2_LINUX_TEST_RESULT([security_dentry_init_security_with_ctx], [
+		AC_DEFINE(HAVE_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX, 1,
+			[security_dentry_init_security needs lsmcontext])
+	])
+]) # LIBCFS_HAVE_LSMCONTEXT_INIT
+
+#
 # LIBCFS_HAVE_KFREE_SENSITIVE
 #
 # kernel v5.10-rc1~3
@@ -2363,6 +2413,8 @@ AC_DEFUN([LIBCFS_PROG_LINUX_SRC], [
 	LIBCFS_SRC_VMALLOC_2ARGS
 	# 5.10
 	LIBCFS_SRC_SEC_RELEASE_SECCTX
+	LIBCFS_SRC_HAVE_LSMCONTEXT_INIT
+	LIBCFS_SRC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
 	LIBCFS_SRC_HAVE_KFREE_SENSITIVE
 	LIBCFS_SRC_HAVE_LIST_CMP_FUNC_T
 	LIBCFS_SRC_NLA_STRLCPY
@@ -2502,6 +2554,8 @@ AC_DEFUN([LIBCFS_PROG_LINUX_RESULTS], [
 	LIBCFS_VMALLOC_2ARGS
 	# 5.10
 	LIBCFS_SEC_RELEASE_SECCTX
+	LIBCFS_HAVE_LSMCONTEXT_INIT
+	LIBCFS_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
 	LIBCFS_HAVE_KFREE_SENSITIVE
 	LIBCFS_HAVE_LIST_CMP_FUNC_T
 	LIBCFS_NLA_STRLCPY
