@@ -1961,11 +1961,13 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 		sa = (void *)&ksi->ksni_addr;
 		found_ip = false;
 
-		if (ksi->ksni_index != ifindex ||
-		    strcmp(ksi->ksni_name, dev->name))
-			continue;
-
 		ni = net->ksnn_ni;
+
+		if (ni->ni_net_ns->ifindex != read_pnet(&dev->nd_net)->ifindex ||
+		    ksi->ksni_index != ifindex ||
+		    strcmp(ksi->ksni_name, dev->name)) {
+			continue;
+		}
 
 		in_dev = __in_dev_get_rtnl(dev);
 		if (!in_dev) {
@@ -2025,15 +2027,16 @@ ksocknal_handle_inetaddr_change(struct in_ifaddr *ifa, unsigned long event)
 
 		ksi = &net->ksnn_interface;
 		sa = (void *)&ksi->ksni_addr;
+		ni = net->ksnn_ni;
 
-		if (ksi->ksni_index != ifindex ||
+		if (ni->ni_net_ns->ifindex != read_pnet(&event_netdev->nd_net)->ifindex ||
+		    ksi->ksni_index != ifindex ||
 		    strcmp(ksi->ksni_name, event_netdev->name))
 			continue;
 
 		if (sa->sin_addr.s_addr == ifa->ifa_local) {
 			CDEBUG(D_NET, "set link fatal state to %u\n",
 			       (event == NETDEV_DOWN));
-			ni = net->ksnn_ni;
 			atomic_set(&ni->ni_fatal_error_on,
 				   (event == NETDEV_DOWN));
 		}
