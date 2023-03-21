@@ -2724,22 +2724,22 @@ EXTRA_KCFLAGS="$tmp_flags"
 # linux commit v5.17-49-g8b9f3ac5b01d
 #   fs: introduce alloc_inode_sb() to allocate filesystems specific inode
 #
-AC_DEFUN([LC_SRC_HAVE_ALLOC_INODE_SB], [
-	LB2_LINUX_TEST_SRC([alloc_inode_sb], [
+AC_DEFUN([LC_HAVE_ALLOC_INODE_SB], [
+tmp_flags="$EXTRA_KCFLAGS"
+EXTRA_KCFLAGS="-Werror"
+LB_CHECK_COMPILE([if alloc_inode_sb() exists],
+alloc_inode_sb, [
 		#include <linux/fs.h>
 	],[
 		struct super_block *sb = NULL;
 		struct kmem_cache *cache = NULL;
 
 		(void)alloc_inode_sb(sb, cache, GFP_NOFS);
-	],[-Werror])
-])
-AC_DEFUN([LC_HAVE_ALLOC_INODE_SB], [
-	AC_MSG_CHECKING([if alloc_inode_sb() exists])
-	LB2_LINUX_TEST_RESULT([alloc_inode_sb], [
+	],[
 		AC_DEFINE(HAVE_ALLOC_INODE_SB, 1,
 			[alloc_inode_sb() exists])
 	])
+EXTRA_KCFLAGS="$tmp_flags"
 ]) # LC_HAVE_ALLOC_INODE_SB
 
 #
@@ -2755,7 +2755,7 @@ AC_DEFUN([LC_SRC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS], [
 		struct address_space *mapping = NULL;
 		(void)grab_cache_page_write_begin(mapping, 0, 1);
 	],[-Werror])
-]) 
+])
 AC_DEFUN([LC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS], [
 	AC_MSG_CHECKING([if grab_cache_page_write_begin() has flags argument])
 	LB2_LINUX_TEST_RESULT([grab_cache_page_write_begin_with_flags], [
