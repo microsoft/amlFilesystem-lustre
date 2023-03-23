@@ -224,7 +224,7 @@ static int ll_read_ahead_page(const struct lu_env *env, struct cl_io *io,
 		/* should not come here */
 		GOTO(out, rc = -EINVAL);
 	}
- 
+
 	/* Check if vmpage was truncated or reclaimed */
 	if (vmpage->mapping != inode->i_mapping) {
 		which = RA_STAT_WRONG_GRAB_PAGE;
@@ -1948,3 +1948,10 @@ int ll_readpage(struct file *file, struct page *vmpage)
         }
 	RETURN(result);
 }
+
+#ifdef HAVE_AOPS_READ_FOLIO
+int ll_read_folio(struct file *file, struct folio *folio)
+{
+	return ll_readpage(file, folio_page(folio, 0));
+}
+#endif
