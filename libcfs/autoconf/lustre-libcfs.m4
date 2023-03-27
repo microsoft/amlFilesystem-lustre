@@ -1919,7 +1919,7 @@ AC_DEFUN([LIBCFS_SRC_SEC_RELEASE_SECCTX], [
 		#include <linux/security.h>
 	],[
 		security_release_secctx(NULL);
-	],[])
+	],[-Werror])
 ])
 AC_DEFUN([LIBCFS_SEC_RELEASE_SECCTX], [
 	AC_MSG_CHECKING([if security_release_secctx has 1 arg])
