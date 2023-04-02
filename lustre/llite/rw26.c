@@ -225,7 +225,7 @@ static bool ll_release_folio(struct folio *folio, gfp_t wait)
 {
 	struct page *vmpage = folio_page(folio, 0);
 
-	/* folio_nr_pages(folio) == 1 is fixed with grab_cache_page* */
+	/* folio_nr_pages(folio) == 1 is fixed with grab_cache_page* */ 
 	BUG_ON(folio_nr_pages(folio) != 1);
 
 	return do_release_page(vmpage, wait);
