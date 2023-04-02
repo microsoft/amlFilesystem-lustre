@@ -2054,7 +2054,7 @@ static int mdd_xattr_set(const struct lu_env *env, struct md_object *obj,
 
 		/* user may set empty ACL, which should be treated as removing
 		 * ACL. */
-		acl = posix_acl_from_xattr(&init_user_ns, buf->lb_buf,
+		acl = posix_acl_from_xattr(ll_idmap_def, buf->lb_buf,
 					   buf->lb_len);
 		if (IS_ERR(acl))
 			RETURN(PTR_ERR(acl));

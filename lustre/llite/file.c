@@ -44,6 +44,9 @@
 #include <linux/uidgid.h>
 #include <linux/falloc.h>
 #include <linux/ktime.h>
+#ifdef HAVE_LINUX_FILELOCK_HEADER
+#include <linux/filelock.h>
+#endif
 
 #include <uapi/linux/lustre/lustre_ioctl.h>
 #include <lustre_swab.h>
@@ -1296,8 +1299,8 @@ static int ll_check_swap_layouts_validity(struct inode *inode1,
 	if (!S_ISREG(inode1->i_mode) || !S_ISREG(inode2->i_mode))
 		return -EINVAL;
 
-	if (inode_permission(&init_user_ns, inode1, MAY_WRITE) ||
-	    inode_permission(&init_user_ns, inode2, MAY_WRITE))
+	if (inode_permission(ll_idmap_def, inode1, MAY_WRITE) ||
+	    inode_permission(ll_idmap_def, inode2, MAY_WRITE))
 		return -EPERM;
 
 	if (inode1->i_sb != inode2->i_sb)
@@ -4505,7 +4508,7 @@ out_ladvise:
 		if (!S_ISREG(inode->i_mode))
 			GOTO(out_detach_free, rc = -EINVAL);
 
-		if (!inode_owner_or_capable(&init_user_ns, inode))
+		if (!inode_owner_or_capable(ll_idmap_def, inode))
 			GOTO(out_detach_free, rc = -EPERM);
 
 		rc = pcc_ioctl_detach(inode, detach->pccd_opt);
@@ -5520,7 +5523,15 @@ fill_attr:
 	return 0;
 }
 
-#if defined(HAVE_USER_NAMESPACE_ARG) || defined(HAVE_INODEOPS_ENHANCED_GETATTR)
+#ifdef HAVE_MNT_IDMAP_ARG
+int ll_getattr(struct mnt_idmap *map, const struct path *path,
+	       struct kstat *stat, u32 request_mask, unsigned int flags)
+{
+	return ll_getattr_dentry(path->dentry, stat, request_mask, flags,
+				 false);
+}
+#elif defined(HAVE_USER_NAMESPACE_ARG) \
+   || defined(HAVE_INODEOPS_ENHANCED_GETATTR)
 int ll_getattr(struct user_namespace *mnt_userns, const struct path *path,
 	       struct kstat *stat, u32 request_mask, unsigned int flags)
 {
@@ -5685,7 +5696,13 @@ out:
 	return rc;
 }
 
-int ll_inode_permission(struct user_namespace *mnt_userns, struct inode *inode,
+int ll_inode_permission(
+#ifdef HAVE_MNT_IDMAP_ARG
+			struct mnt_idmap *idmap,
+#else
+			struct user_namespace *idmap,
+#endif
+			struct inode *inode,
 			int mask)
 {
 	int rc = 0;
@@ -5742,7 +5759,7 @@ int ll_inode_permission(struct user_namespace *mnt_userns, struct inode *inode,
 		old_cred = override_creds(cred);
 	}
 
-	rc = generic_permission(mnt_userns, inode, mask);
+	rc = generic_permission(idmap, inode, mask);
 	/* restore current process's credentials and FS capability */
 	if (squash_id) {
 		revert_creds(old_cred);
