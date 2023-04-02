@@ -1774,4 +1774,10 @@ bool osd_tx_was_declared(const struct lu_env *env, struct osd_thandle *oth,
 bool osd_tx_was_declared(const struct lu_env *env, struct osd_thandle *oth,
 			 struct dt_object *dt, enum dt_txn_op op, loff_t p);
 
+#ifdef HAVE_DQUOT_TRANSFER_WITH_USER_NS
+#define osd_dquot_transfer(ns, i, a)	dquot_transfer((ns), (i), (a))
+#else
+#define osd_dquot_transfer(ns, i, a)	dquot_transfer((i), (a))
+#endif
+
 #endif /* _OSD_INTERNAL_H */
