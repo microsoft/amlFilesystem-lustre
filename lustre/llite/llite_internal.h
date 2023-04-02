@@ -70,6 +70,10 @@
 #define d_alias			d_u.d_alias
 #endif
 
+#ifndef HAVE_MNT_IDMAP_ARG
+#define mnt_idmap user_namespace
+#endif
+
 /** Only used on client-side for indicating the tail of dir hash/offset. */
 #define LL_DIR_END_OFF          0x7fffffffffffffffULL
 #define LL_DIR_END_OFF_32BIT    0x7fffffffUL
@@ -279,7 +283,7 @@ struct ll_inode_info {
 	seqlock_t			lli_page_inv_lock;
 };
 
-#ifndef HAVE_USER_NAMESPACE_ARG
+#if !defined(HAVE_USER_NAMESPACE_ARG) && !defined(HAVE_MNT_IDMAP_ARG)
 #define inode_permission(ns, inode, mask)	inode_permission(inode, mask)
 #define generic_permission(ns, inode, mask)	generic_permission(inode, mask)
 #define simple_setattr(ns, de, iattr)		simple_setattr(de, iattr)
@@ -1179,7 +1183,11 @@ void ll_track_file_opens(struct inode *inode);
 extern void ll_rw_stats_tally(struct ll_sb_info *sbi, pid_t pid,
                               struct ll_file_data *file, loff_t pos,
                               size_t count, int rw);
-#if defined(HAVE_USER_NAMESPACE_ARG) || defined(HAVE_INODEOPS_ENHANCED_GETATTR)
+#ifdef HAVE_MNT_IDMAP_ARG
+int ll_getattr(struct mnt_idmap *, const struct path *, struct kstat *, u32,
+	       unsigned int);
+#elif defined(HAVE_USER_NAMESPACE_ARG) \
+   || defined(HAVE_INODEOPS_ENHANCED_GETATTR)
 int ll_getattr(struct user_namespace *mnt_userns, const struct path *path,
 	       struct kstat *stat, u32 request_mask, unsigned int flags);
 #else
@@ -1187,9 +1195,12 @@ int ll_getattr(struct vfsmount *mnt, struct dentry *de, struct kstat *stat);
 #endif /* HAVE_USER_NAMESPACE_ARG */
 int ll_getattr_dentry(struct dentry *de, struct kstat *stat, u32 request_mask,
 		      unsigned int flags, bool foreign);
+
 #ifdef CONFIG_LUSTRE_FS_POSIX_ACL
 struct posix_acl *ll_get_acl(
- #ifdef HAVE_ACL_WITH_DENTRY
+ #ifdef HAVE_MNT_IDMAP_ARG
+	struct mnt_idmap *, struct dentry *, int);
+ #elif defined HAVE_ACL_WITH_DENTRY
 	struct user_namespace *, struct dentry *, int);
  #elif defined HAVE_GET_ACL_RCU_ARG
 	struct inode *inode, int type, bool rcu);
@@ -1197,13 +1208,17 @@ struct posix_acl *ll_get_acl(
 	struct inode *inode, int type);
  #endif /* HAVE_GET_ACL_RCU_ARG */
 
-int ll_set_acl(struct user_namespace *mnt_userns,
- #ifdef HAVE_ACL_WITH_DENTRY
-	       struct dentry *dentry,
+ #ifdef HAVE_MNT_IDMAP_ARG
+int ll_set_acl(struct mnt_idmap *, struct dentry *, struct posix_acl *, int);
  #else
+int ll_set_acl(struct user_namespace *mnt_userns,
+  #ifdef HAVE_ACL_WITH_DENTRY
+	       struct dentry *dentry,
+  #else
 	       struct inode *inode,
- #endif
+  #endif
 	       struct posix_acl *acl, int type);
+ #endif /* HAVE_MNT_IDMAP_ARG */
 #else  /* !CONFIG_LUSTRE_FS_POSIX_ACL */
 #define ll_get_acl NULL
 #define ll_set_acl NULL
@@ -1229,8 +1244,13 @@ int ll_migrate(struct inode *parent, struct file *file,
 	       struct lmv_user_md *lum, const char *name, __u32 flags);
 int ll_get_fid_by_name(struct inode *parent, const char *name,
 		       int namelen, struct lu_fid *fid, struct inode **inode);
-int ll_inode_permission(struct user_namespace *mnt_userns, struct inode *inode,
-			int mask);
+
+#ifdef HAVE_MNT_IDMAP_ARG
+int ll_inode_permission(struct mnt_idmap *, struct inode *inode, int mask);
+#else
+int ll_inode_permission(struct user_namespace *, struct inode *, int mask);
+#endif
+
 int ll_ioctl_check_project(struct inode *inode, __u32 xflags, __u32 projid);
 int ll_ioctl_fsgetxattr(struct inode *inode, unsigned int cmd,
 			unsigned long arg);
@@ -1296,8 +1316,13 @@ int volatile_ref_file(const char *volatile_name, int volatile_len,
 		      struct file **ref_file);
 int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 		   enum op_xvalid xvalid, bool hsm_import);
-int ll_setattr(struct user_namespace *mnt_userns, struct dentry *de,
-	       struct iattr *attr);
+
+#ifdef HAVE_MNT_IDMAP_ARG
+int ll_setattr(struct mnt_idmap *, struct dentry *de, struct iattr *attr);
+#else
+int ll_setattr(struct user_namespace *, struct dentry *de, struct iattr *attr);
+#endif
+
 int ll_statfs(struct dentry *de, struct kstatfs *sfs);
 int ll_statfs_internal(struct ll_sb_info *sbi, struct obd_statfs *osfs,
 		       u32 flags);
