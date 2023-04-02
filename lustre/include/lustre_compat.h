@@ -167,6 +167,12 @@ static inline void truncate_inode_pages_final(struct address_space *map)
 }
 #endif
 
+#ifdef HAVE_U64_CAPABILITY
+#define ll_capability_u32(kcap)		((kcap).val & 0xFFFFFFFF)
+#else
+#define ll_capability_u32(kcap)		((kcap).cap[0])
+#endif
+
 #ifndef HAVE_PTR_ERR_OR_ZERO
 static inline int __must_check PTR_ERR_OR_ZERO(__force const void *ptr)
 {
