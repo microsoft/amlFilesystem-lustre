@@ -4091,6 +4091,30 @@ AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
 	])
 ]) # LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
 
+#
+# LC_HAVE_U64_CAPABILITY
+#
+# linux kernel v6.2-13111-gf122a08b197d
+#   capability: just use a 'u64' instead of a 'u32[2]' array
+#
+AC_DEFUN([LC_SRC_HAVE_U64_CAPABILITY], [
+	LB2_LINUX_TEST_SRC([], [
+		#include <linux/cred.h>
+		#include <linux/capability.h>
+		#include <linux/build_bug.h>
+	],[
+		BUILD_BUG_ON(sizeof(current_cap().val) == sizeof(u64));
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_U64_CAPABILITY], [
+	AC_MSG_CHECKING([if 'kernel_cap_t' has u64 val])
+	LB2_LINUX_TEST_RESULT([inode_ops_getattr_has_mnt_idmap_argument], [
+		AC_DEFINE(HAVE_U64_CAPABILITY, 1,
+			['kernel_cap_t' has u64 val])
+	])
+]) # LC_HAVE_U64_CAPABILITY
+
+#
 # LC_PROG_LINUX
 #
 # Lustre linux kernel checks
@@ -4339,6 +4363,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 6.3
 	LC_SRC_HAVE_MNT_IDMAP_ARG
 	LC_SRC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
+	LC_SRC_HAVE_U64_CAPABILITY
 
 	# 6.4
 	LC_SRC_HAVE_IOV_ITER_IOVEC
@@ -4606,6 +4631,7 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	# 6.3
 	LC_HAVE_MNT_IDMAP_ARG
 	LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
+	LC_HAVE_U64_CAPABILITY
 
 	# 6.4
 	LC_HAVE_IOV_ITER_IOVEC
