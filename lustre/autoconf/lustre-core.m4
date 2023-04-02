@@ -4044,6 +4044,53 @@ AC_DEFUN([LC_HAVE_ACL_WITH_DENTRY], [
 ]) # LC_HAVE_ACL_WITH_DENTRY
 
 #
+# LC_HAVE_MNT_IDMAP_ARG
+#
+# linux kernel v6.2-rc1-4-gb74d24f7a74f
+#   fs: port ->getattr() to pass mnt_idmap
+# linux kernel v6.2-rc1-3-gc1632a0f1120
+#   fs: port ->setattr() to pass mnt_idmap
+#
+AC_DEFUN([LC_SRC_HAVE_MNT_IDMAP_ARG], [
+	LB2_LINUX_TEST_SRC([inode_ops_getattr_has_mnt_idmap_argument], [
+		#include <linux/mount.h>
+		#include <linux/fs.h>
+	],[
+		((struct inode_operations *)1)->getattr((struct mnt_idmap *)NULL,
+							NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_MNT_IDMAP_ARG], [
+	AC_MSG_CHECKING([if 'inode_operations' members have mnt_idmap argument])
+	LB2_LINUX_TEST_RESULT([inode_ops_getattr_has_mnt_idmap_argument], [
+		AC_DEFINE(HAVE_MNT_IDMAP_ARG, 1,
+			['inode_operations' members have mnt_idmap argument])
+	])
+]) # LC_HAVE_MNT_IDMAP_ARG
+
+#
+# LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
+#
+# Linux commit v6.2-rc3-9-g5970e15dbcfe
+#   filelock: move file locking definitions to separate header file
+#
+AC_DEFUN([LC_SRC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
+	LB2_LINUX_TEST_SRC([locks_lock_file_wait_in_filelock], [
+		#include <linux/filelock.h>
+	],[
+		locks_lock_file_wait(NULL, NULL);
+	])
+])
+AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
+	AC_MSG_CHECKING([if 'locks_lock_file_wait' exists in filelock.h])
+	LB2_LINUX_TEST_RESULT([locks_lock_file_wait_in_filelock], [
+		AC_DEFINE(HAVE_LOCKS_LOCK_FILE_WAIT, 1,
+			[kernel has locks_lock_file_wait in filelock.h])
+		AC_DEFINE(HAVE_LINUX_FILELOCK_HEADER, 1,
+			[linux/filelock.h is present])
+	])
+]) # LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
+
 # LC_PROG_LINUX
 #
 # Lustre linux kernel checks
@@ -4288,6 +4335,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 6.2
 	LC_SRC_HAVE_GET_RANDOM_U32_BELOW
 	LC_SRC_HAVE_ACL_WITH_DENTRY
+
+	# 6.3
+	LC_SRC_HAVE_MNT_IDMAP_ARG
+	LC_SRC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
 
 	# 6.4
 	LC_SRC_HAVE_IOV_ITER_IOVEC
@@ -4551,6 +4602,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	# 6.2
 	LC_HAVE_GET_RANDOM_U32_BELOW
 	LC_HAVE_ACL_WITH_DENTRY
+
+	# 6.3
+	LC_HAVE_MNT_IDMAP_ARG
+	LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
 
 	# 6.4
 	LC_HAVE_IOV_ITER_IOVEC
