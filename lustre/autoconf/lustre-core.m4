@@ -3307,7 +3307,7 @@ AC_DEFUN([LC_SRC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS], [
 		struct address_space *mapping = NULL;
 		(void)grab_cache_page_write_begin(mapping, 0, 1);
 	],[-Werror])
-]) 
+])
 AC_DEFUN([LC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS], [
 	AC_MSG_CHECKING([if grab_cache_page_write_begin() has flags argument])
 	LB2_LINUX_TEST_RESULT([grab_cache_page_write_begin_with_flags], [
@@ -3671,7 +3671,6 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_SUNRPC_CACHE_HASH_LOCK_IS_A_SPINLOCK
 
 	# 5.1
-	LC_SRC_HAS_LINUX_SELINUX_ENABLED
 	LC_SRC_HAVE_BVEC_ITER_ALL
 
 	# 5.2
