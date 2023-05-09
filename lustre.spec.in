@@ -87,6 +87,12 @@
 %define _kver %kver
 %endif
 
+%if %{defined lustre_version_sha}
+    %global package_version %{lustre_version_sha}
+%else
+    %global package_version lustre-%{version}
+%endif
+
 %if %{undefined _flavor}
 %if 0%{?suse_version} >= 1310 && %{defined _take_kobj}
 	%global _flavor %(echo %{_kver} | sed -e 's/^.*-//')
@@ -224,7 +230,7 @@ License: GPL-2.0-only AND LGPL-2.1-or-later
 # SUSE needs Group for the kernel_module_package macro
 Group: System/Kernel
 %endif
-Source: lustre-%{version}.tar.gz
+Source: %{package_version}.tar.gz
 Source1: kmp-lustre.preamble
 Source2: kmp-lustre.files
 Source3: kmp-lustre-osd-ldiskfs.preamble
@@ -248,7 +254,7 @@ Source20: kmp-lnet-in-kernel-o2iblnd.files
 Source21: kmp-lustre-osd-wbcfs.preamble
 Source22: kmp-lustre-osd-wbcfs.files
 URL: https://wiki.whamcloud.com/
-BuildRoot: %{_tmppath}/lustre-%{version}-root
+BuildRoot: %{_tmppath}/%{package_version}-root
 %if %{with lustre_modules}
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
@@ -274,7 +280,18 @@ Requires: lustre-osd-mount
 Obsoletes: lustre-server < %{version}
 Provides: lustre-server = %{version}-%{release}
 %endif
+%if %{defined lustre_version_sha}
+Provides: %{lustre_name}
+%else
 Provides: lustre-client = %{version}-%{release}
+%endif
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
+#suse don't support selinux
+BuildRequires: libselinux-devel
+%endif
+%if %{with l_getsepol}
+BuildRequires: pkgconfig(libselinux) openssl-devel
+%endif
 # Lustre modules
 %if %{with lustre_modules}
 #
@@ -686,14 +703,14 @@ This survey tests LNet performance between a group of clients and servers.
 %debug_package
 %endif
 %prep
-%setup -qn lustre-%{version}
+%setup -qn %{package_version}
 sh ./autogen.sh
 ln lustre/ChangeLog ChangeLog-lustre-%{version}
 ln lnet/ChangeLog ChangeLog-lnet-%{version}
 
 %build
 # Set an explicit path to our Linux tree, if we can.
-cd $RPM_BUILD_DIR/lustre-%{version}
+cd $RPM_BUILD_DIR/%{package_version}
 
 # Store the CFLAGS and LDFLAGS that would normally be used in the UTILS_CFLAGS
 # and UTILS_LDFLAGS environment variables so that we use can them when compiling
