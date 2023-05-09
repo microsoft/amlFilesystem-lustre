@@ -223,7 +223,6 @@ Obsoletes: lustre-server < %{version}
 Provides: lustre-server = %{version}-%{release}
 %endif
 %if %{defined lustre_version_sha}
-Obsoletes: lustre-client
 Provides: %{lustre_name}
 %else
 Obsoletes: lustre-client < %{version}
