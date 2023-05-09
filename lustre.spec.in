@@ -77,6 +77,11 @@
 %define _kver %kver
 %endif
 
+%if %{defined lustre_version_sha}
+    %global package_version %{lustre_version_sha}
+%else
+    %global package_version lustre-%{version}
+%endif
 # We set this because kernel_module_package has its own method of identifying
 # which kernel to build against, and it is unlikely that its decision will
 # match with Lustre's method of selecting which kernel to build against.
@@ -188,7 +193,7 @@ Version: %{version}
 Release: 1%{?dist}
 License: GPL
 Group: System Environment/Kernel
-Source: lustre-%{version}.tar.gz
+Source: %{package_version}.tar.gz
 Source1: kmp-lustre.preamble
 Source2: kmp-lustre.files
 Source3: kmp-lustre-osd-ldiskfs.preamble
@@ -199,7 +204,7 @@ Source7: kmp-lustre-tests.files
 Source8: find-provides
 Source9: find-provides.ksyms
 URL: https://wiki.whamcloud.com/
-BuildRoot: %{_tmppath}/lustre-%{version}-root
+BuildRoot: %{_tmppath}/%{package_version}-root
 %if %{with lustre_modules}
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
@@ -225,7 +230,12 @@ Requires: lustre-osd-mount
 Obsoletes: lustre-server < %{version}
 Provides: lustre-server = %{version}-%{release}
 %endif
+%if %{defined lustre_version_sha}
+Provides: %{lustre_name}
+%else
+Obsoletes: lustre-client < %{version}
 Provides: lustre-client = %{version}-%{release}
+%endif
 %if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
 #suse don't support selinux
 BuildRequires: libselinux-devel
@@ -443,14 +453,14 @@ clients in order to run
 %debug_package
 %endif
 %prep
-%setup -qn lustre-%{version}
+%setup -qn %{package_version}
 sh ./autogen.sh
 ln lustre/ChangeLog ChangeLog-lustre
 ln lnet/ChangeLog ChangeLog-lnet
 
 %build
 # Set an explicit path to our Linux tree, if we can.
-cd $RPM_BUILD_DIR/lustre-%{version}
+cd $RPM_BUILD_DIR/%{package_version}
 
 # Store the CFLAGS and LDFLAGS that would normally be used in the UTILS_CFLAGS
 # and UTILS_LDFLAGS environment variables so that we use can them when compiling
