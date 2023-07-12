@@ -258,9 +258,8 @@ debs: undef.h debs_common
 	export SRC_GIT_HASH=$$(git log --oneline | head -1 | cut -d' ' -f1); \
 	lversion=$$(echo @VERSION@ | tr '_' '-'); \
 	cversion=$$(sed -ne '1s/^lustre (\(.*\)-[0-9][0-9]*).*$$/\1/p' debian/changelog); \
-	oscode=$$(lsb_release -cs); \
 	if [ "$$lversion" != "$$cversion" ]; then \
-		echo -e "1i\nlustre ($$lversion-1~$$oscode) unstable; urgency=low\n\n  * Automated changelog entry update\n\n -- Andreas Dilger <adilger@whamcloud.com>  $$(date -R)\n\n.\nwq" | ed debian/changelog; \
+		echo -e "1i\nlustre ($$lversion-1) unstable; urgency=low\n\n  * Automated changelog entry update\n\n -- Andreas Dilger <adilger@whamcloud.com>  $$(date -R)\n\n.\nwq" | ed debian/changelog; \
 	fi; \
 	rm -rf debs; \
 	if test "x@ENABLE_SERVER@" = "xyes"; then \
@@ -373,9 +372,8 @@ dkms-debs: undef.h debs_common
 	export SRC_GIT_HASH=$$(git log --oneline | head -1 | cut -d' ' -f1); \
 	lversion=$$(echo @VERSION@ | tr '_' '-'); \
 	cversion=$$(sed -ne '1s/^lustre (\(.*\)-[0-9][0-9]*).*$$/\1/p' debian/changelog); \
-	oscode=$$(lsb_release -cs); \	
 	if [ "$$lversion" != "$$cversion" ]; then \
-		echo -e "1i\nlustre ($$lversion-1~$$oscode) unstable; urgency=low\n\n  * Automated changelog entry update\n\n -- Brian J. Murrell <brian@interlinx.bc.ca>  $$(date -R)\n\n.\nwq" | ed debian/changelog; \
+		echo -e "1i\nlustre ($$lversion-1) unstable; urgency=low\n\n  * Automated changelog entry update\n\n -- Brian J. Murrell <brian@interlinx.bc.ca>  $$(date -R)\n\n.\nwq" | ed debian/changelog; \
 	fi; \
 	rm -rf debs; \
 	export DEB_BUILD_PROFILES="client"; \
