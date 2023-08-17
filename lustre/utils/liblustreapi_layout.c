@@ -554,7 +554,7 @@ struct llapi_layout *llapi_layout_get_by_xattr(void *lov_xattr,
 		else if (v1->lmm_pattern == (LOV_PATTERN_RAID0 |
 					 LOV_PATTERN_OVERSTRIPING))
 			comp->llc_pattern = LLAPI_LAYOUT_OVERSTRIPING;
-		else if (v1->lmm_pattern == LOV_PATTERN_MDT)
+		else if (v1->lmm_pattern & LOV_PATTERN_MDT)
 			comp->llc_pattern = LLAPI_LAYOUT_MDT;
 		else
 			/* Lustre only supports RAID0, overstripping
@@ -3280,8 +3280,8 @@ static int llapi_layout_sanity_cb(struct llapi_layout *layout,
 		goto out_err;
 
 	/* DoM sanity checks */
-	if (comp->llc_pattern == LLAPI_LAYOUT_MDT ||
-	    comp->llc_pattern == LOV_PATTERN_MDT) {
+	if (!(comp->llc_pattern & LLAPI_LAYOUT_INVALID) &&
+	    (comp->llc_pattern & (LLAPI_LAYOUT_MDT | LOV_PATTERN_MDT))) {
 		/* DoM components can't be extension components */
 		if (comp->llc_flags & LCME_FL_EXTENSION) {
 			args->lsa_rc = LSE_DOM_EXTENSION;
@@ -3471,7 +3471,8 @@ int llapi_layout_dom_size(struct llapi_layout *layout, uint64_t *size)
 	if (rc)
 		return -errno;
 
-	if (pattern != LOV_PATTERN_MDT && pattern != LLAPI_LAYOUT_MDT) {
+	if ((pattern & LLAPI_LAYOUT_INVALID) ||
+	    !(pattern & (LOV_PATTERN_MDT | LLAPI_LAYOUT_MDT))) {
 		*size = 0;
 		return 0;
 	}
