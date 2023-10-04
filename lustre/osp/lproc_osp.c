@@ -777,6 +777,7 @@ static ssize_t lfsck_max_rpcs_in_flight_store(struct kobject *kobj,
 					    dd_kobj);
 	struct lu_device *lu = dt2lu_dev(dt);
 	struct obd_device *obd = lu->ld_obd;
+	struct obd_import *imp, *imp0;
 	unsigned int val;
 	int rc;
 
@@ -784,8 +785,17 @@ static ssize_t lfsck_max_rpcs_in_flight_store(struct kobject *kobj,
 	if (rc)
 		return rc;
 
+	with_imp_locked(obd, imp0, rc)
+		imp = class_import_get(imp0);
+	if (rc)
+		return rc;
+
 	rc = obd_set_max_rpcs_in_flight(&obd->u.cli, val);
-	return rc ? rc : count;
+	if (rc)
+		count = rc;
+	class_import_put(imp);
+
+	return count;
 }
 LUSTRE_RW_ATTR(lfsck_max_rpcs_in_flight);
 
