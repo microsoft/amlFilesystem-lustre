@@ -101,6 +101,7 @@ static ssize_t max_rpcs_in_flight_store(struct kobject *kobj,
 {
 	struct obd_device *obd = container_of(kobj, struct obd_device,
 					      obd_kset.kobj);
+	struct obd_import *imp, *imp0;
 	unsigned int val;
 	int rc;
 
@@ -108,9 +109,15 @@ static ssize_t max_rpcs_in_flight_store(struct kobject *kobj,
 	if (rc)
 		return rc;
 
+	with_imp_locked(obd, imp0, rc)
+		imp = class_import_get(imp0);
+	if (rc)
+		return rc;
+
 	rc = obd_set_max_rpcs_in_flight(&obd->u.cli, val);
 	if (rc)
 		count = rc;
+	class_import_put(imp);
 
 	return count;
 }
@@ -135,6 +142,7 @@ static ssize_t max_mod_rpcs_in_flight_store(struct kobject *kobj,
 {
 	struct obd_device *obd = container_of(kobj, struct obd_device,
 					      obd_kset.kobj);
+	struct obd_import *imp, *imp0;
 	u16 val;
 	int rc;
 
@@ -142,9 +150,15 @@ static ssize_t max_mod_rpcs_in_flight_store(struct kobject *kobj,
 	if (rc)
 		return rc;
 
+	with_imp_locked(obd, imp0, rc)
+		imp = class_import_get(imp0);
+	if (rc)
+		return rc;
+
 	rc = obd_set_max_mod_rpcs_in_flight(&obd->u.cli, val);
 	if (rc)
 		count = rc;
+	class_import_put(imp);
 
 	return count;
 }
