@@ -3349,7 +3349,7 @@ test_152() {
 }
 run_test 152 "QoS object allocation could be awakened in case of OST failover"
 
-test_154() {
+test_154a() {
 	(( MDS1_VERSION >= $(version_code 2.15.8) )) ||
 		skip "need MDS >= 2.15.8 for llog fix"
 
@@ -3382,7 +3382,33 @@ test_154() {
 	do_facet mds1 $LCTL get_param mdt.$FSNAME-MDT0000.recovery_status | \
 		grep -w COMPLETE || error "Recovery was blocked"
 }
-run_test 154 "corruption update llog can be skipped"
+run_test 154a "corruption update llog can be skipped"
+
+test_154b() {
+	(( MDS1_VERSION >= $(version_code 2.15.8) )) ||
+		skip "need MDS >= 2.15.8 for llog fix"
+
+	[ $MDSCOUNT -lt 2 ] && skip "needs >= 2 MDTs"
+
+	stop mds1
+
+	stack_trap "do_facet mds1 $LCTL set_param fail_loc=0"
+#define OBD_FAIL_TGT_RECOVERY_CONNECT 0x724
+	do_facet mds1 $LCTL set_param fail_loc=0x0724 fail_val=5
+	local OPTS="$MDS_MOUNT_OPTS -o abort_recov"
+	start mds1 $(mdsdevname 1) $OPTS ||
+		error "start MDS with abort_recovery failed"
+
+	echo waiting mds1 recovery....
+	wait_recovery_complete mds1 30
+	do_facet mds1 $LCTL get_param mdt.$FSNAME-MDT0000.recovery_status | \
+		grep -w COMPLETE || error "Recovery was blocked"
+
+	mount_client $MOUNT2
+	umount_client $MOUNT2
+	remount_client $MOUNT
+}
+run_test 154b "restore update llog after failed recovery"
 
 complete $SECONDS
 check_and_cleanup_lustre
