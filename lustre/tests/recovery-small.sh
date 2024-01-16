@@ -136,6 +136,11 @@ run_test 9 "pause bulk on OST (bug 1420)"
 test_10a() {
 	local before=$(date +%s)
 	local evict
+	local lru_param="ldlm.namespaces.*mdc*.lru_max_age"
+	local old_max_age=($($LCTL get_param -n $lru_param))
+
+	$LCTL set_param $lru_param=3900s
+	stack_trap "$LCTL set_param $lru_param=$old_max_age"
 
 	do_facet client "stat $DIR > /dev/null"  ||
 		error "failed to stat $DIR: $?"
@@ -146,7 +151,7 @@ test_10a() {
 	client_reconnect
 	evict=$(do_facet client $LCTL get_param mdc.$FSNAME-MDT*.state |
 	  awk -F"[ [,]" '/EVICTED ]$/ { if (mx<$5) {mx=$5;} } END { print mx }')
-	[ ! -z "$evict" ] && [[ $evict -gt $before ]] ||
+	[[ -n "$evict" ]] && (( $evict > $before )) ||
 		(do_facet client $LCTL get_param mdc.$FSNAME-MDT*.state;
 		    error "no eviction: $evict before:$before")
 
