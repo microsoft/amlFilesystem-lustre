@@ -1340,6 +1340,70 @@ test_33() { # LU-15935
 }
 run_test 33 "Check for OBD_INCOMPAT_MULTI_RPCS in last_rcvd after abort_recovery"
 
+test_100() {
+	(( $MDSCOUNT >= 2 )) || skip "needs >= 2 MDTs"
+	(( $MDS1_VERSION >= $(version_code 2.17.59.127) )) ||
+		skip "need MDS >= 2.17.59.127 for migrate/unlink race fix"
+
+	local iterations=${REPLAY_DUAL_34_COUNT:-100}
+	local td=$DIR/$tdir
+	local tf=$td/$tfile
+	local ts=$td/$tdir.sub
+	local tl=$ts/$tfile.link
+	local tl2=${tl/$DIR/$DIR2}
+
+	mount_client $MOUNT2 || error "mount_client on $MOUNT2 failed"
+	stack_trap "umount $MOUNT2" EXIT
+	stack_trap "do_facet mds1 $LCTL set_param fail_loc=0"
+
+	for ((i = 1; i <= $iterations; i++ )); do
+		echo "=== Iteration $i ==="
+		rm -rf $td
+		mkdir_on_mdt0 $td || error "can't mkdir $td"
+		touch $tf || error "can't touch $tf"
+		$LFS mkdir -i0 $ts || error "can't mkdir $ts"
+		echo -n "== $ts on mdt"
+		$LFS getstripe -m $ts
+		ln $tf $tl || error "can't link $tl"
+
+		# hold the migration of $tl after its lookup, before the
+		# parent locks are taken
+		#define OBD_FAIL_MIGRATE_LOOKUP_DELAY	0x1804
+		do_facet mds1 "$LCTL set_param fail_loc=0x80001804"
+
+		$LFS migrate -m1 $ts &
+		local migrate_pid=$!
+
+		wait_update_facet mds1 "$LCTL get_param -n fail_loc" \
+			"$((0xc0001804))" 30 ||
+			error "migration was not held in iteration $i"
+
+		rm -f $tl2 &
+		local unlink_pid=$!
+
+		# Wait for both operations to complete
+		wait $migrate_pid
+		wait $unlink_pid ||
+			error "unlink failed in iteration $i"
+
+		[[ ! -e $tl2 ]] ||
+			error "$tl2 still exists in iteration $i"
+		stat $tf > /dev/null ||
+			error "$tf was lost in iteration $i"
+
+		cancel_lru_locks mdc
+		if ls -lR $td | grep -q '???'; then
+			do_facet mds1 "$LCTL set_param fail_loc=0"
+			cancel_lru_locks mdc
+			$LFS rm_entry $tf || echo "error removing entry $tf"
+			rmdir $ts || echo "error removing $ts"
+			rmdir $td || echo "error removing $td"
+			error "Filesystem corruption detected in iteration $i"
+		fi
+	done
+}
+run_test 100 "migrate vs unlink race"
+
 test_200() {
 	(( CLIENTCOUNT >= 2 )) ||
 		skip "Need two or more clients, have $CLIENTCOUNT"
