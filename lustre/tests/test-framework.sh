@@ -493,6 +493,9 @@ init_test_env() {
 	if ! echo $PATH | grep -q $LUSTRE/../lustre-iokit/sgpdd-survey; then
 		export PATH=$LUSTRE/../lustre-iokit/sgpdd-survey:$PATH
 	fi
+	if ! echo $PATH | grep -q $LUSTRE/../lnet/utils; then
+		export PATH=$LUSTRE/../lnet/utils:$PATH
+	fi
 	export LST=${LST:-"$LUSTRE/../lnet/utils/lst"}
 	[ ! -f "$LST" ] && export LST=$(which lst)
 	export LSTSH=${LSTSH:-"$LUSTRE/../lustre-iokit/lst-survey/lst.sh"}
