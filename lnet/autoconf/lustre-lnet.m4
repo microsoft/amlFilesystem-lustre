@@ -720,6 +720,28 @@ EXTRA_KCFLAGS="$tmp_flags"
 ]) # LN_CONFIG_SOCK_CREATE_KERN
 
 #
+# LN_CONFIG_SOCK_NOT_OWNED_BY_ME
+#
+# Linux upstream v6.11-rc3-g151c9c724d05d5b0d changes TCP socket orphan
+# cleanup, requiring a change in ksocklnd if present. This has been back-ported
+# to 4.* and 5.* Linux distributions.
+#
+AC_DEFUN([LN_CONFIG_SOCK_NOT_OWNED_BY_ME], [
+tmp_flags="$EXTRA_KCFLAGS"
+EXTRA_KCFLAGS="-Werror"
+LB_CHECK_COMPILE([if Linux kernel has 'sock_not_owned_by_me'],
+sock_not_owned_by_me, [
+	#include <net/sock.h>
+],[
+	sock_not_owned_by_me((const struct sock *)0);
+],[
+	AC_DEFINE(HAVE_SOCK_NOT_OWNED_BY_ME, 1,
+		[sock_not_owned_by_me is defined in sock.h])
+])
+EXTRA_KCFLAGS="$tmp_flags"
+]) # LN_CONFIG_SOCK_NOT_OWNED_BY_ME
+
+#
 # LN_CONFIG_SK_DATA_READY
 #
 # 3.15 for struct sock the *sk_data_ready() field only takes one argument now
@@ -912,6 +934,7 @@ AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 AC_DEFUN([LN_PROG_LINUX_SRC], [])
 AC_DEFUN([LN_PROG_LINUX_RESULTS], [])
 
+
 #
 # LN_PROG_LINUX
 #
@@ -930,6 +953,7 @@ LN_EXPORT_KMAP_TO_PAGE
 LN_CONFIG_SK_DATA_READY
 # 4.x
 LN_CONFIG_SOCK_CREATE_KERN
+LN_CONFIG_SOCK_NOT_OWNED_BY_ME
 # 4.14
 LN_HAVE_HYPERVISOR_IS_TYPE
 LN_HAVE_ORACLE_OFED_EXTENSIONS
