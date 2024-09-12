@@ -23,7 +23,7 @@
 
 # LUTF Turn off brp-python-precompile script as we don't want the python files
 # to be compiled on installation
-%global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g')
+%global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g' | sed -e 's!/usr/lib[^[:space:]]*/brp-strip.*[[:space:]].*$!!g')
 
 # By default both gss and gss keyring are disabled.
 # gss keyring requires the gss core. If the builder
@@ -574,7 +574,13 @@ if ! grep -q define[[:space:]]*HAVE_SERVER_SUPPORT config.h 2> /dev/null; then
 fi
 %endif
 
-make %{?_smp_mflags} -s %{?make_args}
+%if %{defined rebuild}
+    echo "Rebuilding, skipping make"
+    echo "rpmbuild_signed_path: %{rpmbuild_signed_path}"
+    cp -r %{rpmbuild_signed_path}/BUILD/* $RPM_BUILD_DIR
+%else
+    make %{?_smp_mflags} -s %{?make_args}
+%endif
 
 %if %{with mpi}
 %if "%{mpi_name}" == "mpich"
@@ -598,7 +604,13 @@ make %{?_smp_mflags} -s %{?make_args}
 # mpi
 %endif
 
-make install DESTDIR=$RPM_BUILD_ROOT
+%if %{defined rebuild}
+    echo "Rebuilding, skipping make install"
+    echo "rpmbuild_signed_path: %{rpmbuild_signed_path}"
+    cp -r %{rpmbuild_signed_path}/BUILDROOT/* $(dirname $RPM_BUILD_ROOT) # Need to go one level higher than RPM_BUILD_ROOT
+%else
+    make install DESTDIR=$RPM_BUILD_ROOT
+%endif
 
 %if %{with lustre_modules}
 # RHEL's kernel_module_path macro expects that all the modules
@@ -609,7 +621,12 @@ make install DESTDIR=$RPM_BUILD_ROOT
 # Lustre's build system.  This is not expected to bother SLES's
 # kernel_module_path macro.
 basemodpath=$RPM_BUILD_ROOT%{modules_fs_path}/%{name}
-%{__install} -D -m 0644 ${PWD}/Module.symvers %{buildroot}/Module.symvers
+
+%if %{defined rebuild}
+    echo "Rebuilding, skipping Module.symvers install"
+%else
+    %{__install} -D -m 0644 ${PWD}/Module.symvers %{buildroot}/Module.symvers
+%endif
 %if %{with ldiskfs}
 mkdir -p $basemodpath-osd-ldiskfs/fs
 mv $basemodpath/fs/osd_ldiskfs.ko $basemodpath-osd-ldiskfs/fs/osd_ldiskfs.ko
