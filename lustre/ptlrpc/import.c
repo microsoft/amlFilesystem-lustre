@@ -552,9 +552,11 @@ static int import_select_connection(struct obd_import *imp)
 		}
 	}
 	/* all connections are unreachable ATM, get just first in list */
-	if (!lru_conn)
+	if (!lru_conn) {
+		tried_all = false;
 		lru_conn = list_entry(imp->imp_conn_list.next,
 				      struct obd_import_conn, oic_item);
+	}
 
 	/* no ready connections or all are tried in this round */
 	if (!imp_conn)
