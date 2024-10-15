@@ -1503,7 +1503,7 @@ EXPORT_SYMBOL(LNetPrimaryNID);
 
 int LNetPeerDiscovered(struct lnet_nid *nid)
 {
-	int cpt, rc;
+	int rc;
 	struct lnet_peer *lp;
 
 	if (nid_is_lo0(nid))
@@ -1516,7 +1516,7 @@ int LNetPeerDiscovered(struct lnet_nid *nid)
 		return -EHOSTUNREACH;
 	}
 
-	cpt = lnet_net_lock_current();
+	lnet_net_lock(LNET_LOCK_EX);
 	spin_lock(&lp->lp_lock);
 	if (lp->lp_state & LNET_PEER_NO_DISCOVERY ||
 	    (lp->lp_state & LNET_PEER_DISCOVERED &&
@@ -1535,7 +1535,7 @@ int LNetPeerDiscovered(struct lnet_nid *nid)
 
 	/* Drop refcount from lookup */
 	lnet_peer_decref_locked(lp);
-	lnet_net_unlock(cpt);
+	lnet_net_unlock(LNET_LOCK_EX);
 
 	CDEBUG(D_NET, "Peer NID %s is %sdiscovered: rc = %d\n",
 	       libcfs_nidstr(nid), rc > 0 ? "" : "not ", rc);
