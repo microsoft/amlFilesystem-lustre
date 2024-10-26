@@ -720,6 +720,27 @@ EXTRA_KCFLAGS="$tmp_flags"
 ]) # LN_CONFIG_SOCK_CREATE_KERN
 
 #
+# LN_CONFIG_SOCK_INUSE_ADD
+#
+# Linux v5.17-rc1-gd477eb900484 added helper function sock_inuse_add()
+# for socket statistics.
+#
+AC_DEFUN([LN_CONFIG_SOCK_INUSE_ADD], [
+tmp_flags="$EXTRA_KCFLAGS"
+EXTRA_KCFLAGS="-Werror"
+LB_CHECK_COMPILE([if 'sock_inuse_add()' is available],
+sock_inuse_add, [
+	#include <net/sock.h>
+],[
+	sock_inuse_add((struct net*)0, 0);
+],[
+	AC_DEFINE(HAVE_SOCK_INUSE_ADD, 1,
+		[sock_inuse_add() is available])
+])
+EXTRA_KCFLAGS="$tmp_flags"
+]) # LN_CONFIG_SOCK_INUSE_ADD
+
+#
 # LN_CONFIG_SOCK_NOT_OWNED_BY_ME
 #
 # Linux upstream v6.11-rc3-g151c9c724d05d5b0d changes TCP socket orphan
@@ -953,6 +974,7 @@ LN_EXPORT_KMAP_TO_PAGE
 LN_CONFIG_SK_DATA_READY
 # 4.x
 LN_CONFIG_SOCK_CREATE_KERN
+LN_CONFIG_SOCK_INUSE_ADD
 LN_CONFIG_SOCK_NOT_OWNED_BY_ME
 # 4.14
 LN_HAVE_HYPERVISOR_IS_TYPE
