@@ -2671,6 +2671,26 @@ static void check_hsm_user_import(void)
 	CHECK_MEMBER(hsm_user_import, hui_archive_id);
 }
 
+static void check_close_data(void)
+{
+	BLANK_LINE();
+	CHECK_STRUCT(close_data);
+	CHECK_MEMBER(close_data, cd_handle);
+	CHECK_MEMBER(close_data, cd_fid);
+	CHECK_MEMBER(close_data, cd_data_version);
+	CHECK_MEMBER(close_data, cd_reserved);
+	CHECK_MEMBER(close_data, cd_resync);
+	CHECK_MEMBER(close_data, cd_mirror_id);
+	CHECK_MEMBER(close_data, cd_merge_flags);
+	CHECK_MEMBER(close_data, cd_archive_id);
+	CHECK_MEMBER(close_data, cd_data_version2);
+
+	CHECK_VALUE(CD_MERGE_STALE);
+
+	COMMENT("all merge flags must fit into the 16-bit cd_merge_flags");
+	CHECK_BUILD_TEST(CD_MERGE_FLAG_MAX > 0xffff);
+}
+
 static void check_netobj_s(void)
 {
 	BLANK_LINE();
@@ -3910,6 +3930,7 @@ main(int argc, char **argv)
 	check_hsm_request();
 	check_hsm_user_request();
 	check_hsm_user_import();
+	check_close_data();
 
 	CHECK_COND_STARTN(HAVE_NATIVE_LINUX_CLIENT);
 	check_netobj_s();

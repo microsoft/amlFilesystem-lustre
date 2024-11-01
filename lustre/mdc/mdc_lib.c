@@ -544,7 +544,9 @@ static void mdc_close_intent_pack(struct req_capsule *pill,
 	data->cd_data_version = op_data->op_data_version;
 	data->cd_fid = op_data->op_fid2;
 
-	if (bias & MDS_CLOSE_LAYOUT_SPLIT) {
+	if (bias & MDS_CLOSE_LAYOUT_MERGE) {
+		data->cd_merge_flags = op_data->op_merge_flags;
+	} else if (bias & MDS_CLOSE_LAYOUT_SPLIT) {
 		data->cd_mirror_id = op_data->op_mirror_id;
 	} else if (bias & MDS_CLOSE_RESYNC_DONE) {
 		struct close_data_resync_done *sync = &data->cd_resync;

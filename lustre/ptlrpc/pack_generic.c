@@ -3149,6 +3149,8 @@ void lustre_swab_close_data_special(struct close_data *cd, enum mds_op_bias b)
 		lustre_swab_close_data_resync_done(&cd->cd_resync);
 	else if (b & MDS_CLOSE_LAYOUT_SPLIT)
 		__swab16s(&cd->cd_mirror_id);
+	else if (b & MDS_CLOSE_LAYOUT_MERGE)
+		__swab16s(&cd->cd_merge_flags);
 	else if (b & MDS_PCC_ATTACH)
 		swab32s(&cd->cd_archive_id);
 	else if (b & MDS_CLOSE_LAYOUT_SWAP)

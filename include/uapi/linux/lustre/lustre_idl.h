@@ -3842,6 +3842,12 @@ struct close_data_resync_done {
 	__u32	resync_ids_inline[INLINE_RESYNC_ARRAY_SIZE];
 };
 
+enum cd_merge_flags {
+	CD_MERGE_STALE		= 0x0001,
+	/* Sentinel to ensure merge flags fit into 16-bit cd_merge_flags */
+	CD_MERGE_FLAG_MAX
+};
+
 struct close_data {
 	struct lustre_handle	cd_handle;
 	struct lu_fid		cd_fid;
@@ -3851,6 +3857,8 @@ struct close_data {
 		struct close_data_resync_done	cd_resync;
 		/* split close */
 		__u16				cd_mirror_id;
+		/* merge */
+		__u16				cd_merge_flags;
 		/* PCC release */
 		__u32				cd_archive_id;
 		/* migrate swap layout */

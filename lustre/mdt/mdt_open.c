@@ -2375,7 +2375,9 @@ static int mdt_close_handle_layouts(struct mdt_thread_info *info,
 			mrd.mrd_obj = NULL;
 		}
 
-		if (ma->ma_attr_flags & MDS_CLOSE_LAYOUT_SPLIT) {
+		if (ma->ma_attr_flags & MDS_CLOSE_LAYOUT_MERGE) {
+			mrd.mrd_merge_flags = data->cd_merge_flags;
+		} else if (ma->ma_attr_flags & MDS_CLOSE_LAYOUT_SPLIT) {
 			mrd.mrd_mirror_id = data->cd_mirror_id;
 			/* set a small enough blocks in the SoM */
 			ma->ma_attr.la_blocks >>= 1;

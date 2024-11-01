@@ -2266,7 +2266,7 @@ out:
 }
 
 static int mirror_extend_layout(char *name, struct llapi_layout *m_layout,
-				bool inherit, uint32_t comp_flags,
+				bool inherit, bool resync, uint32_t comp_flags,
 				enum llapi_migration_flags migration_flags,
 				unsigned long long bandwidth_bytes_sec,
 				long stats_interval_sec)
@@ -2320,11 +2320,13 @@ static int mirror_extend_layout(char *name, struct llapi_layout *m_layout,
 	if (stats_interval_sec)
 		printf("%s:\n", name);
 
-	rc = migrate_nonblock(fd_src, fd_dst, bandwidth_bytes_sec,
-			      stats_interval_sec, NULL, &err_str);
-	if (rc < 0) {
-		llapi_lease_release(fd_src);
-		goto out;
+	if (resync) {
+		rc = migrate_nonblock(fd_src, fd_dst, bandwidth_bytes_sec,
+				      stats_interval_sec, NULL, &err_str);
+		if (rc < 0) {
+			llapi_lease_release(fd_src);
+			goto out;
+		}
 	}
 
 	rc = migrate_set_timestamps(fd_src, &st);
@@ -2341,6 +2343,9 @@ static int mirror_extend_layout(char *name, struct llapi_layout *m_layout,
 	}
 	data->lil_mode = LL_LEASE_UNLCK;
 	data->lil_flags = LL_LEASE_LAYOUT_MERGE;
+	/* whether to merge a stale mirror */
+	if (!resync)
+		data->lil_flags |= LL_LEASE_ALLOW_STALE;
 	data->lil_count = 1;
 	data->lil_ids[0] = fd_dst;
 	rc = llapi_lease_set(fd_src, data);
@@ -2386,6 +2391,7 @@ static int mirror_extend(char *fname, struct mirror_args *mirror_list,
 				rc = mirror_extend_layout(fname,
 							mirror_list->m_layout,
 							mirror_list->m_inherit,
+							true,
 							mirror_list->m_flags,
 							migration_flags,
 							bandwidth_bytes_sec,

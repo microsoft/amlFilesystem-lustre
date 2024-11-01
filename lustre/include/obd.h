@@ -1087,6 +1087,8 @@ struct md_op_data {
 	 * order there may be a race with creation by others.
 	 */
 	bool			op_new_layout;
+	/* merge flags, matches close_data::cd_merge_flags */
+	__u16			op_merge_flags;
 	/* used to access dir with bash hash */
 	__u32			op_stripe_index;
 	/* Archive ID for PCC attach */
