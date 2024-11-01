@@ -40,9 +40,10 @@
 #include "llite_internal.h"
 #include "vvp_internal.h"
 
-struct split_param {
-	struct inode	*sp_inode;
-	__u16		sp_mirror_id;
+struct mirror_rejig_param {
+	struct inode	*mrp_inode;
+	__u16		 mrp_mirror_id; /* mirror split */
+	__u16		 mrp_merge_flags; /* match close_data::cd_merge_flags */
 };
 
 struct pcc_param {
@@ -165,23 +166,23 @@ static int ll_close_inode_openhandle(struct inode *inode,
 	ll_prepare_close(inode, op_data, och);
 	switch (bias) {
 	case MDS_CLOSE_LAYOUT_MERGE:
-		/* merge blocks from the victim inode */
-		op_data->op_attr_blocks += ((struct inode *)data)->i_blocks;
-		op_data->op_attr.ia_valid |= ATTR_SIZE;
-		op_data->op_xvalid |= OP_XVALID_BLOCKS;
-		fallthrough;
-	case MDS_CLOSE_LAYOUT_SPLIT: {
-		struct split_param *sp = data;
+	case MDS_CLOSE_LAYOUT_SPLIT:
+	{
+		struct mirror_rejig_param *mrp = data;
 
 		LASSERT(data != NULL);
 		op_data->op_bias |= bias;
 		op_data->op_data_version = 0;
 		op_data->op_lease_handle = och->och_lease_handle;
-		if (bias == MDS_CLOSE_LAYOUT_SPLIT) {
-			op_data->op_fid2 = *ll_inode2fid(sp->sp_inode);
-			op_data->op_mirror_id = sp->sp_mirror_id;
-		} else { /* MDS_CLOSE_LAYOUT_MERGE */
-			op_data->op_fid2 = *ll_inode2fid(data);
+		op_data->op_fid2 = *ll_inode2fid(mrp->mrp_inode);
+		if (bias == MDS_CLOSE_LAYOUT_MERGE) {
+			/* merge blocks from the victim inode */
+			op_data->op_attr_blocks += mrp->mrp_inode->i_blocks;
+			op_data->op_attr.ia_valid |= ATTR_SIZE;
+			op_data->op_xvalid |= OP_XVALID_BLOCKS;
+			op_data->op_merge_flags = mrp->mrp_merge_flags;
+		} else /* if (bias == MDS_CLOSE_LAYOUT_SPLIT) */ {
+			op_data->op_mirror_id = mrp->mrp_mirror_id;
 		}
 		break;
 	}
@@ -4434,7 +4435,7 @@ static long ll_file_unlock_lease(struct file *file, struct ll_ioc_lease *ioc,
 	struct ll_file_data *lfd = file->private_data;
 	struct ll_inode_info *lli = ll_i2info(inode);
 	struct obd_client_handle *och = NULL;
-	struct split_param sp;
+	struct mirror_rejig_param mrp;
 	struct pcc_param param;
 	bool lease_broken = false;
 	enum mds_open_flags open_flags = MDS_FMODE_CLOSED;
@@ -4459,74 +4460,91 @@ static long ll_file_unlock_lease(struct file *file, struct ll_ioc_lease *ioc,
 
 	open_flags = och->och_flags;
 
-	switch (ioc->lil_flags) {
+	if (ioc->lil_flags & LL_LEASE_ALLOW_STALE) {
+		/* a modifier for layout merge only */
+		if ((ioc->lil_flags & ~LL_LEASE_ALLOW_STALE) !=
+		    LL_LEASE_LAYOUT_MERGE)
+			GOTO(out_lease_close, rc2 = -EINVAL);
+
+		/* an older MDT ignores cd_merge_flags and would merge the
+		 * mirror as up to date
+		 */
+		if (!(exp_connect_flags2(ll_i2mdexp(inode)) &
+		      OBD_CONNECT2_FLR_EC))
+			GOTO(out_lease_close, rc2 = -EOPNOTSUPP);
+	}
+
+	switch (ioc->lil_flags & ~LL_LEASE_ALLOW_STALE) {
 	case LL_LEASE_RESYNC_DONE:
 		if (ioc->lil_count > IOC_IDS_MAX)
-			GOTO(out_lease_close, rc = -EINVAL);
+			GOTO(out_lease_close, rc2 = -EINVAL);
 
 		data_size = offsetof(typeof(*ioc), lil_ids[ioc->lil_count]);
 		OBD_ALLOC(data, data_size);
 		if (!data)
-			GOTO(out_lease_close, rc = -ENOMEM);
+			GOTO(out_lease_close, rc2 = -ENOMEM);
 
 		if (copy_from_user(data, uarg, data_size))
-			GOTO(out_lease_close, rc = -EFAULT);
+			GOTO(out_lease_close, rc2 = -EFAULT);
 
 		bias = MDS_CLOSE_RESYNC_DONE;
 		break;
 	case LL_LEASE_LAYOUT_MERGE:
 		if (ioc->lil_count != 1)
-			GOTO(out_lease_close, rc = -EINVAL);
+			GOTO(out_lease_close, rc2 = -EINVAL);
 
 		uarg += sizeof(*ioc);
 		if (copy_from_user(&fdv, uarg, sizeof(fdv)))
-			GOTO(out_lease_close, rc = -EFAULT);
+			GOTO(out_lease_close, rc2 = -EFAULT);
 
 		layout_file = fget(fdv);
 		if (!layout_file)
-			GOTO(out_lease_close, rc = -EBADF);
+			GOTO(out_lease_close, rc2 = -EBADF);
 
 		if ((file->f_flags & O_ACCMODE) == O_RDONLY ||
 				(layout_file->f_flags & O_ACCMODE) == O_RDONLY)
-			GOTO(out_lease_close, rc = -EPERM);
+			GOTO(out_lease_close, rc2 = -EPERM);
 
-		data = file_inode(layout_file);
+		mrp.mrp_inode = file_inode(layout_file);
+		mrp.mrp_merge_flags = ioc->lil_flags & LL_LEASE_ALLOW_STALE ?
+				      CD_MERGE_STALE : 0;
+		data = &mrp;
 		bias = MDS_CLOSE_LAYOUT_MERGE;
 		break;
 	case LL_LEASE_LAYOUT_SPLIT: {
 		__u32 mirror_id;
 
 		if (ioc->lil_count != 2)
-			GOTO(out_lease_close, rc = -EINVAL);
+			GOTO(out_lease_close, rc2 = -EINVAL);
 
 		uarg += sizeof(*ioc);
 		if (copy_from_user(&fdv, uarg, sizeof(fdv)))
-			GOTO(out_lease_close, rc = -EFAULT);
+			GOTO(out_lease_close, rc2 = -EFAULT);
 
 		uarg += sizeof(fdv);
 		if (copy_from_user(&mirror_id, uarg, sizeof(mirror_id)))
-			GOTO(out_lease_close, rc = -EFAULT);
+			GOTO(out_lease_close, rc2 = -EFAULT);
 		if (mirror_id >= MIRROR_ID_NEG)
-			GOTO(out_lease_close, rc = -EINVAL);
+			GOTO(out_lease_close, rc2 = -EINVAL);
 
 		layout_file = fget(fdv);
 		if (!layout_file)
-			GOTO(out_lease_close, rc = -EBADF);
+			GOTO(out_lease_close, rc2 = -EBADF);
 
 		/* if layout_file == file, it means to destroy the mirror */
-		sp.sp_inode = file_inode(layout_file);
-		sp.sp_mirror_id = (__u16)mirror_id;
-		data = &sp;
+		mrp.mrp_inode = file_inode(layout_file);
+		mrp.mrp_mirror_id = (__u16)mirror_id;
+		data = &mrp;
 		bias = MDS_CLOSE_LAYOUT_SPLIT;
 		break;
 	}
 	case LL_LEASE_PCC_ATTACH:
 		if (ioc->lil_count != 1)
-			RETURN(-EINVAL);
+			GOTO(out_lease_close, rc2 = -EINVAL);
 
 		/* PCC-RW is not supported for encrypted files. */
 		if (IS_ENCRYPTED(inode))
-			RETURN(-EOPNOTSUPP);
+			GOTO(out_lease_close, rc2 = -EOPNOTSUPP);
 
 		uarg += sizeof(*ioc);
 		if (copy_from_user(&param.pa_archive_id, uarg, sizeof(__u32)))
@@ -4562,6 +4580,9 @@ out_lease_close:
 
 	if (lease_broken)
 		open_flags = MDS_FMODE_CLOSED;
+
+	if (!rc)
+		rc = rc2;
 	EXIT;
 
 out:
@@ -4572,8 +4593,6 @@ out:
 		fput(layout_file);
 
 	if (ioc->lil_flags == LL_LEASE_PCC_ATTACH) {
-		if (!rc)
-			rc = rc2;
 		rc = pcc_readwrite_attach_fini(file, inode,
 					       param.pa_layout_gen,
 					       lease_broken, rc,

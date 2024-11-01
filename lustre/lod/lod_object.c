@@ -3399,7 +3399,7 @@ out:
  */
 static int lod_declare_layout_merge(const struct lu_env *env,
 				    struct dt_object *dt,
-				    const struct lu_buf *mbuf,
+				    const struct lu_buf *mbuf, bool stale,
 				    struct thandle *th)
 {
 	struct lod_thread_info *info = lod_env_info(env);
@@ -3523,7 +3523,7 @@ static int lod_declare_layout_merge(const struct lu_env *env,
 
 		*lcme = *merge_lcme;
 		lcme->lcme_offset = cpu_to_le32(offset);
-		if (merge_has_dom && i == 0)
+		if ((merge_has_dom && i == 0) || stale)
 			lcme->lcme_flags |= cpu_to_le32(LCME_FL_STALE);
 
 		id = pflr_id(mirror_id, i + 1);
@@ -3545,7 +3545,7 @@ static int lod_declare_layout_merge(const struct lu_env *env,
 					      ~LCM_FL_FLR_MASK) |
 					     LCM_FL_RDONLY);
 
-	rc = lod_striping_reload(env, lo, buf, 0);
+	rc = lod_striping_reload(env, lo, buf, LVF_ALL_STALE);
 	if (rc)
 		GOTO(out, rc);
 
@@ -3832,7 +3832,9 @@ static int lod_declare_xattr_set(const struct lu_env *env,
 	} else if (fl & LU_XATTR_MERGE) {
 		LASSERT(strcmp(name, XATTR_NAME_LOV) == 0 ||
 			strcmp(name, XATTR_LUSTRE_LOV) == 0);
-		rc = lod_declare_layout_merge(env, dt, buf, th);
+		rc = lod_declare_layout_merge(env, dt, buf,
+					      !!(fl & LU_XATTR_MERGE_STALE),
+					      th);
 	} else if (fl & LU_XATTR_SPLIT) {
 		LASSERT(strcmp(name, XATTR_NAME_LOV) == 0 ||
 			strcmp(name, XATTR_LUSTRE_LOV) == 0);

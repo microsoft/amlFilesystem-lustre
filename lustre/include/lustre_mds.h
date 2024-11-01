@@ -30,7 +30,10 @@
 
 struct md_rejig_data {
 	struct md_object	*mrd_obj;
+	/* mirror split */
 	__u16			mrd_mirror_id;
+	/* mirror merge flags, matches close_data::cd_merge_flags */
+	__u16			mrd_merge_flags;
 };
 
 #define MDD_OBD_NAME     "mdd_obd"

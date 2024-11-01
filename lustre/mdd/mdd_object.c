@@ -1681,7 +1681,7 @@ static int mdd_xattr_del(const struct lu_env *env, struct md_object *obj,
 			 const char *name);
 
 static int mdd_xattr_merge(const struct lu_env *env, struct md_object *md_obj,
-			   struct md_object *md_vic)
+			   struct md_object *md_vic, __u16 merge_flags)
 {
 	struct mdd_device *mdd = mdo2mdd(md_obj);
 	struct mdd_object *obj = md2mdd_obj(md_obj);
@@ -1693,6 +1693,8 @@ static int mdd_xattr_merge(const struct lu_env *env, struct md_object *md_obj,
 	struct lu_attr *cattr = MDD_ENV_VAR(env, cattr);
 	struct lu_attr *tattr = MDD_ENV_VAR(env, tattr);
 	bool is_same_projid;
+	int fl = LU_XATTR_MERGE |
+		 (merge_flags & CD_MERGE_STALE ? LU_XATTR_MERGE_STALE : 0);
 	int rc;
 	int retried = 0;
 
@@ -1750,7 +1752,7 @@ retry:
 		GOTO(stop, rc);
 
 	rc = mdd_declare_xattr_set(env, mdd, obj, buf_vic, XATTR_NAME_LOV,
-				   LU_XATTR_MERGE, handle);
+				   fl, handle);
 	if (rc)
 		GOTO(stop, rc);
 
@@ -1769,8 +1771,7 @@ retry:
 			GOTO(out, rc);
 	}
 
-	rc = mdo_xattr_set(env, obj, buf_vic, XATTR_NAME_LOV, LU_XATTR_MERGE,
-			   handle);
+	rc = mdo_xattr_set(env, obj, buf_vic, XATTR_NAME_LOV, fl, handle);
 	if (rc)
 		GOTO(out, rc);
 
@@ -2335,7 +2336,8 @@ retry:
 			if (rc)
 				RETURN(rc);
 			/* merge layout of victim as a mirror of obj's. */
-			rc = mdd_xattr_merge(env, obj, victim);
+			rc = mdd_xattr_merge(env, obj, victim,
+					     mrd->mrd_merge_flags);
 		} else {
 			rc = mdd_xattr_split(env, obj, mrd);
 		}

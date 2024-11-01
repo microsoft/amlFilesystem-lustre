@@ -898,6 +898,8 @@ enum lu_xattr_flags {
 	LU_XATTR_MERGE   = BIT(2),
 	LU_XATTR_SPLIT   = BIT(3),
 	LU_XATTR_PURGE   = BIT(4),
+	/* modifier for LU_XATTR_MERGE: mark the merged mirror stale */
+	LU_XATTR_MERGE_STALE = BIT(5),
 };
 
 /* For lu_context health-checks */
