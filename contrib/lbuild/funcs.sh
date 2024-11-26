@@ -1,3 +1,11 @@
+# vim:expandtab:shiftwidth=4:softtabstop=4:tabstop=4:
+# NOTE: This is a skeleton that is completely untested.
+# increment this if you have made a change that should force a new kernel
+#BUILD_GEN+=".0"
+#BUILD_GEN+=".1"	# refactor both rhel5 and rhel6
+#BUILD_GEN+=".0"	# TT-107: don't cache the BUILD dir (reset major to 5)
+BUILD_GEN+=".2"	# LU-9850
+
 cleanup() {
 
     true
@@ -168,6 +176,10 @@ autodetect_distro() {
 			version="${version}.${lts_sp}"
 		fi
 		;;
+            "azurelinux")
+                version="$(lsb_release -s -r | cut --delimiter=. --fields=1)"
+                name="al${version}"
+                ;;
             *)
                 fatal 1 "I don't know what distro name $name and version $version is.\nEither update autodetect_distro() or use the --distro argument."
                 ;;
@@ -188,6 +200,10 @@ autodetect_distro() {
 		version=$(cat /etc/redhat-release |
 			  sed -e 's/^[^0-9.]*//g' | sed -e 's/[ ].*//')
         fi
+        if [ -f /etc/azurelinux-release ]; then
+            version=$(sed -n -e 's/^Azure Linux //p' /etc/azurelinux-release | cut --delimiter=. --fields=1))
+            name="al${version}"
+        fi
         if [ -z "$name" -o -z "$version" ]; then
             fatal 1 "I don't know how to determine distro type/version.\nEither update autodetect_distro() or use the --distro argument."
         fi
@@ -204,13 +220,13 @@ autodetect_target() {
 
     local target=""
     case ${distro} in
-         rhel7*)  target="3.10-rhel7";;
-         rhel8*)  target="4.18-rhel8";;
-	rhel-9.0) target="5.14-rhel9.0";;
-	rhel-9.1) target="5.14-rhel9.1";;
-	rhel-9.2) target="5.14-rhel9.2";;
-	rhel-9.3) target="5.14-rhel9.3";;
-	rhel-9.4) target="5.14-rhel9.4";;
+        rhel7*)  target="3.10-rhel7";;
+        rhel8*)  target="4.18-rhel8";;
+        rhel-9.0) target="5.14-rhel9.0";;
+        rhel-9.1) target="5.14-rhel9.1";;
+        rhel-9.2) target="5.14-rhel9.2";;
+        rhel-9.3) target="5.14-rhel9.3";;
+        rhel-9.4) target="5.14-rhel9.4";;
         sles11.4) target="$(uname -r | cut -d . -f 1,2)-sles11sp4";;
         sles11.3) target="$(uname -r | cut -d . -f 1,2)-sles11sp3";;
         sles11*)  target="$(uname -r | cut -d . -f 1,2)-sles11";;
@@ -221,14 +237,15 @@ autodetect_target() {
         sles15.1) target="$(uname -r | cut -d . -f 1,2)-sles15sp1";;
         sles15.2) target="$(uname -r | cut -d . -f 1,2)-sles15sp2";;
         sles15.3) target="$(uname -r | cut -d . -f 1,2)-sles15sp3";;
-	sles15.4) target="$(uname -r | cut -d . -f 1,2)-sles15sp4";;
-	sles15.5) target="$(uname -r | cut -d . -f 1,2)-sles15sp5";;
-	sles15.6) target="$(uname -r | cut -d . -f 1,2)-sles15sp6";;
-          fc18)   target="3.x-fc18";;
-	  oe2203) target="5.10-oe2203";;
-       oe2203.sp1) target="5.10-oe2203sp1";;
-       oe2203.sp2) target="5.10-oe2203sp2";;
-             *)   fatal 1 "I don't know what distro $distro is.\nEither update autodetect_target() or use the --target argument.";;
+        sles15.4) target="$(uname -r | cut -d . -f 1,2)-sles15sp4";;
+        sles15.5) target="$(uname -r | cut -d . -f 1,2)-sles15sp5";;
+        sles15.6) target="$(uname -r | cut -d . -f 1,2)-sles15sp6";;
+        fc18)   target="3.x-fc18";;
+	    oe2203) target="5.10-oe2203";;
+        oe2203.sp1) target="5.10-oe2203sp1";;
+        oe2203.sp2) target="5.10-oe2203sp2";;
+        al3)   target="6.x-azl3";;
+        *)   fatal 1 "I don't know what distro $distro is.\nEither update autodetect_target() or use the --target argument.";;
     esac
 
     echo ${target}
