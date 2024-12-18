@@ -2000,9 +2000,12 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 				 ksnn_list) {
 		ksi = &net->ksnn_interface;
 		found_ip = false;
+		ni = net->ksnn_ni;
 
-		if (strcmp(ksi->ksni_name, dev->name))
+		if (!net_eq(dev_net(dev), ni->ni_net_ns) ||
+		    strcmp(ksi->ksni_name, dev->name)) {
 			continue;
+		}
 
 		if (ksi->ksni_index == -1) {
 			if (dev->reg_state != NETREG_REGISTERED)
@@ -2025,7 +2028,6 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 			goto out;
 		}
 
-		ni = net->ksnn_ni;
 
 		sa = (void *)&ksi->ksni_addr;
 		switch (sa->sa_family) {
@@ -2133,12 +2135,14 @@ ksocknal_handle_inetaddr_change(struct net_device *event_netdev, unsigned long e
 				 ksnn_list) {
 		ksi = &net->ksnn_interface;
 		sa = (void *)&ksi->ksni_addr;
-
-		if (ksi->ksni_index != ifindex ||
-		    strcmp(ksi->ksni_name, event_netdev->name))
-			continue;
-
 		ni = net->ksnn_ni;
+
+		if (!net_eq(dev_net(event_netdev), ni->ni_net_ns) ||
+		    ksi->ksni_index != ifindex ||
+		    strcmp(ksi->ksni_name, event_netdev->name)) {
+			continue;
+		}
+
 		if (nid_is_nid4(&ni->ni_nid) ^ (sa->sa_family == AF_INET))
 			continue;
 
