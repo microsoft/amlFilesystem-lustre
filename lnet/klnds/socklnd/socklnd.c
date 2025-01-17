@@ -1950,6 +1950,7 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 	bool found_ip = false;
 	struct ksock_interface *ksi = NULL;
 	struct sockaddr_in *sa;
+	struct net *dev_netns = dev_net(dev);
 	DECLARE_CONST_IN_IFADDR(ifa);
 
 	ifindex = dev->ifindex;
@@ -1966,8 +1967,14 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 
 		ni = net->ksnn_ni;
 
-		if (ni->ni_net_ns->ifindex != read_pnet(&dev->nd_net)->ifindex ||
-		    ksi->ksni_index != ifindex ||
+		/* Skip devices from a different namespace */
+		if (!net_eq(dev_netns, ni->ni_net_ns)) {
+			CDEBUG(D_NET, "Skipping device %s from namespace %p (expected %p)\n",
+			       dev->name, dev_netns, ni->ni_net_ns);
+			continue;
+		}
+
+		if (ksi->ksni_index != ifindex ||
 		    strcmp(ksi->ksni_name, dev->name)) {
 			continue;
 		}
@@ -2016,6 +2023,7 @@ ksocknal_handle_inetaddr_change(struct in_ifaddr *ifa, unsigned long event)
 	struct ksock_net *net;
 	struct ksock_net *cnxt;
 	struct net_device *event_netdev = ifa->ifa_dev->dev;
+	struct net *dev_netns = dev_net(event_netdev);
 	int ifindex;
 	struct ksock_interface *ksi = NULL;
 	struct sockaddr_in *sa;
@@ -2032,8 +2040,14 @@ ksocknal_handle_inetaddr_change(struct in_ifaddr *ifa, unsigned long event)
 		sa = (void *)&ksi->ksni_addr;
 		ni = net->ksnn_ni;
 
-		if (ni->ni_net_ns->ifindex != read_pnet(&event_netdev->nd_net)->ifindex ||
-		    ksi->ksni_index != ifindex ||
+		/* Skip devices from a different namespace */
+		if (!net_eq(dev_netns, ni->ni_net_ns)) {
+			CDEBUG(D_NET, "Skipping device %s from namespace %p (expected %p)\n",
+			       event_netdev->name, dev_netns, ni->ni_net_ns);
+			continue;
+		}
+
+		if (ksi->ksni_index != ifindex ||
 		    strcmp(ksi->ksni_name, event_netdev->name))
 			continue;
 
