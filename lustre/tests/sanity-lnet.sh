@@ -7121,6 +7121,21 @@ test_410() {
 }
 run_test 410 "No segfault in lnetctl fault command"
 
+test_411() {
+	reinit_dlc || return $?
+
+	local quote rc
+
+	for quote in \" \' ; do
+		rc=0
+		echo "net add --net $NETTYPE --if $quote" | "$LNETCTL" ||
+			rc=${PIPESTATUS[1]}
+		(( rc != 139 )) ||
+			error "lnetctl net add segfaulted: unmatched $quote"
+	done
+}
+run_test 411 "No segfault on unmatched quotes in lnetctl input"
+
 test_450() {
 	[[ $NETTYPE == tcp* ]] || skip "Need tcp NETTYPE"
 
