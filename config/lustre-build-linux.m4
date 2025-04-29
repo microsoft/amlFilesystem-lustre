@@ -234,12 +234,12 @@ AC_DEFUN([LB_LINUX_RELEASE], [
 		[KMP_MODDIR=$withval
 		 IN_KERNEL=''],[
 		AS_IF([test x$RHEL_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
-			[test x$OPENEULER_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
-			[test x$SUSE_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
-			[test x$UBUNTU_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
-			[test x$DEBIAN_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
-			[test x$AZURELINUX_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
-			[AC_MSG_WARN([Kernel Distro seems to be neither RedHat, SuSE, openEuler, Azure Linux, Ubuntu nor Debian])]
+		      [test x$OPENEULER_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
+		      [test x$SUSE_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
+		      [test x$UBUNTU_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
+		      [test x$DEBIAN_KERNEL = xyes], [KMP_MODDIR="updates/kernel"],
+		      [test x$AZURELINUX_KERNEL = xyes], [KMP_MODDIR="extra/kernel"],
+		      [AC_MSG_WARN([Kernel Distro seems to be neither RedHat, SuSE, openEuler, Azure Linux, Ubuntu nor Debian])]
 		)
 		IN_KERNEL="${PACKAGE}"])
 	AC_MSG_RESULT($KMP_MODDIR)

@@ -35,7 +35,7 @@
 %global enable_multi_lnds 1
 %endif
 
-# lets us pass in our SHA
+# Leveraged for custom package naming.
 %bcond_with lustre_version_sha
 %bcond_with kmod_dep
 
@@ -147,7 +147,7 @@
 # Set the package name prefix
 %if %{undefined lustre_name}
     %if %{with servers}
-        %global lustre_name lustre
+	%global lustre_name lustre
     %else
         %if %{defined pkg_release_ver}
             %global lustre_name lustre-client-%{pkg_release_ver}
@@ -160,19 +160,18 @@
 %if %{with lustre_modules}
 %if %{undefined kmoddir}
     %if %{defined kernel_module_package_moddir}
-        %global kmoddir %{kernel_module_package_moddir}
+	%global kmoddir %{kernel_module_package_moddir}
     %else
-        %if %{defined suse_kernel_module_package}
-            %global kmoddir updates
-        %else
-            %global kmoddir extra
-        %endif
+	%if %{defined suse_kernel_module_package}
+	    %global kmoddir updates
+	%else
+	    %global kmoddir extra
+	%endif
     %endif
 %endif
 
 %global modules_fs_path /lib/modules/%{_kver}/%{kmoddir}
 # requires want to set a version including epoch
-
 %global krequires %(echo %{kver} | sed -e 's/\.x86_64$//' -e 's/\.i[3456]86$//' -e 's/-smp$//' -e 's/-bigsmp$//' -e 's/[-.]ppc64$//' -e 's/\.aarch64$//' -e 's/-default$//' -e 's/-%{_flavor}//')
 
 %if "%{_vendor}" == "redhat" || "%{_vendor}" == "azl" || "%{_vendor}" == "fedora" || 0%{?openEuler}
