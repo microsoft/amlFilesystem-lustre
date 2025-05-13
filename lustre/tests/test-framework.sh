@@ -3292,7 +3292,7 @@ wait_delete_completed_mds() {
 	# sync MDS transactions
 	do_nodes $mds2sync "$LCTL set_param -n os[cd]*.*MD*.force_sync 1"
 
-	# wait till all changes are sent and commmitted by OSTs
+	# wait till all changes are sent and committed by OSTs
 	# for ldiskfs space is released upon execution, but DMU
 	# do this upon commit
 
