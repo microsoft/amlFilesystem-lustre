@@ -110,6 +110,7 @@
     %global package_version lustre-%{version}
 %endif
 
+
 # We set this because kernel_module_package has its own method of identifying
 # which kernel to build against, and it is unlikely that its decision will
 # match with Lustre's method of selecting which kernel to build against.
@@ -241,14 +242,14 @@
 Summary: Lustre File System
 Name: %{lustre_name}
 Version: %{version}
-%if %{defined pkg_release_ver}
+%if %{defined pkg_release_ver} && "%{_vendor}" != "azl"
 Release: %{pkg_release_ver}
 %else
 Release: 1%{?dist}
+%endif
 %if 0%{?suse_version} >= 1310
 # SUSE needs Group for the kernel_module_package macro
 Group: System/Kernel
-%endif
 %endif
 License: GPL-2.0-only AND LGPL-2.1-or-later
 Group: System Environment/Kernel
