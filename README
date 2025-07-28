@@ -1,3 +1,6 @@
+Azure Managed Lustre Filesystem releases can be tracked using one of
+the methods described in the amlfs-releases.md file in this repository.
+
 Many resources for using, configuring, and troubleshooting Lustre are at:
     http://wiki.lustre.org/
 
