@@ -8,9 +8,9 @@
 
 # Every day at midnight, run this.
 name: Fetch Upstream
-on:
-  schedule:
-  - cron: "0 0 * * *"
+on:                      # Updating scheduler to change
+  schedule:              # who the action workflow will
+  - cron: "0 0 * * *"    # run as
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -29,7 +29,7 @@ jobs:
       - name: Set repo name
         run: echo "UPSTREAM_PROJECT_NAME=lustre-release" >> $GITHUB_ENV
       - name: Set repo URL
-        run: echo "LUSTRE_UPSTREAM_URL=git://git.whamcloud.com/fs/$UPSTREAM_PROJECT_NAME.git" >> $GITHUB_ENV
+        run: echo "LUSTRE_UPSTREAM_URL=git://review.whamcloud.com/fs/$UPSTREAM_PROJECT_NAME.git" >> $GITHUB_ENV
       - run: |
           echo "Fetching branches and tags from $LUSTRE_UPSTREAM_URL"
           #cd $UPSTREAM_PROJECT_NAME
