@@ -195,160 +195,32 @@ out_trans:
 }
 EXPORT_SYMBOL(llog_destroy);
 
-/* returns negative on error; 0 if success; 1 if success & log destroyed */
+/**
+ * Cancel \a num records of \a loghandle listed in \a index.
+ *
+ * \retval	negative on error
+ * \retval	0 on success
+ * \retval	LLOG_DEL_PLAIN on success, if the plain llog was destroyed
+ */
 int llog_cancel_arr_rec(const struct lu_env *env, struct llog_handle *loghandle,
 			int num, int *index)
 {
-	struct llog_thread_info *lgi = llog_info(env);
-	struct dt_device	*dt;
-	struct llog_log_hdr	*llh;
-	struct thandle		*th;
-	__u32			 tmp_lgc_index;
-	int			 old_cat = -1;
-	int			 rc, i = 0;
-	int rc1;
-	bool subtract_count = false;
+	const struct llog_operations *lop;
+	int rc;
 
 	ENTRY;
 
-	LASSERT(loghandle != NULL);
-	LASSERT(loghandle->lgh_ctxt != NULL);
-	LASSERT(loghandle->lgh_obj != NULL);
+	rc = llog_handle2ops(loghandle, &lop);
+	if (rc)
+		RETURN(rc);
+	if (lop->lop_cancel == NULL)
+		RETURN(-EOPNOTSUPP);
 
-	llh = loghandle->lgh_hdr;
+	rc = lop->lop_cancel(env, loghandle, num, index);
 
-	CDEBUG(D_OTHER, "Canceling %d records, first %d in log "DFID"\n",
-	       num, index[0], PLOGID(&loghandle->lgh_id));
-
-	dt = lu2dt_dev(loghandle->lgh_obj->do_lu.lo_dev);
-	if (IS_ERR(dt))
-		RETURN(PTR_ERR(dt));
-
-	if (unlikely(unlikely(dt->dd_rdonly)))
-		RETURN(0);
-
-	th = dt_trans_create(env, dt);
-	if (IS_ERR(th))
-		RETURN(PTR_ERR(th));
-
-	rc = llog_declare_write_rec(env, loghandle, &llh->llh_hdr, 0, th);
-	if (rc < 0)
-		GOTO(out_trans, rc);
-
-	if ((llh->llh_flags & LLOG_F_ZAP_WHEN_EMPTY)) {
-		rc = llog_declare_destroy(env, loghandle, th);
-		if (rc < 0)
-			GOTO(out_trans, rc);
-	}
-	if (llh->llh_flags & LLOG_F_IS_CAT)
-		dt_declare_attr_set(env, loghandle->lgh_obj, NULL, th);
-
-	th->th_wait_submit = 1;
-	rc = dt_trans_start_local(env, dt, th);
-	if (rc < 0)
-		GOTO(out_trans, rc);
-
-	down_write(&loghandle->lgh_lock);
-	/* clear bitmap */
-	spin_lock(&loghandle->lgh_hdr_lock);
-	for (i = 0; i < num; ++i) {
-		if (index[i] == 0) {
-			spin_unlock(&loghandle->lgh_hdr_lock);
-			CERROR("Can't cancel index 0 which is header\n");
-			GOTO(out_unlock, rc = -EINVAL);
-		}
-		if (!__test_and_clear_bit_le(index[i], LLOG_HDR_BITMAP(llh))) {
-			spin_unlock(&loghandle->lgh_hdr_lock);
-			CDEBUG(D_OTHER, "Catalog index %u already clear?\n",
-			       index[i]);
-			GOTO(out_unlock, rc = -ENOENT);
-		}
-	}
-	loghandle->lgh_hdr->llh_count -= num;
-	subtract_count = true;
-	spin_unlock(&loghandle->lgh_hdr_lock);
-
-	if (llh->llh_flags & LLOG_F_IS_CAT) {
-		old_cat = llh->llh_cat_idx;
-		llog_cat_set_first_idx(loghandle, index[0]);
-	}
-	/* Since llog_process_thread use lgi_cookie, it`s better to save them
-	 * and restore after using
-	 */
-	tmp_lgc_index = lgi->lgi_cookie.lgc_index;
-	/* Pass this index to llog_osd_write_rec(), which will use the index
-	 * to only update the necesary bitmap. */
-	lgi->lgi_cookie.lgc_index = index[0];
-	/* update header */
-	rc = llog_write_rec(env, loghandle, &llh->llh_hdr, (num != 1 ? NULL :
-			    &lgi->lgi_cookie), LLOG_HEADER_IDX, th);
-	lgi->lgi_cookie.lgc_index = tmp_lgc_index;
-
-	if (rc != 0)
-		GOTO(out_unlock, rc);
-
-	if ((llh->llh_flags & LLOG_F_ZAP_WHEN_EMPTY) &&
-	    (llh->llh_count == 1) &&
-	    ((loghandle->lgh_last_idx == llog_max_idx(loghandle)) ||
-	     (loghandle->u.phd.phd_cat_handle != NULL &&
-	      loghandle->u.phd.phd_cat_handle->u.chd.chd_current_log !=
-		loghandle))) {
-		/* never try to destroy it again */
-		llh->llh_flags &= ~LLOG_F_ZAP_WHEN_EMPTY;
-		rc = llog_trans_destroy(env, loghandle, th);
-		if (rc < 0) {
-			/* Sigh, can not destroy the final plain llog, but
-			 * the bitmap has been clearly, so the record can not
-			 * be accessed anymore, let's return 0 for now, and
-			 * the orphan will be handled by LFSCK. */
-			CERROR("%s: can't destroy empty llog "DFID": rc = %d\n",
-			       loghandle2name(loghandle),
-			       PLOGID(&loghandle->lgh_id), rc);
-			GOTO(out_unlock, rc = 0);
-		}
-		rc = LLOG_DEL_PLAIN;
-	}
-
-	/* update for catalog which doesn't happen very often */
-	if (llh->llh_flags & LLOG_F_IS_CAT) {
-		lgi->lgi_attr.la_valid = LA_MTIME;
-		lgi->lgi_attr.la_mtime = ktime_get_real_seconds();
-		dt_attr_set(env, loghandle->lgh_obj, &lgi->lgi_attr, th);
-	}
-
-out_unlock:
-	if (rc < 0) {
-		if (old_cat != -1) {
-			llh->llh_cat_idx = old_cat;
-			old_cat = -1;
-		}
-		/* restore bitmap while holding a mutex */
-		spin_lock(&loghandle->lgh_hdr_lock);
-		if (subtract_count) {
-			loghandle->lgh_hdr->llh_count += num;
-			subtract_count = false;
-		}
-		for (i = i - 1; i >= 0; i--)
-			set_bit_le(index[i], LLOG_HDR_BITMAP(llh));
-		spin_unlock(&loghandle->lgh_hdr_lock);
-	}
-	up_write(&loghandle->lgh_lock);
-out_trans:
-	rc1 = dt_trans_stop(env, dt, th);
-	if (rc == 0)
-		rc = rc1;
-	if (rc1 < 0) {
-		if (old_cat != -1)
-			llh->llh_cat_idx = old_cat;
-		spin_lock(&loghandle->lgh_hdr_lock);
-		if (subtract_count)
-			loghandle->lgh_hdr->llh_count += num;
-		for (i = i - 1; i >= 0; i--)
-			set_bit_le(index[i], LLOG_HDR_BITMAP(llh));
-		spin_unlock(&loghandle->lgh_hdr_lock);
-	}
 	RETURN(rc);
 }
+EXPORT_SYMBOL(llog_cancel_arr_rec);
 
 int llog_cancel_rec(const struct lu_env *env, struct llog_handle *loghandle,
 		    int index)
