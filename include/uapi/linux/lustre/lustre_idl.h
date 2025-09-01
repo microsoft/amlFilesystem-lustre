@@ -2973,6 +2973,7 @@ enum llog_op_type {
 							    */
 	LLOG_HDR_MAGIC		= LLOG_OP_MAGIC | 0x45539,
 	LLOG_LOGID_MAGIC	= LLOG_OP_MAGIC | 0x4553b,
+	LLOG_INDEX_REC		= LLOG_OP_MAGIC | 0x4554c,
 };
 
 #define LLOG_REC_HDR_NEEDS_SWABBING(r) \
@@ -3204,6 +3205,7 @@ enum llog_flag {
 	LLOG_F_MAX_AGE		= 0x800,
 	LLOG_F_EXT_X_NID_BE	= 0x1000,
 	LLOG_F_UNLCK_SEM	= 0x2000,
+	LLOG_F_INDEX		= 0x4000,
 
 	/* Note: Flags covered by LLOG_F_EXT_MASK will be inherited from
 	 * catlog to plain log, so do not add LLOG_F_IS_FIXSIZE here,
@@ -3237,7 +3239,7 @@ struct llog_log_hdr {
 	 */
 	__u32			llh_cat_idx;
 	struct obd_uuid		llh_tgtuuid;
-	__u32			llh_reserved[LLOG_HEADER_SIZE/sizeof(__u32)-23];
+	__u32			llh_cksum;
 	/* These fields must always be at the end of the llog_log_hdr.
 	 * Note: llh_bitmap size is variable because llog chunk size could be
 	 * bigger than LLOG_MIN_CHUNK_SIZE, i.e. sizeof(llog_log_hdr) > 8192
