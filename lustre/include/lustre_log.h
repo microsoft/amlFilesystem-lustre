@@ -271,6 +271,8 @@ struct llog_operations {
 		       struct thandle *th);
 };
 
+#define LLOG_WQ_MAX	16
+
 /* In-memory descriptor for a log object or log catalog */
 struct llog_handle {
 	struct rw_semaphore	 lgh_lock;
@@ -301,7 +303,27 @@ struct llog_handle {
 	int			lgh_max_size;
 	bool			lgh_destroyed;
 	unsigned long		lgh_timestamp;
+
+	/* indexed llog */
+	int			 lgh_index_size;
+	__u32			*lgh_index;
+	/* size of an index's part in a single chunk (chunk - hdr - tail) */
+	__u32			 lgh_index_chunk;
+	__u32			 lgh_index_blocks;
+	/* next offset to be used for new records */
+	__u32			 lgh_next_offset;
+	bool			 lgh_have_gaps;
+	/* in-flight per-chunk modifications */
+	atomic_t		 lgh_in_flight[LLOG_WQ_MAX];
+	wait_queue_head_t        lgh_waitq;
 };
+
+static inline atomic_t *llog_inflight_cnt(struct llog_handle *lgh,
+					  unsigned long offset)
+{
+	int i = (offset / lgh->lgh_hdr_size) & (LLOG_WQ_MAX - 1);
+	return &lgh->lgh_in_flight[i];
+}
 
 /* llog_osd.c */
 extern const struct llog_operations llog_osd_ops;
