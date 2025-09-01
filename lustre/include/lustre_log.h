@@ -269,6 +269,12 @@ struct llog_operations {
 	int (*lop_add)(const struct lu_env *env, struct llog_handle *lgh,
 		       struct llog_rec_hdr *rec, struct llog_cookie *cookie,
 		       struct thandle *th);
+	/**
+	 * Clear \a num records listed in \a index. Returns LLOG_DEL_PLAIN
+	 * if the plain llog was destroyed as a result.
+	 */
+	int (*lop_cancel)(const struct lu_env *env,
+			  struct llog_handle *loghandle, int num, int *index);
 };
 
 #define LLOG_WQ_MAX	16
