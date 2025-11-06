@@ -269,6 +269,26 @@ static void check_ost_layout(void)
 	CHECK_MEMBER(ost_layout, ol_comp_id);
 }
 
+static void check_lu_orphan_rec_v3(void)
+{
+	BLANK_LINE();
+	CHECK_STRUCT(lu_orphan_rec_v3);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_rec);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_layout);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_layout_version);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_range);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_comp_flags);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_dstripe_count);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_cstripe_count);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_mirror_link_id);
+	CHECK_MEMBER(lu_orphan_rec_v3, lor_padding_2);
+
+	BLANK_LINE();
+	CHECK_STRUCT(lu_orphan_ent_v3);
+	CHECK_MEMBER(lu_orphan_ent_v3, loe_key);
+	CHECK_MEMBER(lu_orphan_ent_v3, loe_rec);
+}
+
 static void
 check_hsm_attrs(void)
 {
@@ -752,8 +772,10 @@ check_obdo(void)
 	CHECK_MEMBER(obdo, o_handle);
 	CHECK_MEMBER(obdo, o_layout);
 	CHECK_MEMBER(obdo, o_layout_version);
-	CHECK_MEMBER(obdo, o_uid_h);
-	CHECK_MEMBER(obdo, o_gid_h);
+	CHECK_MEMBER(obdo, o_comp_flags);
+	CHECK_MEMBER(obdo, o_dstripe_count);
+	CHECK_MEMBER(obdo, o_cstripe_count);
+	CHECK_MEMBER(obdo, o_mirror_link_id);
 	CHECK_MEMBER(obdo, o_data_version);
 	CHECK_MEMBER(obdo, o_projid);
 	CHECK_MEMBER(obdo, o_padding_4);
@@ -780,6 +802,7 @@ check_obdo(void)
 	CHECK_DEFINE_64X(OBD_MD_LINKNAME);
 	CHECK_DEFINE_64X(OBD_MD_FLHANDLE);
 	CHECK_DEFINE_64X(OBD_MD_FLCKSUM);
+	CHECK_DEFINE_64X(OBD_MD_FLCOMPFLAGS);
 	CHECK_DEFINE_64X(OBD_MD_FLPRJQUOTA);
 	CHECK_DEFINE_64X(OBD_MD_FLGROUP);
 	CHECK_DEFINE_64X(OBD_MD_FLFID);
@@ -3845,6 +3868,7 @@ main(int argc, char **argv)
 	check_lustre_mdt_attrs();
 	check_lustre_ost_attrs();
 	check_ost_layout();
+	check_lu_orphan_rec_v3();
 
 	CHECK_VALUE(OUT_CREATE);
 	CHECK_VALUE(OUT_DESTROY);

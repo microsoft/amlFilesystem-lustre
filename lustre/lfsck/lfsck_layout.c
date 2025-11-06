@@ -308,11 +308,22 @@ out:
 	lr->lr_flags2 = lo->ll_flags;
 }
 
+/* the pattern of a parity component, as lod_comp_set_ec_pattern() sets it:
+ * parity stands alone, like RAID10, and overstriping is kept
+ */
+static __u32 lfsck_layout_parity_pattern(__u32 pattern)
+{
+	pattern &= ~(LOV_PATTERN_RAID0 | LOV_PATTERN_RAID1 |
+		     LOV_PATTERN_COMPRESS);
+
+	return pattern | LOV_PATTERN_PARITY;
+}
+
 static int lfsck_layout_verify_header_v1v3(struct dt_object *obj,
 					   struct lov_mds_md_v1 *lmm,
 					   __u64 start, __u64 end,
 					   __u32 comp_id,
-					   bool ext, bool *dom)
+					   bool ext, bool *dom, bool ec)
 {
 	__u32 magic;
 	__u32 pattern;
@@ -352,6 +363,15 @@ static int lfsck_layout_verify_header_v1v3(struct dt_object *obj,
 			return -EINVAL;
 		}
 #endif
+	} else if (ec && lov_pattern(pattern) & LOV_PATTERN_PARITY) {
+		/* parity stands alone, like RAID10, not RAID0 | PARITY */
+		if (!lov_pattern_supported(lov_pattern(pattern))) {
+			CDEBUG(D_LFSCK,
+			       "Unsupported LOV EA parity pattern %u for the file "DFID" in the component %x\n",
+			       pattern, PFID(lfsck_dto2fid(obj)), comp_id);
+
+			return -EOPNOTSUPP;
+		}
 	} else if (!lov_pattern_supported_normal_comp(lov_pattern(pattern))) {
 		CDEBUG(D_LFSCK,
 		       "Unsupported LOV EA pattern %u for the file "DFID" in the component %x\n",
@@ -396,8 +416,10 @@ static int lfsck_layout_verify_header_foreign(struct dt_object *obj,
 	return -ENODATA;
 }
 
+/* @ec accepts EC parity components, which only orphan recovery handles */
 static int lfsck_layout_verify_header(struct dt_object *obj,
-				      struct lov_mds_md_v1 *lmm, size_t len)
+				      struct lov_mds_md_v1 *lmm, size_t len,
+				      bool ec)
 {
 	bool p_dom = false;
 	int rc = 0;
@@ -483,7 +505,7 @@ static int lfsck_layout_verify_header(struct dt_object *obj,
 					le32_to_cpu(lcme->lcme_size));
 			else
 				rc = lfsck_layout_verify_header_v1v3(obj, v1,
-					start, end, comp_id, ext, &p_dom);
+					start, end, comp_id, ext, &p_dom, ec);
 
 			p_zero = zero;
 		}
@@ -493,7 +515,7 @@ static int lfsck_layout_verify_header(struct dt_object *obj,
 						len);
 	} else {
 		rc = lfsck_layout_verify_header_v1v3(obj, lmm, 0, LUSTRE_EOF,
-						     0, false, &p_dom);
+						     0, false, &p_dom, ec);
 	}
 
 	return rc;
@@ -530,7 +552,7 @@ again:
 		goto again;
 	}
 
-	rc1 = lfsck_layout_verify_header(obj, buf->lb_buf, rc);
+	rc1 = lfsck_layout_verify_header(obj, buf->lb_buf, rc, false);
 
 	return rc1 ? rc1 : rc;
 }
@@ -1872,10 +1894,247 @@ static int lfsck_layout_new_v1_lovea(const struct lu_env *env,
 	return size;
 }
 
+/* a component of mirror @mirror_id that has all of @flags set */
+static struct lov_comp_md_entry_v1 *
+lfsck_layout_mirror_find(struct lov_comp_md_v1 *lcm, __u16 mirror_id,
+			 __u32 flags)
+{
+	__u16 count = le16_to_cpu(lcm->lcm_entry_count);
+	int i;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *lcme = &lcm->lcm_entries[i];
+
+		if (mirror_id_of(le32_to_cpu(lcme->lcme_id)) == mirror_id &&
+		    (le32_to_cpu(lcme->lcme_flags) & flags) == flags)
+			return lcme;
+	}
+
+	return NULL;
+}
+
+static __u16 lfsck_layout_link_id(struct lov_comp_md_entry_v1 *lcme)
+{
+	return lcme_timestamp_id_unpack(le64_to_cpu(lcme->lcme_time_and_id));
+}
+
+static bool lfsck_layout_ec_geometry_valid(__u8 dstripe, __u8 cstripe)
+{
+	return dstripe && cstripe && cstripe <= LOV_EC_MAX_CODING_STRIPES &&
+	       dstripe + cstripe <= LOV_EC_MAX_TOTAL_STRIPES;
+}
+
+/* @a is linked to the mirror of @b, as EC data and parity are.  A link
+ * without a valid EC geometry is stale bytes from a server before EC.
+ */
+static bool lfsck_layout_comp_linked(struct lov_comp_md_entry_v1 *a,
+				     struct lov_comp_md_entry_v1 *b)
+{
+	__u16 link_id = lfsck_layout_link_id(a);
+
+	return link_id && link_id == mirror_id_of(le32_to_cpu(b->lcme_id)) &&
+	       lfsck_layout_ec_geometry_valid(a->lcme_dstripe_count,
+					      a->lcme_cstripe_count);
+}
+
+/* only a parity component, or a data component that a parity component links
+ * to, has EC fields: servers before EC left stale bytes there
+ */
+static bool lfsck_layout_ec_fields_valid(struct lov_comp_md_v1 *lcm,
+					 struct lov_comp_md_entry_v1 *lcme)
+{
+	__u16 count = le16_to_cpu(lcm->lcm_entry_count);
+	__u16 mirror_id = mirror_id_of(le32_to_cpu(lcme->lcme_id));
+	int i;
+
+	if (le32_to_cpu(lcme->lcme_flags) & LCME_FL_PARITY)
+		return true;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *tmp = &lcm->lcm_entries[i];
+
+		if (le32_to_cpu(tmp->lcme_flags) & LCME_FL_PARITY &&
+		    lfsck_layout_link_id(tmp) == mirror_id &&
+		    tmp->lcme_extent.e_start == lcme->lcme_extent.e_start &&
+		    tmp->lcme_extent.e_end == lcme->lcme_extent.e_end)
+			return true;
+	}
+
+	return false;
+}
+
+static void lfsck_layout_set_link_id(struct lov_comp_md_entry_v1 *lcme,
+				     __u16 link_id)
+{
+	__u64 time_id = le64_to_cpu(lcme->lcme_time_and_id);
+
+	lcme->lcme_time_and_id = cpu_to_le64(lcme_timestamp_and_id_pack(
+				lcme_timestamp_time_unpack(time_id), link_id));
+}
+
+/* EC geometry for parity component @lcme, from the data component it protects
+ * or else from another component of its mirror
+ */
+static struct lov_comp_md_entry_v1 *
+lfsck_layout_ec_donor(struct lov_comp_md_v1 *lcm,
+		      struct lov_comp_md_entry_v1 *lcme)
+{
+	__u16 count = le16_to_cpu(lcm->lcm_entry_count);
+	__u16 mirror_id = mirror_id_of(le32_to_cpu(lcme->lcme_id));
+	__u16 link_id = lfsck_layout_link_id(lcme);
+	struct lov_comp_md_entry_v1 *sibling = NULL;
+	int i;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *tmp = &lcm->lcm_entries[i];
+		__u16 id = mirror_id_of(le32_to_cpu(tmp->lcme_id));
+
+		if (!tmp->lcme_cstripe_count || !tmp->lcme_dstripe_count)
+			continue;
+
+		if (link_id && id == link_id &&
+		    tmp->lcme_extent.e_start == lcme->lcme_extent.e_start &&
+		    tmp->lcme_extent.e_end == lcme->lcme_extent.e_end)
+			return tmp;
+
+		if (id == mirror_id && !sibling)
+			sibling = tmp;
+	}
+
+	return sibling;
+}
+
+/* point the data component that parity component @parity protects back at
+ * the parity mirror, and give it the EC geometry, as LOD does
+ */
+static void lfsck_layout_link_data(struct lov_comp_md_v1 *lcm,
+				   struct lov_comp_md_entry_v1 *parity)
+{
+	__u16 count = le16_to_cpu(lcm->lcm_entry_count);
+	__u16 mirror_id = mirror_id_of(le32_to_cpu(parity->lcme_id));
+	__u16 link_id = lfsck_layout_link_id(parity);
+	int i;
+
+	if (!link_id)
+		return;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *lcme = &lcm->lcm_entries[i];
+		__u16 id = lfsck_layout_link_id(lcme);
+
+		if (le32_to_cpu(lcme->lcme_flags) & LCME_FL_PARITY ||
+		    mirror_id_of(le32_to_cpu(lcme->lcme_id)) != link_id ||
+		    lcme->lcme_extent.e_start != parity->lcme_extent.e_start ||
+		    lcme->lcme_extent.e_end != parity->lcme_extent.e_end ||
+		    (id && id != mirror_id))
+			continue;
+
+		if (!id)
+			lfsck_layout_set_link_id(lcme, mirror_id);
+		if ((!lcme->lcme_dstripe_count || !lcme->lcme_cstripe_count) &&
+		    parity->lcme_dstripe_count && parity->lcme_cstripe_count) {
+			lcme->lcme_dstripe_count = parity->lcme_dstripe_count;
+			lcme->lcme_cstripe_count = parity->lcme_cstripe_count;
+		}
+	}
+}
+
+/*
+ * All components of a mirror must agree on parity, or LOD refuses the layout.
+ * An object written without the EC fields (the PFID kept in LMA, an older OST,
+ * or a data object not written since 'lfs mirror extend --ec') does not show
+ * them, so a mirror with any parity component is a parity mirror, its
+ * components that lack the link or the geometry take them from the others,
+ * and the data components they protect are linked back to them.
+ */
+static void lfsck_layout_parity_mirrors(struct lov_comp_md_v1 *lcm)
+{
+	__u16 count = le16_to_cpu(lcm->lcm_entry_count);
+	int i;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *lcme = &lcm->lcm_entries[i];
+		__u16 mirror_id = mirror_id_of(le32_to_cpu(lcme->lcme_id));
+		struct lov_comp_md_entry_v1 *tmp;
+		struct lov_mds_md_v1 *lmm;
+		__u16 j;
+
+		if (!lfsck_layout_mirror_find(lcm, mirror_id, LCME_FL_PARITY))
+			continue;
+
+		if (!(le32_to_cpu(lcme->lcme_flags) & LCME_FL_PARITY)) {
+			lcme->lcme_flags |= cpu_to_le32(LCME_FL_PARITY);
+			lmm = (void *)lcm + le32_to_cpu(lcme->lcme_offset);
+			lmm->lmm_pattern = cpu_to_le32(
+				lfsck_layout_parity_pattern(
+					le32_to_cpu(lmm->lmm_pattern)));
+		}
+
+		for (j = 0; j < count && !lfsck_layout_link_id(lcme); j++) {
+			tmp = &lcm->lcm_entries[j];
+			if (mirror_id_of(le32_to_cpu(tmp->lcme_id)) ==
+			    mirror_id)
+				lfsck_layout_set_link_id(lcme,
+						lfsck_layout_link_id(tmp));
+		}
+
+		if (!lcme->lcme_cstripe_count || !lcme->lcme_dstripe_count) {
+			tmp = lfsck_layout_ec_donor(lcm, lcme);
+			if (tmp) {
+				lcme->lcme_dstripe_count =
+					tmp->lcme_dstripe_count;
+				lcme->lcme_cstripe_count =
+					tmp->lcme_cstripe_count;
+			}
+		}
+
+		lfsck_layout_link_data(lcm, lcme);
+	}
+}
+
+/*
+ * When LFSCK adds a component to a layout, the OST objects do not show whether
+ * its parity was in sync, so parity is stale until the file is resynced. That
+ * waits for a data mirror with no stale component, since lod_fill_mirrors()
+ * asserts on a layout whose mirrors are all stale.
+ */
+static void lfsck_layout_stale_parity(struct lov_comp_md_v1 *lcm)
+{
+	__u16 count = le16_to_cpu(lcm->lcm_entry_count);
+	bool data = false;
+	bool parity = false;
+	int i;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *lcme = &lcm->lcm_entries[i];
+		__u16 mirror_id = mirror_id_of(le32_to_cpu(lcme->lcme_id));
+
+		if (le32_to_cpu(lcme->lcme_flags) & LCME_FL_PARITY)
+			parity = true;
+		else if (!data && !lfsck_layout_mirror_find(lcm, mirror_id,
+							    LCME_FL_STALE))
+			data = true;
+	}
+
+	if (!data || !parity)
+		return;
+
+	for (i = 0; i < count; i++) {
+		struct lov_comp_md_entry_v1 *lcme = &lcm->lcm_entries[i];
+
+		if (le32_to_cpu(lcme->lcme_flags) & LCME_FL_PARITY)
+			lcme->lcme_flags |= cpu_to_le32(LCME_FL_STALE);
+	}
+	lcm->lcm_flags = cpu_to_le16((le16_to_cpu(lcm->lcm_flags) &
+				      ~LCM_FL_FLR_MASK) |
+				     LCM_FL_WRITE_PENDING);
+}
+
 static int lfsck_layout_new_comp_lovea(const struct lu_env *env,
 				       struct lu_orphan_rec_v3 *rec,
 				       struct dt_object *parent,
-				       struct lu_buf *buf, __u32 ea_off,
+				       struct lu_buf *buf,
+				       enum lu_xattr_flags fl, __u32 ea_off,
 				       struct lov_mds_md_v1 **lmm,
 				       struct lov_ost_data_v1 **objs)
 {
@@ -1886,12 +2145,21 @@ static int lfsck_layout_new_comp_lovea(const struct lu_env *env,
 	__u32 offset = sizeof(*lcm) + sizeof(*lcme);
 	int lcme_size = lov_mds_md_size(ol->ol_stripe_count, LOV_MAGIC_V1);
 	int size = offset + lcme_size;
+	__le32 gen = 0;
 
 	LASSERTF(buf->lb_len >= size,
 		 "buffer len %d is less than real size %d\n",
 		 (int)buf->lb_len, size);
 
 	lcm = buf->lb_buf;
+	/* @buf holds the crashed LOV EA being replaced, or unrelated data on
+	 * create.  Clear the header and entry, keeping only the generation of
+	 * a replaced LOV EA, which is used if the OST does not have one.
+	 */
+	if (fl & LU_XATTR_REPLACE)
+		gen = lcm->lcm_layout_gen;
+	memset(lcm, 0, offset);
+	lcm->lcm_layout_gen = gen;
 	lcm->lcm_magic = cpu_to_le32(LOV_MAGIC_COMP_V1);
 	lcm->lcm_size = cpu_to_le32(size);
 	if (rec->lor_range) {
@@ -1913,14 +2181,18 @@ static int lfsck_layout_new_comp_lovea(const struct lu_env *env,
 		lcm->lcm_flags = cpu_to_le16(LCM_FL_NONE);
 	}
 	lcm->lcm_entry_count = cpu_to_le16(1);
-	/* Currently, we do not know how many mirrors will be, set it as zero
-	 * at the beginning. It will be updated when more mirrors are found.
+	/* Currently, we do not know how many mirrors there will be, so
+	 * lcm_mirror_count stays zero.  It is updated as mirrors are found.
 	 */
-	lcm->lcm_mirror_count = 0;
 
 	lcme = &lcm->lcm_entries[0];
 	lcme->lcme_id = cpu_to_le32(ol->ol_comp_id);
-	lcme->lcme_flags = cpu_to_le32(LCME_FL_INIT);
+	lcme->lcme_flags = cpu_to_le32((rec->lor_comp_flags & LCME_FF_FLAGS) |
+				       LCME_FL_INIT);
+	lcme->lcme_dstripe_count = rec->lor_dstripe_count;
+	lcme->lcme_cstripe_count = rec->lor_cstripe_count;
+	lcme->lcme_time_and_id = cpu_to_le64(lcme_timestamp_and_id_pack(0,
+						rec->lor_mirror_link_id));
 	lcme->lcme_extent.e_start = cpu_to_le64(ol->ol_comp_start);
 	lcme->lcme_extent.e_end = cpu_to_le64(ol->ol_comp_end);
 	lcme->lcme_offset = cpu_to_le32(offset);
@@ -1928,6 +2200,8 @@ static int lfsck_layout_new_comp_lovea(const struct lu_env *env,
 	lcme->lcme_layout_gen = lcm->lcm_layout_gen;
 	if (ol->ol_stripe_count > 1)
 		pattern |= LOV_PATTERN_F_HOLE;
+	if (rec->lor_comp_flags & LCME_FL_PARITY)
+		pattern = lfsck_layout_parity_pattern(pattern);
 
 	*lmm = buf->lb_buf + offset;
 	*objs = __lfsck_layout_new_v1_lovea(*lmm, lfsck_dto2fid(parent),
@@ -1976,6 +2250,25 @@ static void lfsck_layout_update_lcm(struct lov_comp_md_v1 *lcm,
 		if (le32_to_cpu(tmp->lcme_flags) & LCME_FL_STALE)
 			continue;
 
+		/* parity is not a copy of data, so versions do not compare */
+		if ((tmp->lcme_flags ^ lcme->lcme_flags) &
+		    cpu_to_le32(LCME_FL_PARITY))
+			continue;
+
+		/* data links to a mirror not known to be parity, which may
+		 * hold parity, so it must not be read until resynced
+		 */
+		if (lfsck_layout_comp_linked(tmp, lcme)) {
+			lcme->lcme_flags |= cpu_to_le32(LCME_FL_STALE);
+			break;
+		}
+
+		if (lfsck_layout_comp_linked(lcme, tmp)) {
+			if (!(le32_to_cpu(lcme->lcme_flags) & LCME_FL_STALE))
+				tmp->lcme_flags |= cpu_to_le32(LCME_FL_STALE);
+			continue;
+		}
+
 		tmp_gen = le32_to_cpu(tmp->lcme_layout_gen);
 		/* "lcme_layout_gen == 0" but without LCME_FL_STALE flag,
 		 * then it should be the latest version of all mirrors.
@@ -1990,6 +2283,33 @@ static void lfsck_layout_update_lcm(struct lov_comp_md_v1 *lcm,
 			tmp->lcme_flags = cpu_to_le32(
 				le32_to_cpu(tmp->lcme_flags) | LCME_FL_STALE);
 	}
+}
+
+/* an orphan joins component @lcme, which an object without the EC fields may
+ * have created
+ */
+static void lfsck_layout_fill_comp(struct lov_comp_md_v1 *lcm,
+				   struct lov_comp_md_entry_v1 *lcme,
+				   struct lov_mds_md_v1 *lmm,
+				   struct lu_orphan_rec_v3 *rec)
+{
+	lcme->lcme_flags |= cpu_to_le32((rec->lor_comp_flags & LCME_FF_FLAGS) |
+					LCME_FL_INIT);
+	if (rec->lor_comp_flags & LCME_FL_PARITY)
+		lmm->lmm_pattern = cpu_to_le32(lfsck_layout_parity_pattern(
+					le32_to_cpu(lmm->lmm_pattern)));
+	if (rec->lor_dstripe_count && rec->lor_cstripe_count &&
+	    (!lcme->lcme_dstripe_count || !lcme->lcme_cstripe_count)) {
+		lcme->lcme_dstripe_count = rec->lor_dstripe_count;
+		lcme->lcme_cstripe_count = rec->lor_cstripe_count;
+	}
+	if (!lfsck_layout_link_id(lcme))
+		lfsck_layout_set_link_id(lcme, rec->lor_mirror_link_id);
+
+	lfsck_layout_parity_mirrors(lcm);
+	lfsck_layout_update_lcm(lcm, lcme, rec->lor_layout_version,
+				rec->lor_range);
+	lfsck_layout_stale_parity(lcm);
 }
 
 static int lfsck_layout_add_comp(const struct lu_env *env,
@@ -2074,8 +2394,14 @@ static int lfsck_layout_add_comp(const struct lu_env *env,
 	offset = sizeof(*lcm) + sizeof(*lcme) * (count + 1) + size;
 	/* 4. Insert the new component header (entry) at the slot 'pos'. */
 	lcme = &lcm->lcm_entries[pos];
+	memset(lcme, 0, sizeof(*lcme));
 	lcme->lcme_id = cpu_to_le32(ol->ol_comp_id);
-	lcme->lcme_flags = cpu_to_le32(LCME_FL_INIT);
+	lcme->lcme_flags = cpu_to_le32((rec->lor_comp_flags & LCME_FF_FLAGS) |
+				       LCME_FL_INIT);
+	lcme->lcme_dstripe_count = rec->lor_dstripe_count;
+	lcme->lcme_cstripe_count = rec->lor_cstripe_count;
+	lcme->lcme_time_and_id = cpu_to_le64(lcme_timestamp_and_id_pack(0,
+						rec->lor_mirror_link_id));
 	lcme->lcme_extent.e_start = cpu_to_le64(ol->ol_comp_start);
 	lcme->lcme_extent.e_end = cpu_to_le64(ol->ol_comp_end);
 	lcme->lcme_offset = cpu_to_le32(offset);
@@ -2084,6 +2410,8 @@ static int lfsck_layout_add_comp(const struct lu_env *env,
 
 	if (ol->ol_stripe_count > 1)
 		pattern |= LOV_PATTERN_F_HOLE;
+	if (rec->lor_comp_flags & LCME_FL_PARITY)
+		pattern = lfsck_layout_parity_pattern(pattern);
 
 	lmm = buf->lb_buf + offset;
 	/* 5. Insert teh new component body at the 'offset'. */
@@ -2092,8 +2420,10 @@ static int lfsck_layout_add_comp(const struct lu_env *env,
 					   pattern, ol->ol_stripe_count);
 
 	/* 6. Update mirror related flags and version. */
+	lfsck_layout_parity_mirrors(lcm);
 	lfsck_layout_update_lcm(lcm, lcme, rec->lor_layout_version,
 				rec->lor_range);
+	lfsck_layout_stale_parity(lcm);
 
 	rc = lfsck_layout_refill_lovea(env, lfsck, handle, parent, cfid, buf,
 				       lmm, objs, LU_XATTR_REPLACE, ost_idx,
@@ -2209,8 +2539,8 @@ static int lfsck_layout_update_lovea(const struct lu_env *env,
 
 	ENTRY;
 	if (ol->ol_comp_id != 0)
-		rc = lfsck_layout_new_comp_lovea(env, rec, parent, buf, ea_off,
-						 &lmm, &objs);
+		rc = lfsck_layout_new_comp_lovea(env, rec, parent, buf, fl,
+						 ea_off, &lmm, &objs);
 	else
 		rc = lfsck_layout_new_v1_lovea(env, lfsck, &rec->lor_layout,
 					       parent, buf, ea_off, &lmm,
@@ -2240,13 +2570,20 @@ static int __lfsck_layout_update_pfid(const struct lu_env *env,
 	struct filter_fid *ff = &lfsck_env_info(env)->lti_ff;
 	struct thandle *handle;
 	struct lu_buf buf = { NULL };
+	int size;
 	int rc;
 
 	if (com->lc_lfsck->li_bookmark_ram.lb_param & LPF_DRYRUN)
 		RETURN(0);
 
-	filter_fid_cpu_to_le(ff, pff, sizeof(*ff));
-	lfsck_buf_init(&buf, ff, sizeof(*ff));
+	*ff = *pff;
+	ff->ff_comp_flags = filter_fid_comp_flags(pff->ff_comp_flags,
+						  pff->ff_dstripe_count,
+						  pff->ff_cstripe_count,
+						  pff->ff_mirror_link_id);
+	size = filter_fid_sizeof(ff);
+	filter_fid_cpu_to_le(ff, ff, size);
+	lfsck_buf_init(&buf, ff, size);
 
 	if (!dt_object_exists(child) || lfsck_is_dead_obj(child))
 		return 0;
@@ -2309,6 +2646,10 @@ static int lfsck_layout_update_pfid(const struct lu_env *env,
 		.ff_layout = rec->lor_layout,
 		.ff_layout_version = rec->lor_layout_version,
 		.ff_range = rec->lor_range,
+		.ff_comp_flags = rec->lor_comp_flags,
+		.ff_dstripe_count = rec->lor_dstripe_count,
+		.ff_cstripe_count = rec->lor_cstripe_count,
+		.ff_mirror_link_id = rec->lor_mirror_link_id,
 	};
 	struct dt_object *child;
 	int rc = 0;
@@ -2568,6 +2909,10 @@ again:
 			.ff_layout = rec->lor_layout,
 			.ff_layout_version = rec->lor_layout_version,
 			.ff_range = rec->lor_range,
+			.ff_comp_flags = rec->lor_comp_flags,
+			.ff_dstripe_count = rec->lor_dstripe_count,
+			.ff_cstripe_count = rec->lor_cstripe_count,
+			.ff_mirror_link_id = rec->lor_mirror_link_id,
 		};
 
 		dt_trans_stop(env, dev, th);
@@ -3045,7 +3390,7 @@ again:
 	}
 
 	lmm = buf->lb_buf;
-	rc1 = lfsck_layout_verify_header(parent, lmm, lovea_size);
+	rc1 = lfsck_layout_verify_header(parent, lmm, lovea_size, true);
 
 	/* If the LOV EA crashed, the rebuild it. */
 	if (rc1 == -EINVAL) {
@@ -3131,10 +3476,7 @@ further:
 		if (lcm) {
 			LASSERT(lcme);
 
-			lcme->lcme_flags = cpu_to_le32(flags | LCME_FL_INIT);
-			lfsck_layout_update_lcm(lcm, lcme,
-						rec->lor_layout_version,
-						rec->lor_range);
+			lfsck_layout_fill_comp(lcm, lcme, lmm, rec);
 		}
 
 		rc = lfsck_layout_extend_v1v3_lovea(env, lfsck, handle, ol,
@@ -3193,11 +3535,7 @@ further:
 				}
 
 				lovea_size = le32_to_cpu(lcm->lcm_size);
-				lcme->lcme_flags = cpu_to_le32(flags |
-							       LCME_FL_INIT);
-				lfsck_layout_update_lcm(lcm, lcme,
-							rec->lor_layout_version,
-							rec->lor_range);
+				lfsck_layout_fill_comp(lcm, lcme, lmm, rec);
 			}
 
 			LASSERTF(buf->lb_len >= lovea_size,
@@ -3292,6 +3630,37 @@ unlock_layout:
 	return rc;
 }
 
+/* drop the EC fields of an orphan record whose geometry or link is not valid */
+static void lfsck_layout_check_ec_rec(struct lfsck_component *com,
+				      struct lu_orphan_rec_v3 *rec,
+				      const struct lu_fid *cfid)
+{
+	__u16 mirror_id = mirror_id_of(rec->lor_layout.ol_comp_id);
+	__u16 link_id = rec->lor_mirror_link_id;
+	__u8 dstripe = rec->lor_dstripe_count;
+	__u8 cstripe = rec->lor_cstripe_count;
+
+	if (!(rec->lor_comp_flags & LCME_FL_PARITY) && !dstripe && !cstripe &&
+	    !link_id)
+		return;
+
+	if (mirror_id &&
+	    lfsck_layout_ec_geometry_valid(dstripe, cstripe) && link_id &&
+	    link_id != mirror_id && link_id <= MIRROR_ID_MAX)
+		return;
+
+	CDEBUG(D_LFSCK,
+	       "%s: layout LFSCK assistant ignores invalid EC fields of orphan "DFID": comp_id %u, flags %#x, EC %u+%u, link %u\n",
+	       lfsck_lfsck2name(com->lc_lfsck), PFID(cfid),
+	       rec->lor_layout.ol_comp_id, rec->lor_comp_flags, dstripe,
+	       cstripe, link_id);
+
+	rec->lor_comp_flags &= ~LCME_FL_PARITY;
+	rec->lor_dstripe_count = 0;
+	rec->lor_cstripe_count = 0;
+	rec->lor_mirror_link_id = 0;
+}
+
 static int lfsck_layout_scan_orphan_one(const struct lu_env *env,
 					struct lfsck_component *com,
 					struct lfsck_tgt_desc *ltd,
@@ -3308,6 +3677,7 @@ static int lfsck_layout_scan_orphan_one(const struct lu_env *env,
 	if (!fid_is_sane(cfid))
 		GOTO(out, rc = -EINVAL);
 
+	lfsck_layout_check_ec_rec(com, rec, cfid);
 	pfid->f_ver = 0;
 	if (fid_is_zero(pfid)) {
 		rc = lfsck_layout_recreate_parent(env, com, ltd, rec, cfid,
@@ -3485,12 +3855,17 @@ static int lfsck_lov2layout(struct lov_mds_md_v1 *lmm, struct filter_fid *ff,
 	ENTRY;
 	if (magic == LOV_MAGIC_V1 || magic == LOV_MAGIC_V3) {
 		ol->ol_stripe_size = lmm->lmm_stripe_size;
-		ol->ol_stripe_count = lmm->lmm_stripe_count;
+		ol->ol_stripe_count =
+			cpu_to_le32(le16_to_cpu(lmm->lmm_stripe_count));
 		ol->ol_comp_start = 0;
 		ol->ol_comp_end = 0;
 		ol->ol_comp_id = 0;
 		ff->ff_layout_version = 0;
 		ff->ff_range = 0;
+		ff->ff_comp_flags = 0;
+		ff->ff_dstripe_count = 0;
+		ff->ff_cstripe_count = 0;
+		ff->ff_mirror_link_id = 0;
 	} else if (magic == LOV_MAGIC_COMP_V1 || magic == LOV_MAGIC_SEL) {
 		struct lov_comp_md_v1 *lcm = (struct lov_comp_md_v1 *)lmm;
 		struct lov_comp_md_entry_v1 *lcme = NULL;
@@ -3512,13 +3887,29 @@ static int lfsck_lov2layout(struct lov_mds_md_v1 *lmm, struct filter_fid *ff,
 			GOTO(out, rc = 1);
 
 		lmm = (void *)lmm + le32_to_cpu(lcme->lcme_offset);
-		ol->ol_stripe_size = le32_to_cpu(lmm->lmm_stripe_size);
-		ol->ol_stripe_count = le32_to_cpu(lmm->lmm_stripe_count);
-		ol->ol_comp_start = le64_to_cpu(lcme->lcme_extent.e_start);
-		ol->ol_comp_end = le64_to_cpu(lcme->lcme_extent.e_end);
-		ol->ol_comp_id = le32_to_cpu(lcme->lcme_id);
-		ff->ff_layout_version = le32_to_cpu(lcme->lcme_layout_gen);
+		ol->ol_stripe_size = lmm->lmm_stripe_size;
+		ol->ol_stripe_count =
+			cpu_to_le32(le16_to_cpu(lmm->lmm_stripe_count));
+		ol->ol_comp_start = lcme->lcme_extent.e_start;
+		ol->ol_comp_end = lcme->lcme_extent.e_end;
+		ol->ol_comp_id = lcme->lcme_id;
+		ff->ff_layout_version = lcme->lcme_layout_gen;
 		ff->ff_range = 0;
+		if (lfsck_layout_ec_fields_valid(lcm, lcme)) {
+			ff->ff_dstripe_count = lcme->lcme_dstripe_count;
+			ff->ff_cstripe_count = lcme->lcme_cstripe_count;
+			ff->ff_mirror_link_id =
+				cpu_to_le16(lfsck_layout_link_id(lcme));
+		} else {
+			ff->ff_dstripe_count = 0;
+			ff->ff_cstripe_count = 0;
+			ff->ff_mirror_link_id = 0;
+		}
+		ff->ff_comp_flags = cpu_to_le32(filter_fid_comp_flags(
+					le32_to_cpu(lcme->lcme_flags),
+					ff->ff_dstripe_count,
+					ff->ff_cstripe_count,
+					le16_to_cpu(ff->ff_mirror_link_id)));
 	} else {
 		GOTO(out, rc = -EINVAL);
 	}
@@ -3619,7 +4010,7 @@ static int __lfsck_layout_repair_dangling(const struct lu_env *env,
 		GOTO(unlock1, rc);
 	}
 
-	buf = lfsck_buf_get(env, ff, sizeof(struct filter_fid));
+	buf = lfsck_buf_get(env, ff, filter_fid_sizeof(ff));
 	handle = lfsck_trans_create(env, dev, lfsck);
 	if (IS_ERR(handle))
 		GOTO(unlock1, rc = PTR_ERR(handle));
@@ -3864,7 +4255,7 @@ static int lfsck_layout_repair_unmatched_pair(const struct lu_env *env,
 	if (rc)
 		GOTO(unlock1, rc);
 
-	buf = lfsck_buf_get(env, ff, sizeof(*ff));
+	buf = lfsck_buf_get(env, ff, filter_fid_sizeof(ff));
 
 	handle = lfsck_trans_create(env, dev, com->lc_lfsck);
 	if (IS_ERR(handle))
@@ -4596,7 +4987,7 @@ check_fid:
 	if (rc == 0 || rc == -ENODATA)
 		GOTO(check_owner, rc = 0);
 
-	filter_fid_le_to_cpu(ff, ff, sizeof(*ff));
+	filter_fid_le_to_cpu(ff, ff, rc);
 	rc = lfsck_layout_check_parent(env, com, lso, ff,
 				       lu_object_fid(&child->do_lu), cla, llr);
 	if (rc > 0) {
@@ -7478,6 +7869,7 @@ static int lfsck_orphan_it_next(const struct lu_env *env,
 	struct lfsck_rbtree_node *lrn;
 	int pos;
 	int rc;
+	int ff_size;
 	__u32 save;
 	__u32 idx = it->loi_llst->llst_index;
 	bool exact = false;
@@ -7598,10 +7990,14 @@ again1:
 	if (rc != 0)
 		GOTO(out, rc);
 
-	rc = dt_xattr_get(env, obj, lfsck_buf_get(env, info->lti_ff_buf,
-						  sizeof(info->lti_ff_buf)),
-			  XATTR_NAME_FID);
-	if (rc == -ENODATA) {
+	/* An OST that keeps the PFID in LMA returns 52 bytes but sets 44 */
+	memset(info->lti_ff_buf, 0, sizeof(info->lti_ff_buf));
+	ff_size = dt_xattr_get(env, obj,
+			       lfsck_buf_get(env, info->lti_ff_buf,
+					     sizeof(info->lti_ff_buf)),
+			       XATTR_NAME_FID);
+
+	if (ff_size == -ENODATA) {
 		/* For the pre-created OST-object, update the bitmap to avoid
 		 * others LFSCK (second phase) iteration to touch it again.
 		 */
@@ -7630,6 +8026,10 @@ again1:
 			memset(ol, 0, sizeof(*ol));
 			rec->lor_layout_version = 0;
 			rec->lor_range = 0;
+			rec->lor_comp_flags = 0;
+			rec->lor_dstripe_count = 0;
+			rec->lor_cstripe_count = 0;
+			rec->lor_mirror_link_id = 0;
 
 			GOTO(out, rc = 0);
 		}
@@ -7640,10 +8040,11 @@ again1:
 		goto again1;
 	}
 
-	if (rc < (int)sizeof(struct lu_fid))
-		GOTO(out, rc = (rc < 0 ? rc : -EINVAL));
+	if (ff_size < (int)sizeof(struct lu_fid))
+		GOTO(out, rc = (ff_size < 0 ? ff_size : -EINVAL));
 
-	fid_le_to_cpu(&rec->lor_rec.lor_fid, &ff->ff_parent);
+	filter_fid_le_to_cpu(ff, ff, ff_size);
+	rec->lor_rec.lor_fid = ff->ff_parent;
 	/* Currently, the filter_fid::ff_parent::f_ver is not the real parent
 	 * MDT-object's FID::f_ver, instead it is the OST-object index in its
 	 * parent MDT-object's layout EA.
@@ -7667,10 +8068,13 @@ again1:
 	rec->lor_rec.lor_fid.f_stripe_idx = save;
 	rec->lor_rec.lor_uid = la->la_uid;
 	rec->lor_rec.lor_gid = la->la_gid;
-	ost_layout_le_to_cpu(ol, &ff->ff_layout);
-	rec->lor_layout_version =
-		le32_to_cpu(ff->ff_layout_version & ~LU_LAYOUT_RESYNC);
-	rec->lor_range = le32_to_cpu(ff->ff_range);
+	*ol = ff->ff_layout;
+	rec->lor_layout_version = ff->ff_layout_version & ~LU_LAYOUT_RESYNC;
+	rec->lor_range = ff->ff_range;
+	rec->lor_comp_flags = ff->ff_comp_flags;
+	rec->lor_dstripe_count = ff->ff_dstripe_count;
+	rec->lor_cstripe_count = ff->ff_cstripe_count;
+	rec->lor_mirror_link_id = ff->ff_mirror_link_id;
 
 	CDEBUG(D_LFSCK,
 	       "%s: return orphan "DFID", PFID "DFID", owner %u:%u, stripe size %u, stripe count %u, COMP id %u, COMP start %llu, COMP end %llu, layout version %u, range %u\n",

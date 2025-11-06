@@ -4892,7 +4892,8 @@ static int osd_xattr_get(const struct lu_env *env, struct dt_object *dt,
 
 		LASSERT(lma->lma_compat & LMAC_STRIPE_INFO);
 
-		rc = sizeof(*ff);
+		/* LMA keeps only ff_parent and ff_layout */
+		rc = sizeof(struct filter_fid_217);
 		if (buf->lb_len == 0 || !buf->lb_buf)
 			return rc;
 
@@ -5051,7 +5052,8 @@ static int osd_xattr_set_pfid(const struct lu_env *env, struct osd_object *obj,
 	ENTRY;
 
 	/* a newer filter_fid is longer, and only its start is kept in LMA */
-	if (buf->lb_len < sizeof(*ff) && buf->lb_len != sizeof(struct lu_fid))
+	if (buf->lb_len < sizeof(struct filter_fid_217) &&
+	    buf->lb_len != sizeof(struct lu_fid))
 		RETURN(-EINVAL);
 
 	rc = osd_get_lma(info, inode, dentry, loa);

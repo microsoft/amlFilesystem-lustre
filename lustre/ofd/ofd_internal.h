@@ -197,6 +197,8 @@ struct ofd_object {
 	unsigned int		ofo_pfid_checking:1,
 				ofo_pfid_verified:1,
 				ofo_resource_ids_set:1;
+	/* the OSD keeps only ff_parent and ff_layout of filter_fid here */
+	bool			ofo_ff_noflags;
 };
 
 static inline struct ofd_object *ofd_obj(struct lu_object *o)
@@ -388,7 +390,8 @@ struct ofd_object *ofd_object_find(const struct lu_env *env,
 int ofd_object_ff_load(const struct lu_env *env, struct ofd_object *fo,
 		       bool force);
 int ofd_object_ff_update(const struct lu_env *env, struct ofd_object *fo,
-			 const struct obdo *oa, struct filter_fid *ff);
+			 const struct obdo *oa, struct filter_fid *ff,
+			 int *ff_size);
 int ofd_precreate_objects(const struct lu_env *env, struct ofd_device *ofd,
 			  u64 id, struct ofd_seq *oseq, int nr, int sync,
 			  bool trans_local);

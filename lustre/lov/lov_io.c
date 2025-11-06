@@ -1131,6 +1131,8 @@ static void lov_io_sub_inherit(struct lov_io_sub *sub, struct lov_io *lio,
 
 	switch (io->ci_type) {
 	case CIT_SETATTR: {
+		struct lov_stripe_md_entry *lsme;
+
 		io->u.ci_setattr.sa_attr = parent->u.ci_setattr.sa_attr;
 		io->u.ci_setattr.sa_attr_flags =
 			parent->u.ci_setattr.sa_attr_flags;
@@ -1166,8 +1168,12 @@ static void lov_io_sub_inherit(struct lov_io_sub *sub, struct lov_io *lio,
 			io->u.ci_setattr.sa_attr_projid =
 				parent->u.ci_setattr.sa_attr_projid;
 		}
-		lov_lsm2layout(lsm, lsm->lsm_entries[index],
-			       &io->u.ci_setattr.sa_layout);
+		lsme = lsm->lsm_entries[index];
+		lov_lsm2layout(lsm, lsme, &io->u.ci_setattr.sa_layout);
+		io->u.ci_setattr.sa_comp_flags = lsme->lsme_flags;
+		io->u.ci_setattr.sa_dstripe_count = lsme->lsme_dstripe_count;
+		io->u.ci_setattr.sa_cstripe_count = lsme->lsme_cstripe_count;
+		io->u.ci_setattr.sa_mirror_link_id = lsme->lsme_mirror_link_id;
 		break;
 	}
 	case CIT_DATA_VERSION: {

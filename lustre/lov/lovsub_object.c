@@ -125,18 +125,27 @@ static void lovsub_req_attr_set(const struct lu_env *env, struct cl_object *obj,
 {
 	struct lovsub_object *subobj = cl2lovsub(obj);
 	struct lov_stripe_md *lsm = subobj->lso_super->lo_lsm;
+	struct lov_stripe_md_entry *lsme;
 
 	ENTRY;
 	cl_req_attr_set(env, &subobj->lso_super->lo_cl, attr);
+
+	lsme = lsm->lsm_entries[lov_comp_entry(subobj->lso_index)];
 
 	/*
 	 * There is no OBD_MD_* flag for obdo::o_stripe_idx, so set it
 	 * unconditionally. It never changes anyway.
 	 */
 	attr->cra_oa->o_stripe_idx = lov_comp_stripe(subobj->lso_index);
-	lov_lsm2layout(lsm, lsm->lsm_entries[lov_comp_entry(subobj->lso_index)],
-		       &attr->cra_oa->o_layout);
+	lov_lsm2layout(lsm, lsme, &attr->cra_oa->o_layout);
 	attr->cra_oa->o_valid |= OBD_MD_FLOSTLAYOUT;
+
+	attr->cra_oa->o_comp_flags = lsme->lsme_flags;
+	attr->cra_oa->o_dstripe_count = lsme->lsme_dstripe_count;
+	attr->cra_oa->o_cstripe_count = lsme->lsme_cstripe_count;
+	attr->cra_oa->o_mirror_link_id = lsme->lsme_mirror_link_id;
+	attr->cra_oa->o_valid |= OBD_MD_FLCOMPFLAGS;
+
 	EXIT;
 }
 

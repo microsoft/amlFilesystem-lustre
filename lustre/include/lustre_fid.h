@@ -320,12 +320,21 @@ static inline void filter_fid_cpu_to_le(struct filter_fid *dst,
 {
 	fid_cpu_to_le(&dst->ff_parent, &src->ff_parent);
 
-	if (size < sizeof(struct filter_fid)) {
+	if (size < sizeof(struct filter_fid_210))
 		memset(&dst->ff_layout, 0, sizeof(dst->ff_layout));
-	} else {
+	else
 		ost_layout_cpu_to_le(&dst->ff_layout, &src->ff_layout);
+
+	if (size >= sizeof(struct filter_fid_217)) {
 		dst->ff_layout_version = cpu_to_le32(src->ff_layout_version);
 		dst->ff_range = cpu_to_le32(src->ff_range);
+	}
+
+	if (size >= offsetofend(struct filter_fid, ff_mirror_link_id)) {
+		dst->ff_comp_flags = cpu_to_le32(src->ff_comp_flags);
+		dst->ff_dstripe_count = src->ff_dstripe_count;
+		dst->ff_cstripe_count = src->ff_cstripe_count;
+		dst->ff_mirror_link_id = cpu_to_le16(src->ff_mirror_link_id);
 	}
 
 	/* XXX: Add more if filter_fid is enlarged in the future. */
@@ -336,15 +345,61 @@ static inline void filter_fid_le_to_cpu(struct filter_fid *dst,
 {
 	fid_le_to_cpu(&dst->ff_parent, &src->ff_parent);
 
-	if (size < sizeof(struct filter_fid)) {
+	if (size < sizeof(struct filter_fid_210))
 		memset(&dst->ff_layout, 0, sizeof(dst->ff_layout));
-	} else {
+	else
 		ost_layout_le_to_cpu(&dst->ff_layout, &src->ff_layout);
+
+	if (size < sizeof(struct filter_fid_217)) {
+		dst->ff_layout_version = 0;
+		dst->ff_range = 0;
+	} else {
 		dst->ff_layout_version = le32_to_cpu(src->ff_layout_version);
 		dst->ff_range = le32_to_cpu(src->ff_range);
 	}
 
+	if (size >= offsetofend(struct filter_fid, ff_mirror_link_id)) {
+		dst->ff_comp_flags = le32_to_cpu(src->ff_comp_flags);
+		dst->ff_dstripe_count = src->ff_dstripe_count;
+		dst->ff_cstripe_count = src->ff_cstripe_count;
+		dst->ff_mirror_link_id = le16_to_cpu(src->ff_mirror_link_id);
+	} else {
+		dst->ff_comp_flags = 0;
+		dst->ff_dstripe_count = 0;
+		dst->ff_cstripe_count = 0;
+		dst->ff_mirror_link_id = 0;
+	}
+
 	/* XXX: Add more if filter_fid is enlarged in the future. */
+}
+
+/*
+ * Component flags to store in filter_fid. Only EC components keep them, so
+ * that other files keep the filter_fid that servers without the EC fields
+ * in filter_fid can read.
+ */
+static inline enum lov_comp_md_entry_flags
+filter_fid_comp_flags(enum lov_comp_md_entry_flags flags, __u8 dstripe_count,
+		      __u8 cstripe_count, __u16 mirror_link_id)
+{
+	if (!(flags & LCME_FL_PARITY) && !dstripe_count && !cstripe_count &&
+	    !mirror_link_id)
+		return 0;
+
+	return flags & LCME_FF_FLAGS;
+}
+
+/* smallest filter_fid holding @ff, so that older tools can still read it */
+static inline int filter_fid_sizeof(const struct filter_fid *ff)
+{
+	BUILD_BUG_ON(sizeof(*ff) !=
+		     offsetofend(struct filter_fid, ff_mirror_link_id));
+
+	if (!ff->ff_comp_flags && !ff->ff_dstripe_count &&
+	    !ff->ff_cstripe_count && !ff->ff_mirror_link_id)
+		return sizeof(struct filter_fid_217);
+
+	return sizeof(*ff);
 }
 #endif /* CONFIG_LUSTRE_FS_SERVER */
 

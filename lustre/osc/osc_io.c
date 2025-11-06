@@ -776,8 +776,12 @@ static int osc_io_setattr_start(const struct lu_env *env,
 		obdo_set_parent_fid(oa, io->u.ci_setattr.sa_parent_fid);
 		oa->o_stripe_idx = io->u.ci_setattr.sa_stripe_index;
 		oa->o_layout = io->u.ci_setattr.sa_layout;
+		oa->o_comp_flags = io->u.ci_setattr.sa_comp_flags;
+		oa->o_dstripe_count = io->u.ci_setattr.sa_dstripe_count;
+		oa->o_cstripe_count = io->u.ci_setattr.sa_cstripe_count;
+		oa->o_mirror_link_id = io->u.ci_setattr.sa_mirror_link_id;
 		oa->o_valid |= OBD_MD_FLID | OBD_MD_FLGROUP |
-			OBD_MD_FLOSTLAYOUT;
+			OBD_MD_FLOSTLAYOUT | OBD_MD_FLCOMPFLAGS;
 		if (ia_avalid & ATTR_CTIME) {
 			oa->o_valid |= OBD_MD_FLCTIME;
 			oa->o_ctime = attr->cat_ctime;

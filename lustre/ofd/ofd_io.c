@@ -323,6 +323,12 @@ static void ofd_add_inconsistency_item(const struct lu_env *env,
 	ff->ff_parent.f_oid = oa->o_parent_oid;
 	ff->ff_parent.f_stripe_idx = oa->o_stripe_idx;
 	ff->ff_layout = oa->o_layout;
+	if (oa->o_valid & OBD_MD_FLCOMPFLAGS) {
+		ff->ff_comp_flags = oa->o_comp_flags;
+		ff->ff_dstripe_count = oa->o_dstripe_count;
+		ff->ff_cstripe_count = oa->o_cstripe_count;
+		ff->ff_mirror_link_id = oa->o_mirror_link_id;
+	}
 
 	spin_lock(&ofd->ofd_inconsistency_lock);
 	if (fo->ofo_pfid_checking || fo->ofo_pfid_verified) {
@@ -1037,6 +1043,7 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 	__u32 flags = la->la_flags;
 	struct thandle *th;
 	struct dt_object *dt_obj;
+	int ff_size = sizeof(*ff);
 	int fl = 0;
 	int rc;
 
@@ -1059,7 +1066,8 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 		GOTO(out, rc);
 
 	if (!la->la_valid && !(oa->o_valid &
-	    (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT | OBD_MD_LAYOUT_VERSION)))
+	    (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT | OBD_MD_LAYOUT_VERSION |
+	     OBD_MD_FLCOMPFLAGS)))
 		/* no attributes to set */
 		GOTO(out, rc = 0);
 
@@ -1074,7 +1082,7 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 	}
 
 	if (oa->o_valid & (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT |
-			   OBD_MD_LAYOUT_VERSION)) {
+			   OBD_MD_LAYOUT_VERSION | OBD_MD_FLCOMPFLAGS)) {
 		rc = dt_declare_xattr_set(env, dt_obj, NULL, &info->fti_buf,
 					  XATTR_NAME_FID, 0, th);
 		if (rc)
@@ -1093,7 +1101,8 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 		GOTO(out_unlock, rc);
 
 	if (!la->la_valid && !(oa->o_valid &
-	    (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT | OBD_MD_LAYOUT_VERSION)))
+	    (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT | OBD_MD_LAYOUT_VERSION |
+	     OBD_MD_FLCOMPFLAGS)))
 		/* no attributes to set */
 		GOTO(out_unlock, rc = 0);
 
@@ -1107,7 +1116,7 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 			ofd_obj->ofo_resource_ids_set = 1;
 	}
 
-	fl = ofd_object_ff_update(env, ofd_obj, oa, ff);
+	fl = ofd_object_ff_update(env, ofd_obj, oa, ff, &ff_size);
 	if (fl <= 0)
 		GOTO(out_unlock, rc = fl);
 
@@ -1115,8 +1124,13 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 	 * FIXME: it holds read lock of ofd object to modify the XATTR_NAME_FID
 	 * while the write lock should be held. However, it should work because
 	 * write RPCs only modify ff_{parent,layout} and those information will
-	 * be the same from all the write RPCs. The reason that fl is not used
-	 * in dt_xattr_set() is to allow this race. */
+	 * be the same from all the write RPCs. Of ff_comp_flags and the EC
+	 * fields, only prefer, nosync, nocompr and ff_mirror_link_id (when
+	 * mirrors are merged) change for a component, so only they can race
+	 * with a layout change.
+	 * The reason that fl is not used in dt_xattr_set() is to allow this
+	 * race.
+	 */
 	if (CFS_FAIL_CHECK(OBD_FAIL_LFSCK_NOPFID))
 		GOTO(out_unlock, rc);
 	if (CFS_FAIL_CHECK(OBD_FAIL_LFSCK_UNMATCHED_PAIR1))
@@ -1125,10 +1139,10 @@ ofd_write_attr_set(const struct lu_env *env, struct ofd_device *ofd,
 		le32_add_cpu(&ff->ff_parent.f_oid, -1);
 
 	info->fti_buf.lb_buf = ff;
-	info->fti_buf.lb_len = sizeof(*ff);
+	info->fti_buf.lb_len = ff_size;
 	rc = dt_xattr_set(env, dt_obj, &info->fti_buf, XATTR_NAME_FID, 0, th);
 	if (rc == 0)
-		filter_fid_le_to_cpu(&ofd_obj->ofo_ff, ff, sizeof(*ff));
+		filter_fid_le_to_cpu(&ofd_obj->ofo_ff, ff, ff_size);
 
 	GOTO(out_unlock, rc);
 

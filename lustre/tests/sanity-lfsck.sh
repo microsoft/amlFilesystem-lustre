@@ -6861,6 +6861,447 @@ test_48() {
 }
 run_test 48 "LFSCK reads a filter_fid longer than its own"
 
+need_ff_comp_flags() {
+	local ver=$(version_code 2.17.62.1)
+
+	(( MDS1_VERSION >= ver && OST1_VERSION >= ver )) ||
+		skip "Need MDS and OST >= 2.17.62.1 for ff_comp_flags"
+}
+
+lfsck_layout_status_all() {
+	do_nodes $(tgts_nodes) "$LCTL get_param mdd.*.lfsck_layout \
+		obdfilter.*.lfsck_layout 2>/dev/null"
+}
+
+# remove the MDT-object of $1, leaving its OST-objects as orphans, then
+# rebuild it into lost+found with layout LFSCK
+lfsck_orphan_rebuild() {
+	local file=$1
+	local i
+
+	cancel_lru_locks mdc
+	cancel_lru_locks osc
+
+	#define OBD_FAIL_LFSCK_LOST_MDTOBJ 0x1616
+	do_facet $SINGLEMDS $LCTL set_param fail_loc=0x1616
+	rm -f $file || error "(lfsck_orphan_rebuild) rm $file failed"
+	do_facet $SINGLEMDS $LCTL set_param fail_loc=0
+
+	# sync_all_data returns the status of a grep that filters nothing
+	sync; sync_all_data || true
+
+	# an OST still finishing an earlier test's LFSCK does not restart
+	for ((i = 0; i < 60; i++)); do
+		lfsck_layout_status_all | grep -q "status: scanning" || break
+		sleep 1
+	done
+
+	$START_LAYOUT -r -o ||
+		error "(lfsck_orphan_rebuild) Fail to start LFSCK for layout"
+	wait_all_targets_blocked layout completed 1
+
+	local repaired=$($SHOW_LAYOUT | awk '/^repaired_orphan/ { print $2 }')
+
+	(( repaired >= 1 )) || {
+		lfsck_layout_status_all
+		error "(lfsck_orphan_rebuild) no orphan repaired: $repaired"
+	}
+}
+
+test_49() {
+	need_ff_comp_flags
+
+	echo "#####"
+	echo "Verify that all mirrors are restored by LFSCK after resync"
+	echo "writes to all mirrors, and none is restored as stale"
+	echo "#####"
+
+	check_mount_and_prep
+
+	$LFS mirror create -N2 $DIR/$tdir/f0 ||
+		error "(1) Fail to create mirror file"
+
+	dd if=/dev/zero of=$DIR/$tdir/f0 bs=1M count=2 ||
+		error "(2) Fail to write f0"
+
+	$LFS mirror resync $DIR/$tdir/f0 ||
+		error "(3) Fail to resync mirrors"
+
+	local fid=$($LFS path2fid $DIR/$tdir/f0)
+
+	lfsck_orphan_rebuild $DIR/$tdir/f0
+
+	local orphan=$MOUNT/.lustre/lost+found/MDT0000/$fid-R-0
+
+	[[ -f $orphan ]] || error "(4) No orphan found for $fid"
+	echo "Found orphan: $orphan"
+
+	local mirror_count=$($LFS getstripe -N $orphan)
+
+	echo "Mirror count after LFSCK: $mirror_count"
+	(( mirror_count == 2 )) ||
+		error "(5) Expected 2 mirrors after LFSCK, got $mirror_count"
+
+	local id
+
+	for id in $($LFS getstripe $orphan | awk '/lcme_id:/ { print $2 }'); do
+		local flags=$($LFS getstripe -I$id $orphan |
+			      awk '/lcme_flags:/ { print $2 }')
+
+		echo "Component $id flags: $flags"
+		[[ ! "$flags" =~ "stale" ]] ||
+			error "(6) Component $id restored as stale: $flags"
+	done
+
+	rm -f $orphan || error "(7) Fail to remove orphan"
+}
+run_test 49 "LFSCK restores all mirrors of a resynced file"
+
+# component id, flags, EC geometry, link and pattern of each component
+ec_layout_summary() {
+	$LFS getstripe $1 | grep -E -e "lcme_(id|flags|mirror_link_id):" \
+		-e "lcme_[cd]stripe_count:" -e "lmm_(stripe_count|pattern):"
+}
+
+# cut the trusted.fid of OST object $2 (from $LFS getstripe) on $1 to the
+# 52 bytes of a filter_fid without the component flags and EC fields
+lfsck_shrink_ff() {
+	local facet=$1
+	local objpath=$(ost_fid2_objpath $facet $2)
+	local path=$(facet_mntpt $facet)/$objpath
+	local ff=$(do_facet $facet "getfattr -n trusted.fid -e hex $path" |
+		   awk -F= '/^trusted.fid=/ { print $2 }')
+
+	(( ${#ff} > 106 )) || error "short trusted.fid on $objpath: $ff"
+	do_facet $facet "setfattr -n trusted.fid -v ${ff:0:106} $path" ||
+		error "setfattr on $objpath failed"
+}
+
+# drop the EC fields of object $EC_SHRINK_OBJ (default 0, counted by OST index)
+# of the last parity component of EC file $1 (mode parity), of all its parity
+# objects (mode allparity), or of all its data objects (mode data)
+lfsck_ec_shrink() {
+	local file=$1
+	local mode=$2
+	local objs=()
+	local facet
+	local obj
+	local id
+
+	if [[ "$mode" == "parity" ]]; then
+		id=$($LFS getstripe $file |
+		     awk '/lcme_id:/ { id = $2 }
+			  /lcme_flags:.*parity/ { last = id }
+			  END { print last }')
+		objs=($($LFS getstripe -I$id $file |
+			awk '/l_ost_idx:/ { print $5 $7 }' | sort -n |
+			sed -n "$((${EC_SHRINK_OBJ:-0} + 1))p"))
+	else
+		local want='!/parity/'
+
+		[[ "$mode" == "data" ]] || want='/parity/'
+		for id in $($LFS getstripe $file |
+			    awk "/lcme_id:/ { id = \$2 }
+				 /lcme_flags:/ && $want { print id }"); do
+			objs+=($($LFS getstripe -I$id $file |
+				 awk '/l_ost_idx:/ { print $5 $7 }'))
+		done
+	fi
+	(( ${#objs[@]} > 0 )) || error "no $mode object found in $file"
+
+	cancel_lru_locks osc
+	for facet in $(for obj in "${objs[@]}"; do
+			       echo ost$((${obj%%,*} + 1))
+		       done | sort -u); do
+		stop $facet || error "Fail to stop $facet"
+		wait_osc_import_state mds $facet "\(DISCONN\|CONNECTING\)"
+		mount_fstype $facet || error "Fail to mount $facet"
+		for obj in "${objs[@]}"; do
+			local ofid=${obj#*,[}
+
+			[[ ost$((${obj%%,*} + 1)) == $facet ]] || continue
+			ofid=${ofid%]*}
+			echo "Drop EC fields of $mode object $ofid on $facet"
+			lfsck_shrink_ff $facet $ofid
+		done
+		unmount_fstype $facet
+		start $facet $(ostdevname ${facet#ost}) $OST_MOUNT_OPTS ||
+			error "Fail to start $facet"
+		wait_recovery_complete $facet ||
+			error "$facet recovery not done"
+		wait_osc_import_state mds $facet FULL
+	done
+}
+
+# create $DIR/$tdir/f0 with EC layout "$@", write and resync it, then have
+# LFSCK rebuild it from its OST objects into $EC_ORPHAN. EC_SHRINK_FF=parity,
+# allparity or data has lfsck_ec_shrink drop EC fields before the rebuild.
+lfsck_ec_orphan() {
+	local file=$DIR/$tdir/f0
+
+	check_mount_and_prep
+
+	export LFS_EC_OK=yes
+	stack_trap "unset LFS_EC_OK"
+
+	local ec_enable=$($LCTL get_param -n llite.*.enable_erasure_coding)
+
+	$LCTL set_param llite.*.enable_erasure_coding=1
+	stack_trap "$LCTL set_param -n llite.*.enable_erasure_coding=$ec_enable"
+
+	$LFS setstripe "$@" $file || error "(1) Fail to create EC file"
+	dd if=/dev/urandom of=$file bs=1M count=8 ||
+		error "(2) Fail to write to EC file"
+	# the resync writes the parity objects, while that mirror is stale
+	$LFS mirror resync $file || error "(3) Fail to resync EC file"
+
+	EC_SUM=$(md5sum < $file)
+
+	local fid=$($LFS path2fid $file)
+
+	EC_BEFORE=$(ec_layout_summary $file)
+	echo "$EC_BEFORE"
+	[[ -z "$EC_SHRINK_FF" ]] || lfsck_ec_shrink $file $EC_SHRINK_FF
+
+	lfsck_orphan_rebuild $file
+
+	EC_ORPHAN=$MOUNT/.lustre/lost+found/MDT0000/$fid-R-0
+	[[ -f $EC_ORPHAN ]] || error "(4) No orphan found for $fid"
+}
+
+# lfsck_ec_orphan, then check the layout and data of the rebuilt file after
+# a resync
+lfsck_ec_rebuild() {
+	local before
+	local after
+
+	lfsck_ec_orphan "$@"
+	before=$EC_BEFORE
+
+	local pflags=$($LFS getstripe $EC_ORPHAN | grep "lcme_flags:.*parity")
+
+	[[ -n "$pflags" ]] || error "(5) No parity component rebuilt"
+	! grep -q -v stale <<< "$pflags" ||
+		error "(5.1) Rebuilt parity component is not stale: $pflags"
+	$LFS mirror resync $EC_ORPHAN ||
+		error "(6) Fail to resync rebuilt file"
+	after=$(ec_layout_summary $EC_ORPHAN)
+	echo "$after"
+	[[ "$after" == "$before" ]] ||
+		error "(7) Rebuilt layout differs from the original"
+	[[ $(md5sum < $EC_ORPHAN) == "$EC_SUM" ]] ||
+		error "(8) Rebuilt file data differs"
+}
+
+test_50() {
+	need_ff_comp_flags
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC"
+
+	echo "#####"
+	echo "LFSCK rebuilds an EC file from its OST objects, with the parity"
+	echo "flag, EC geometry and mirror link, and after a resync its parity"
+	echo "can rebuild the data"
+	echo "#####"
+
+	lfsck_ec_rebuild -E -1 -c 2 --ec 2+1
+
+	echo "Read with the first data stripe's OST failing"
+	local data_ost=$($LFS getstripe -I65537 $EC_ORPHAN |
+			 awk '/l_ost_idx:/ { print $5; exit }')
+	local resend=$($LCTL get_param -n osc.*.resend_count | head -n1)
+	local osts=$(osts_nodes)
+
+	data_ost=${data_ost%,}
+	$LCTL set_param -n osc.*.resend_count=1
+	stack_trap "$LCTL set_param -n osc.*.resend_count=$resend"
+	#define OBD_FAIL_OST_BRW_READ_BULK	0x20f
+	do_nodes $osts $LCTL set_param -n fail_loc=0x20f \
+		fail_val=$((0x10000 | (1 << data_ost)))
+	stack_trap "do_nodes $osts $LCTL set_param -n fail_loc=0 fail_val=0"
+	cancel_lru_locks osc
+	[[ $(md5sum < $EC_ORPHAN) == "$EC_SUM" ]] ||
+		error "(9) Degraded read of the rebuilt file differs"
+	do_nodes $osts $LCTL set_param -n fail_loc=0 fail_val=0
+
+	rm -f $EC_ORPHAN || error "(10) Fail to remove orphan"
+}
+run_test 50 "LFSCK rebuilds a usable EC file"
+
+test_51() {
+	need_ff_comp_flags
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC"
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only"
+
+	echo "#####"
+	echo "LFSCK rebuilds a PFL EC file whose parity mirror has an object"
+	echo "without the EC fields, with every parity component consistent"
+	echo "#####"
+
+	EC_SHRINK_FF=parity lfsck_ec_rebuild -E 4M -c 2 --ec 2+1 \
+		-E -1 -c 2 --ec 2+1
+	rm -f $EC_ORPHAN || error "(9) Fail to remove orphan"
+}
+run_test 51 "LFSCK rebuilds a PFL EC file with mixed filter_fid sizes"
+
+test_52() {
+	need_ff_comp_flags
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC"
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only"
+
+	echo "#####"
+	echo "LFSCK rebuilds an EC file whose data objects lack the EC fields,"
+	echo "as after 'lfs mirror extend --ec', with the data linked to parity"
+	echo "#####"
+
+	EC_SHRINK_FF=data lfsck_ec_rebuild -E -1 -c 2 --ec 2+1
+	rm -f $EC_ORPHAN || error "(9) Fail to remove orphan"
+}
+run_test 52 "LFSCK links data to parity when data objects lack EC fields"
+
+test_53() {
+	need_ff_comp_flags
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs for EC 2+2"
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only"
+
+	echo "#####"
+	echo "LFSCK rebuilds an EC file whose only parity component has an"
+	echo "object without the EC fields, whatever order it finds them in"
+	echo "#####"
+
+	local i
+
+	# LFSCK scans OSTs in no fixed order, so shrink each object in turn
+	for ((i = 0; i < 2; i++)); do
+		EC_SHRINK_OBJ=$i EC_SHRINK_FF=parity \
+			lfsck_ec_rebuild -E -1 -c 2 --ec 2+2
+		rm -f $EC_ORPHAN || error "(9) Fail to remove orphan"
+	done
+}
+run_test 53 "LFSCK rebuilds a parity component from mixed filter_fid sizes"
+
+test_54() {
+	need_ff_comp_flags
+	[[ "$mds1_FSTYPE" == "ldiskfs" && "$ost1_FSTYPE" == "ldiskfs" ]] ||
+		skip "ldiskfs only"
+
+	echo "#####"
+	echo "LFSCK keeps the 52-byte trusted.fid when it repairs an OST object"
+	echo "of a non-EC file whose LOV EA has stale bytes in the EC fields,"
+	echo "as servers before EC left them"
+	echo "#####"
+
+	check_mount_and_prep
+	$LFS setstripe -E -1 -c 1 -i 0 $DIR/$tdir/f0 ||
+		error "(1) setstripe failed"
+	echo foo > $DIR/$tdir/f0 || error "(2) write failed"
+
+	local ofid=$($LFS getstripe $DIR/$tdir/f0 |
+		     awk '/l_ost_idx:/ { print $7; exit }')
+
+	ofid=${ofid#[}
+	ofid=${ofid%]*}
+	local objpath=$(facet_mntpt ost1)/$(ost_fid2_objpath ost1 $ofid)
+	local mdtpath=$(facet_mntpt mds1)/ROOT${DIR#$MOUNT}/$tdir/f0
+	local lov
+	local ff
+
+	cancel_lru_locks mdc
+	cancel_lru_locks osc
+	sync; sync_all_data || true
+
+	stop mds1 || error "(3) failed to stop mds1"
+	mount_fstype mds1 || error "(4) failed to mount mds1 as ldiskfs"
+	lov=$(do_facet mds1 "getfattr -n trusted.lov -e hex $mdtpath" |
+	      awk -F= '/^trusted.lov=/ { print $2 }')
+	[[ -n "$lov" ]] || error "(5) no trusted.lov on $mdtpath"
+	# entry 0 at byte 32: link id at 74, data and code stripe counts at 76
+	do_facet mds1 "setfattr -n trusted.lov \
+		-v ${lov:0:150}02000201${lov:158} $mdtpath" ||
+		error "(6) setfattr trusted.lov failed"
+	unmount_fstype mds1
+	start mds1 $(mdsdevname 1) $MDS_MOUNT_OPTS ||
+		error "(7) failed to start mds1"
+	wait_recovery_complete mds1 || error "(7.1) mds1 recovery not done"
+
+	stop ost1 || error "(8) failed to stop ost1"
+	wait_osc_import_state mds ost1 "\(DISCONN\|CONNECTING\)"
+	mount_fstype ost1 || error "(9) failed to mount ost1 as ldiskfs"
+	ff=$(do_facet ost1 "getfattr -n trusted.fid -e hex $objpath" |
+	     awk -F= '/^trusted.fid=/ { print $2 }')
+	(( ${#ff} == 106 )) || error "(10) trusted.fid is not 52 bytes: $ff"
+	# a wrong stripe index makes LFSCK rewrite trusted.fid from the layout
+	do_facet ost1 "setfattr -n trusted.fid \
+		-v ${ff:0:26}01000000${ff:34} $objpath" ||
+		error "(11) setfattr trusted.fid failed"
+	unmount_fstype ost1
+	start ost1 $(ostdevname 1) $OST_MOUNT_OPTS ||
+		error "(12) failed to start ost1"
+	wait_recovery_complete ost1 || error "(13) ost1 recovery not done"
+	wait_osc_import_state mds ost1 FULL
+
+	$START_LAYOUT -r -A || error "(14) Fail to start LFSCK for layout"
+	wait_all_targets_blocked layout completed 15
+
+	local repaired=$($SHOW_LAYOUT |
+			 awk '/^repaired_unmatched_pair/ { print $2 }')
+
+	(( repaired >= 1 )) || error "(16) no unmatched pair repaired"
+
+	stop ost1 || error "(17) failed to stop ost1"
+	mount_fstype ost1 || error "(18) failed to mount ost1 as ldiskfs"
+	ff=$(do_facet ost1 "getfattr -n trusted.fid -e hex $objpath" |
+	     awk -F= '/^trusted.fid=/ { print $2 }')
+	unmount_fstype ost1
+	start ost1 $(ostdevname 1) $OST_MOUNT_OPTS ||
+		error "(19) failed to start ost1"
+	wait_recovery_complete ost1 || error "(20) ost1 recovery not done"
+
+	echo "trusted.fid after LFSCK: $ff"
+	(( ${#ff} == 106 )) || error "(21) trusted.fid is not 52 bytes: $ff"
+	[[ "${ff:26:8}" == "00000000" ]] ||
+		error "(22) stripe index not repaired: $ff"
+	[[ $(cat $DIR/$tdir/f0) == "foo" ]] || error "(23) wrong data"
+}
+run_test 54 "LFSCK ignores stale EC fields of a non-EC layout"
+
+test_57() {
+	need_ff_comp_flags
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC"
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only"
+
+	echo "#####"
+	echo "LFSCK marks stale a mirror that the data links to when none of"
+	echo "its objects has the EC fields, so its parity is not read as data"
+	echo "#####"
+
+	local file=$DIR/$tdir/f0
+	local ids
+	local id
+
+	EC_SHRINK_FF=allparity lfsck_ec_orphan -E -1 -c 2 --ec 2+1
+	ids=$(awk '/lcme_id:/ { id = $2 } /lcme_flags:.*parity/ { print id }' \
+	      <<< "$EC_BEFORE")
+	[[ -n "$ids" ]] || error "(5) no parity component in $file"
+	$LFS getstripe $EC_ORPHAN
+	for id in $ids; do
+		local flags=$($LFS getstripe -I$id $EC_ORPHAN |
+			      awk '/lcme_flags:/ { print $2 }')
+
+		[[ "$flags" =~ "stale" ]] ||
+			error "(6) component $id not stale: $flags"
+	done
+	cancel_lru_locks osc
+	[[ $(md5sum < $EC_ORPHAN) == "$EC_SUM" ]] ||
+		error "(7) Rebuilt file data differs"
+	$LFS mirror resync $EC_ORPHAN ||
+		error "(8) Fail to resync rebuilt file"
+	cancel_lru_locks osc
+	[[ $(md5sum < $EC_ORPHAN) == "$EC_SUM" ]] ||
+		error "(9) Resynced file data differs"
+	rm -f $EC_ORPHAN || error "(10) Fail to remove orphan"
+}
+run_test 57 "LFSCK marks a parity mirror stale when no object shows parity"
+
 # restore MDS/OST size
 MDSSIZE=${SAVED_MDSSIZE}
 OSTSIZE=${SAVED_OSTSIZE}

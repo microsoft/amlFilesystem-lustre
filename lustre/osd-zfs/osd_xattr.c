@@ -269,7 +269,8 @@ static int osd_get_pfid_from_lma(const struct lu_env *env,
 	lustre_loa_swab(loa, true);
 	LASSERT(lma->lma_compat & LMAC_STRIPE_INFO);
 
-	*sizep = sizeof(*ff);
+	/* LMA keeps only ff_parent and ff_layout */
+	*sizep = sizeof(struct filter_fid_217);
 	if (buf->lb_len == 0 || !buf->lb_buf)
 		RETURN(0);
 

@@ -2675,7 +2675,7 @@ lod_obj_stripe_replace_parent_fid_cb(const struct lu_env *env,
 		memset(ff, 0, sizeof(*ff));
 		ff->ff_parent = *(struct lu_fid *)data->locd_buf->lb_buf;
 	} else {
-		filter_fid_le_to_cpu(ff, ff, sizeof(*ff));
+		filter_fid_le_to_cpu(ff, ff, rc);
 
 		if (lu_fid_eq(lod_object_fid(lo), &ff->ff_parent) &&
 		    ff->ff_layout.ol_comp_id == comp->llc_id)
@@ -2693,8 +2693,15 @@ lod_obj_stripe_replace_parent_fid_cb(const struct lu_env *env,
 	ff->ff_layout.ol_comp_start = comp->llc_extent.e_start;
 	ff->ff_layout.ol_comp_end = comp->llc_extent.e_end;
 	ff->ff_layout_version = lo->ldo_layout_gen;
-	buf->lb_len = sizeof(*ff);
-	filter_fid_cpu_to_le(ff, ff, sizeof(*ff));
+	ff->ff_comp_flags = filter_fid_comp_flags(comp->llc_flags,
+						  comp->llc_dstripe_count,
+						  comp->llc_cstripe_count,
+						  comp->llc_mirror_link_id);
+	ff->ff_dstripe_count = comp->llc_dstripe_count;
+	ff->ff_cstripe_count = comp->llc_cstripe_count;
+	ff->ff_mirror_link_id = comp->llc_mirror_link_id;
+	buf->lb_len = filter_fid_sizeof(ff);
+	filter_fid_cpu_to_le(ff, ff, buf->lb_len);
 
 	if (data->locd_declare)
 		rc = lod_sub_declare_xattr_set(env, dt, buf, XATTR_NAME_FID,

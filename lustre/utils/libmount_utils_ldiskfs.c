@@ -1285,9 +1285,9 @@ int ldiskfs_make_lustre(struct mkfs_opts *mop)
 			 *	ext4_xattr_header: 32
 			 *	LMA EA size: 24(lustre_mdt_attrs) +
 			 *		     16(xattr_entry) + 4("lma")
-			 *	FID EA size: 52(filter_fid) +
+			 *	FID EA size: 60(filter_fid) +
 			 *		     16(xattr_entry) + 4("fid")
-			 * 160 + 32 + (24+20) + (52+20) = 308
+			 * 160 + 32 + (24+20) + (60+20) = 316
 			 */
 			inode_size = 512;
 		}

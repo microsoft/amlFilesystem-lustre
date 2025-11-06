@@ -1925,6 +1925,11 @@ struct cl_io {
 			unsigned int		 sa_xvalid; /* OP_XVALID */
 			int			 sa_stripe_index;
 			struct ost_layout	 sa_layout;
+			/* component flags and EC geometry, as in obdo */
+			enum lov_comp_md_entry_flags sa_comp_flags;
+			__u8			 sa_dstripe_count;
+			__u8			 sa_cstripe_count;
+			__u16			 sa_mirror_link_id;
 			const struct lu_fid	*sa_parent_fid;
 			/* SETATTR interface is used for regular setattr, */
 			/* truncate(2) and fallocate(2) subtypes */

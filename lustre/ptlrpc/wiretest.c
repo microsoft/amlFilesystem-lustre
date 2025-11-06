@@ -584,6 +584,58 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct ost_layout, ol_comp_id));
 	LASSERTF((int)sizeof(((struct ost_layout *)0)->ol_comp_id) == 4, "found %lld\n",
 		 (long long)(int)sizeof(((struct ost_layout *)0)->ol_comp_id));
+
+	/* Checks for struct lu_orphan_rec_v3 */
+	LASSERTF((int)sizeof(struct lu_orphan_rec_v3) == 72, "found %lld\n",
+		 (long long)(int)sizeof(struct lu_orphan_rec_v3));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_rec) == 0, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_rec));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_rec) == 24, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_rec));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_layout) == 24, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_layout));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_layout) == 28, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_layout));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_layout_version) == 52, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_layout_version));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_layout_version) == 4, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_layout_version));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_range) == 56, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_range));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_range) == 4, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_range));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_comp_flags) == 60, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_comp_flags));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_comp_flags) == 4, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_comp_flags));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_dstripe_count) == 64, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_dstripe_count));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_dstripe_count) == 1, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_dstripe_count));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_cstripe_count) == 65, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_cstripe_count));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_cstripe_count) == 1, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_cstripe_count));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_mirror_link_id) == 66, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_mirror_link_id));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_mirror_link_id) == 2, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_mirror_link_id));
+	LASSERTF((int)offsetof(struct lu_orphan_rec_v3, lor_padding_2) == 68, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_rec_v3, lor_padding_2));
+	LASSERTF((int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_padding_2) == 4, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_rec_v3 *)0)->lor_padding_2));
+
+	/* Checks for struct lu_orphan_ent_v3 */
+	LASSERTF((int)sizeof(struct lu_orphan_ent_v3) == 88, "found %lld\n",
+		 (long long)(int)sizeof(struct lu_orphan_ent_v3));
+	LASSERTF((int)offsetof(struct lu_orphan_ent_v3, loe_key) == 0, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_ent_v3, loe_key));
+	LASSERTF((int)sizeof(((struct lu_orphan_ent_v3 *)0)->loe_key) == 16, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_ent_v3 *)0)->loe_key));
+	LASSERTF((int)offsetof(struct lu_orphan_ent_v3, loe_rec) == 16, "found %lld\n",
+		 (long long)(int)offsetof(struct lu_orphan_ent_v3, loe_rec));
+	LASSERTF((int)sizeof(((struct lu_orphan_ent_v3 *)0)->loe_rec) == 72, "found %lld\n",
+		 (long long)(int)sizeof(((struct lu_orphan_ent_v3 *)0)->loe_rec));
 	LASSERTF(OUT_CREATE == 1, "found %lld\n",
 		 (long long)OUT_CREATE);
 	LASSERTF(OUT_DESTROY == 2, "found %lld\n",
@@ -1677,14 +1729,22 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct obdo, o_layout_version));
 	LASSERTF((int)sizeof(((struct obdo *)0)->o_layout_version) == 4, "found %lld\n",
 		 (long long)(int)sizeof(((struct obdo *)0)->o_layout_version));
-	LASSERTF((int)offsetof(struct obdo, o_uid_h) == 168, "found %lld\n",
-		 (long long)(int)offsetof(struct obdo, o_uid_h));
-	LASSERTF((int)sizeof(((struct obdo *)0)->o_uid_h) == 4, "found %lld\n",
-		 (long long)(int)sizeof(((struct obdo *)0)->o_uid_h));
-	LASSERTF((int)offsetof(struct obdo, o_gid_h) == 172, "found %lld\n",
-		 (long long)(int)offsetof(struct obdo, o_gid_h));
-	LASSERTF((int)sizeof(((struct obdo *)0)->o_gid_h) == 4, "found %lld\n",
-		 (long long)(int)sizeof(((struct obdo *)0)->o_gid_h));
+	LASSERTF((int)offsetof(struct obdo, o_comp_flags) == 168, "found %lld\n",
+		 (long long)(int)offsetof(struct obdo, o_comp_flags));
+	LASSERTF((int)sizeof(((struct obdo *)0)->o_comp_flags) == 4, "found %lld\n",
+		 (long long)(int)sizeof(((struct obdo *)0)->o_comp_flags));
+	LASSERTF((int)offsetof(struct obdo, o_dstripe_count) == 172, "found %lld\n",
+		 (long long)(int)offsetof(struct obdo, o_dstripe_count));
+	LASSERTF((int)sizeof(((struct obdo *)0)->o_dstripe_count) == 1, "found %lld\n",
+		 (long long)(int)sizeof(((struct obdo *)0)->o_dstripe_count));
+	LASSERTF((int)offsetof(struct obdo, o_cstripe_count) == 173, "found %lld\n",
+		 (long long)(int)offsetof(struct obdo, o_cstripe_count));
+	LASSERTF((int)sizeof(((struct obdo *)0)->o_cstripe_count) == 1, "found %lld\n",
+		 (long long)(int)sizeof(((struct obdo *)0)->o_cstripe_count));
+	LASSERTF((int)offsetof(struct obdo, o_mirror_link_id) == 174, "found %lld\n",
+		 (long long)(int)offsetof(struct obdo, o_mirror_link_id));
+	LASSERTF((int)sizeof(((struct obdo *)0)->o_mirror_link_id) == 2, "found %lld\n",
+		 (long long)(int)sizeof(((struct obdo *)0)->o_mirror_link_id));
 	LASSERTF((int)offsetof(struct obdo, o_data_version) == 176, "found %lld\n",
 		 (long long)(int)offsetof(struct obdo, o_data_version));
 	LASSERTF((int)sizeof(((struct obdo *)0)->o_data_version) == 8, "found %lld\n",
@@ -1745,6 +1805,8 @@ void lustre_assert_wire_constants(void)
 		 OBD_MD_FLHANDLE);
 	LASSERTF(OBD_MD_FLCKSUM == (0x00100000ULL), "found 0x%.16llxULL\n",
 		 OBD_MD_FLCKSUM);
+	LASSERTF(OBD_MD_FLCOMPFLAGS == (0x00200000ULL), "found 0x%.16llxULL\n",
+		 OBD_MD_FLCOMPFLAGS);
 	LASSERTF(OBD_MD_FLPRJQUOTA == (0x00400000ULL), "found 0x%.16llxULL\n",
 		 OBD_MD_FLPRJQUOTA);
 	LASSERTF(OBD_MD_FLGROUP == (0x01000000ULL), "found 0x%.16llxULL\n",

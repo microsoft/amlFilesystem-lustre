@@ -129,7 +129,8 @@ int main(int argc, char *argv[])
 		if (size != sizeof(struct filter_fid) &&
 		    size != sizeof(struct filter_fid_18_23) &&
 		    size != sizeof(struct filter_fid_24_29) &&
-		    size != sizeof(struct filter_fid_210) && !printed) {
+		    size != sizeof(struct filter_fid_210) &&
+		    size != sizeof(struct filter_fid_217) && !printed) {
 			fprintf(stderr,
 				"%s: warning: ffid size is unexpected (%d bytes), recompile?\n",
 				argv[i], size);
@@ -171,10 +172,15 @@ int main(int argc, char *argv[])
 				       (unsigned long long)
 				       __le64_to_cpu(ol->ol_comp_end));
 		}
-		if (size >= sizeof(struct filter_fid))
+		if (size >= sizeof(struct filter_fid_217))
 			printf(" layout_version=%u range=%u",
 			       __le32_to_cpu(ff->ff_layout_version),
 			       __le32_to_cpu(ff->ff_range));
+		if (size >= sizeof(struct filter_fid))
+			printf(" comp_flags=%#x ec=%u+%u link_id=%u",
+			       __le32_to_cpu(ff->ff_comp_flags),
+			       ff->ff_dstripe_count, ff->ff_cstripe_count,
+			       __le16_to_cpu(ff->ff_mirror_link_id));
 
 		printf("\n");
 	}

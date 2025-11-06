@@ -101,6 +101,21 @@ struct ofd_object *ofd_object_find(const struct lu_env *env,
 	RETURN(fo);
 }
 
+/* an OSD keeping the PFID in LMA keeps only ff_parent and ff_layout */
+static bool ofd_object_pfid_in_lma(const struct lu_env *env,
+				   struct ofd_object *fo)
+{
+	struct lustre_ost_attrs loa;
+	struct lu_buf buf = { .lb_buf = &loa, .lb_len = sizeof(loa) };
+	int rc;
+
+	rc = dt_xattr_get(env, ofd_object_child(fo), &buf, XATTR_NAME_LMA);
+	if (rc < (int)sizeof(struct lustre_mdt_attrs))
+		return false;
+
+	return le32_to_cpu(loa.loa_lma.lma_compat) & LMAC_STRIPE_INFO;
+}
+
 /**
  * ofd_object_ff_load() - Get FID of parent MDT object.
  * @env: execution environment
@@ -126,6 +141,7 @@ int ofd_object_ff_load(const struct lu_env *env, struct ofd_object *fo,
 	struct ofd_thread_info *info = ofd_info(env);
 	struct filter_fid *ff = &fo->ofo_ff;
 	struct lu_buf *buf = &info->fti_buf;
+	int cached_size = filter_fid_sizeof(ff);
 	int rc = 0;
 
 	if (fid_is_sane(&ff->ff_parent) && !force)
@@ -156,7 +172,12 @@ int ofd_object_ff_load(const struct lu_env *env, struct ofd_object *fo,
 		return -EINVAL;
 	}
 
-	filter_fid_le_to_cpu(ff, ff, sizeof(*ff));
+	if (rc >= sizeof(*ff))
+		fo->ofo_ff_noflags = false;
+	else if (cached_size == sizeof(*ff) &&
+		 rc == sizeof(struct filter_fid_217))
+		fo->ofo_ff_noflags = ofd_object_pfid_in_lma(env, fo);
+	filter_fid_le_to_cpu(ff, ff, rc);
 
 	return 0;
 }
@@ -562,6 +583,7 @@ int ofd_attr_handle_id(const struct lu_env *env, struct ofd_object *fo,
  * @oa: obdo from client or MDT
  * @ff: if filter_fid needs updating, this field is used to return the
  *      new buffer [out]
+ * @ff_size: size of filter_fid to write [out]
  *
  * Return:
  * * %<0 error occurred
@@ -569,14 +591,16 @@ int ofd_attr_handle_id(const struct lu_env *env, struct ofd_object *fo,
  * * %FL_XATTR_{CREATE,REPLACE}	flag for xattr update
  */
 int ofd_object_ff_update(const struct lu_env *env, struct ofd_object *fo,
-			 const struct obdo *oa, struct filter_fid *ff)
+			 const struct obdo *oa, struct filter_fid *ff,
+			 int *ff_size)
 {
 	int rc = 0;
 
 	ENTRY;
 
 	if (!(oa->o_valid &
-	      (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT | OBD_MD_LAYOUT_VERSION)))
+	      (OBD_MD_FLFID | OBD_MD_FLOSTLAYOUT | OBD_MD_LAYOUT_VERSION |
+	       OBD_MD_FLCOMPFLAGS)))
 		RETURN(0);
 
 	rc = ofd_object_ff_load(env, fo, true);
@@ -648,10 +672,25 @@ int ofd_object_ff_update(const struct lu_env *env, struct ofd_object *fo,
 		}
 	}
 
-	if (memcmp(ff, &fo->ofo_ff, sizeof(*ff)))
-		filter_fid_cpu_to_le(ff, ff, sizeof(*ff));
-	else /* no change */
+	if (oa->o_valid & OBD_MD_FLCOMPFLAGS) {
+		ff->ff_comp_flags = filter_fid_comp_flags(oa->o_comp_flags,
+							  oa->o_dstripe_count,
+							  oa->o_cstripe_count,
+							  oa->o_mirror_link_id);
+		ff->ff_dstripe_count = oa->o_dstripe_count;
+		ff->ff_cstripe_count = oa->o_cstripe_count;
+		ff->ff_mirror_link_id = oa->o_mirror_link_id;
+	}
+
+	if (memcmp(ff, &fo->ofo_ff, sizeof(*ff)) == 0 ||
+	    (fo->ofo_ff_noflags &&
+	     !memcmp(ff, &fo->ofo_ff, offsetof(typeof(*ff), ff_comp_flags)))) {
+		/* no change, or only fields that the OSD will not keep */
 		rc = 0;
+	} else {
+		*ff_size = filter_fid_sizeof(ff);
+		filter_fid_cpu_to_le(ff, ff, *ff_size);
+	}
 
 	RETURN(rc);
 }
@@ -679,7 +718,7 @@ int ofd_attr_set(const struct lu_env *env, struct ofd_object *fo,
 	struct ofd_device *ofd = ofd_obj2dev(fo);
 	struct filter_fid *ff = &info->fti_mds_fid;
 	struct thandle *th;
-	int fl, rc, rc2;
+	int fl, rc, rc2, ff_size;
 
 	ENTRY;
 
@@ -735,7 +774,7 @@ int ofd_attr_set(const struct lu_env *env, struct ofd_object *fo,
 	if (rc)
 		GOTO(unlock, rc);
 
-	fl = ofd_object_ff_update(env, fo, oa, ff);
+	fl = ofd_object_ff_update(env, fo, oa, ff, &ff_size);
 	if (fl < 0)
 		GOTO(unlock, rc = fl);
 
@@ -748,11 +787,11 @@ int ofd_attr_set(const struct lu_env *env, struct ofd_object *fo,
 			GOTO(unlock, rc);
 
 		info->fti_buf.lb_buf = ff;
-		info->fti_buf.lb_len = sizeof(*ff);
+		info->fti_buf.lb_len = ff_size;
 		rc = dt_xattr_set(env, ofd_object_child(fo), &info->fti_buf,
 				  XATTR_NAME_FID, fl, th);
 		if (!rc)
-			filter_fid_le_to_cpu(&fo->ofo_ff, ff, sizeof(*ff));
+			filter_fid_le_to_cpu(&fo->ofo_ff, ff, ff_size);
 	}
 
 	GOTO(unlock, rc);
@@ -830,12 +869,28 @@ int ofd_object_fallocate(const struct lu_env *env, struct ofd_object *fo,
 				ff->ff_layout = oa->o_layout;
 			if (oa->o_valid & OBD_MD_LAYOUT_VERSION)
 				ff->ff_layout_version = oa->o_layout_version;
-			filter_fid_cpu_to_le(ff, ff, sizeof(*ff));
+			if (oa->o_valid & OBD_MD_FLCOMPFLAGS) {
+				ff->ff_comp_flags = filter_fid_comp_flags(
+							oa->o_comp_flags,
+							oa->o_dstripe_count,
+							oa->o_cstripe_count,
+							oa->o_mirror_link_id);
+				ff->ff_dstripe_count = oa->o_dstripe_count;
+				ff->ff_cstripe_count = oa->o_cstripe_count;
+				ff->ff_mirror_link_id = oa->o_mirror_link_id;
+			} else {
+				ff->ff_comp_flags = 0;
+				ff->ff_dstripe_count = 0;
+				ff->ff_cstripe_count = 0;
+				ff->ff_mirror_link_id = 0;
+			}
+			filter_fid_cpu_to_le(ff, ff, filter_fid_sizeof(ff));
 		}
 	}
 
 	do {
 		struct thandle *th;
+		int ff_size;
 
 		restart = false;
 
@@ -852,8 +907,9 @@ int ofd_object_fallocate(const struct lu_env *env, struct ofd_object *fo,
 			GOTO(stop, rc);
 
 		if (ff_needed) {
+			ff_size = filter_fid_sizeof(ff);
 			info->fti_buf.lb_buf = ff;
-			info->fti_buf.lb_len = sizeof(*ff);
+			info->fti_buf.lb_len = ff_size;
 			rc = dt_declare_xattr_set(env, ofd_object_child(fo),
 					NULL, &info->fti_buf, XATTR_NAME_FID, 0,
 					th);
@@ -892,8 +948,7 @@ int ofd_object_fallocate(const struct lu_env *env, struct ofd_object *fo,
 			rc = dt_xattr_set(env, ofd_object_child(fo),
 					&info->fti_buf, XATTR_NAME_FID, 0, th);
 			if (!rc)
-				filter_fid_le_to_cpu(&fo->ofo_ff, ff,
-						     sizeof(*ff));
+				filter_fid_le_to_cpu(&fo->ofo_ff, ff, ff_size);
 		}
 unlock:
 		ofd_read_unlock(env, fo);
@@ -930,7 +985,7 @@ int ofd_object_punch(const struct lu_env *env, struct ofd_object *fo,
 	struct dt_object *dob = ofd_object_child(fo);
 	struct filter_fid *ff = &info->fti_mds_fid;
 	struct thandle *th;
-	int fl, rc, rc2;
+	int fl, rc, rc2, ff_size;
 
 	ENTRY;
 
@@ -1007,7 +1062,7 @@ int ofd_object_punch(const struct lu_env *env, struct ofd_object *fo,
 	if (rc)
 		GOTO(unlock, rc);
 
-	fl = ofd_object_ff_update(env, fo, oa, ff);
+	fl = ofd_object_ff_update(env, fo, oa, ff, &ff_size);
 	if (fl < 0)
 		GOTO(unlock, rc = fl);
 
@@ -1024,11 +1079,11 @@ int ofd_object_punch(const struct lu_env *env, struct ofd_object *fo,
 			GOTO(unlock, rc);
 
 		info->fti_buf.lb_buf = ff;
-		info->fti_buf.lb_len = sizeof(*ff);
+		info->fti_buf.lb_len = ff_size;
 		rc = dt_xattr_set(env, ofd_object_child(fo), &info->fti_buf,
 				  XATTR_NAME_FID, fl, th);
 		if (!rc)
-			filter_fid_le_to_cpu(&fo->ofo_ff, ff, sizeof(*ff));
+			filter_fid_le_to_cpu(&fo->ofo_ff, ff, ff_size);
 	}
 
 	GOTO(unlock, rc);

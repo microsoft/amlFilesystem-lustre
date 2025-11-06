@@ -365,8 +365,12 @@ struct lu_orphan_rec_v3 {
 	__u32			lor_layout_version;
 	/* The OST-object declared layout range (of version) in PFID EA.*/
 	__u32			lor_range;
-	__u32			lor_padding_1;
-	__u64			lor_padding_2;
+	/* The OST-object component flags and EC geometry from PFID EA.*/
+	enum lov_comp_md_entry_flags lor_comp_flags;
+	__u8			lor_dstripe_count;
+	__u8			lor_cstripe_count;
+	__u16			lor_mirror_link_id;
+	__u32			lor_padding_2;
 };
 
 struct lu_orphan_ent_v3 {
@@ -1395,7 +1399,7 @@ lov_mds_md_max_stripe_count(__kernel_size_t buf_size, __u32 lmm_magic)
 #define OBD_MD_LINKNAME    (0x00040000ULL) /* symbolic link target */
 #define OBD_MD_FLHANDLE    (0x00080000ULL) /* file/lock handle */
 #define OBD_MD_FLCKSUM     (0x00100000ULL) /* bulk data checksum */
-/*	OBD_MD_FLQOS       (0x00200000ULL) has never been used */
+#define OBD_MD_FLCOMPFLAGS (0x00200000ULL) /* component flags */
 /*	OBD_MD_FLCOOKIE    (0x00800000ULL) obsolete in 2.8 */
 #define OBD_MD_FLPRJQUOTA  (0x00400000ULL) /* over quota flags sent from ost */
 #define OBD_MD_FLGROUP     (0x01000000ULL) /* group */
@@ -3387,8 +3391,10 @@ struct obdo {
 	 */
 	struct ost_layout	o_layout;
 	__u32			o_layout_version;
-	__u32			o_uid_h;
-	__u32			o_gid_h;
+	enum lov_comp_md_entry_flags o_comp_flags;
+	__u8			o_dstripe_count; /* EC data stripes */
+	__u8			o_cstripe_count; /* EC code stripes */
+	__u16			o_mirror_link_id; /* EC paired mirror */
 
 	__u64			o_data_version;	/* getattr: sum of iversion for
 						 * each stripe.

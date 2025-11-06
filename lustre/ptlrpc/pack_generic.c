@@ -1962,8 +1962,8 @@ void lustre_swab_obdo(struct obdo *o)
 	__swab32s(&o->o_parent_ver);
 	lustre_swab_ost_layout(&o->o_layout);
 	__swab32s(&o->o_layout_version);
-	__swab32s(&o->o_uid_h);
-	__swab32s(&o->o_gid_h);
+	__swab32s(&o->o_comp_flags);
+	__swab16s(&o->o_mirror_link_id);
 	__swab64s(&o->o_data_version);
 	__swab32s(&o->o_projid);
 	BUILD_BUG_ON(offsetof(typeof(*o), o_padding_4) == 0);
@@ -2906,12 +2906,13 @@ static void dump_obdo(struct obdo *oa)
 				     (valid & OBD_MD_FLMODE ? ~S_IFMT : 0)));
 	if (valid & OBD_MD_FLUID)
 		CDEBUG(D_RPCTRACE, "obdo: o_uid = %u\n", oa->o_uid);
-	if (valid & OBD_MD_FLUID)
-		CDEBUG(D_RPCTRACE, "obdo: o_uid_h = %u\n", oa->o_uid_h);
+	if (valid & OBD_MD_FLCOMPFLAGS)
+		CDEBUG(D_RPCTRACE,
+		       "obdo: o_comp_flags = %#x, EC %u+%u, link %u\n",
+		       oa->o_comp_flags, oa->o_dstripe_count,
+		       oa->o_cstripe_count, oa->o_mirror_link_id);
 	if (valid & OBD_MD_FLGID)
 		CDEBUG(D_RPCTRACE, "obdo: o_gid = %u\n", oa->o_gid);
-	if (valid & OBD_MD_FLGID)
-		CDEBUG(D_RPCTRACE, "obdo: o_gid_h = %u\n", oa->o_gid_h);
 	if (valid & OBD_MD_FLFLAGS)
 		CDEBUG(D_RPCTRACE, "obdo: o_flags = %x\n", oa->o_flags);
 	if (valid & OBD_MD_FLNLINK)
@@ -3266,7 +3267,8 @@ void lustre_swab_orphan_ent_v3(struct lu_orphan_ent_v3 *ent)
 	lustre_swab_ost_layout(&ent->loe_rec.lor_layout);
 	__swab32s(&ent->loe_rec.lor_layout_version);
 	__swab32s(&ent->loe_rec.lor_range);
-	BUILD_BUG_ON(offsetof(typeof(ent->loe_rec), lor_padding_1) == 0);
+	__swab32s(&ent->loe_rec.lor_comp_flags);
+	__swab16s(&ent->loe_rec.lor_mirror_link_id);
 	BUILD_BUG_ON(offsetof(typeof(ent->loe_rec), lor_padding_2) == 0);
 }
 EXPORT_SYMBOL(lustre_swab_orphan_ent_v3);

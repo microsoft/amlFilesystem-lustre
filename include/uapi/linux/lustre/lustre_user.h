@@ -449,6 +449,45 @@ struct filter_fid_210 {
 	struct ost_layout	ff_layout;
 };
 
+/* Layout flags for components and filter_fid */
+enum lov_comp_md_entry_flags {
+	LCME_FL_STALE	  = 0x00000001,	/* FLR: stale data */
+	LCME_FL_PREF_RD	  = 0x00000002,	/* FLR: preferred for reading */
+	LCME_FL_PREF_WR	  = 0x00000004,	/* FLR: preferred for writing */
+	LCME_FL_PREF_RW	  = LCME_FL_PREF_RD | LCME_FL_PREF_WR,
+	LCME_FL_OFFLINE	  = 0x00000008,	/* Not used */
+	LCME_FL_INIT	  = 0x00000010,	/* instantiated */
+	LCME_FL_NOSYNC	  = 0x00000020,	/* FLR: no sync for the mirror */
+	LCME_FL_EXTENSION = 0x00000040,	/* extension comp, never init */
+	LCME_FL_PARITY    = 0x00000080,	/* EC: a parity code component */
+	LCME_FL_COMPRESS  = 0x00000100, /* the component should be compressed */
+	LCME_FL_PARTIAL   = 0x00000200, /* some chunks in the component are
+					 * uncompressed
+					 */
+	LCME_FL_NOCOMPR   = 0x00000400, /* the component should not be
+					 * compressed
+					 */
+	LCME_FL_IS_LINK_ID = 0x40000000, /* EC: llc_protected_ref is link ID;
+					  * transient on a file layout (resolved
+					  * to mirror_id_of(id) at create), but
+					  * persisted on a directory default
+					  * template until a file inherits it
+					  */
+	LCME_FL_NEG	  = 0x80000000	/* used to indicate a negative flag,
+					 * won't be stored on disk
+					 */
+};
+
+/* The 52-byte filter_fid of Lustre 2.11 and later, still written for objects
+ * without the component flags and EC fields.
+ */
+struct filter_fid_217 {
+	struct lu_fid		ff_parent;	/* stripe_idx in f_ver */
+	struct ost_layout	ff_layout;
+	__u32			ff_layout_version;
+	__u32			ff_range;
+} __attribute__((packed));
+
 struct filter_fid {
 	struct lu_fid		ff_parent;	/* stripe_idx in f_ver */
 	struct ost_layout	ff_layout;
@@ -456,6 +495,11 @@ struct filter_fid {
 	__u32			ff_range; /* range of layout version that
 					   * write are allowed
 					   */
+	enum lov_comp_md_entry_flags ff_comp_flags;
+	__u8			ff_dstripe_count;	/* EC data stripes */
+	/* EC code stripes in the low 4 bits, the high 4 bits reserved (0) */
+	__u8			ff_cstripe_count;
+	__u16			ff_mirror_link_id;	/* EC paired mirror */
 } __attribute__((packed));
 
 /* Userspace should treat lu_fid as opaque, and only use the following methods
@@ -1107,34 +1151,6 @@ static inline bool lu_extent_is_whole(struct lu_extent *e)
 	return e->e_start == 0 && e->e_end == LUSTRE_EOF;
 }
 
-enum lov_comp_md_entry_flags {
-	LCME_FL_STALE	  = 0x00000001,	/* FLR: stale data */
-	LCME_FL_PREF_RD	  = 0x00000002,	/* FLR: preferred for reading */
-	LCME_FL_PREF_WR	  = 0x00000004,	/* FLR: preferred for writing */
-	LCME_FL_PREF_RW	  = LCME_FL_PREF_RD | LCME_FL_PREF_WR,
-	LCME_FL_OFFLINE	  = 0x00000008,	/* Not used */
-	LCME_FL_INIT	  = 0x00000010,	/* instantiated */
-	LCME_FL_NOSYNC	  = 0x00000020,	/* FLR: no sync for the mirror */
-	LCME_FL_EXTENSION = 0x00000040,	/* extension comp, never init */
-	LCME_FL_PARITY    = 0x00000080,	/* EC: a parity code component */
-	LCME_FL_COMPRESS  = 0x00000100, /* the component should be compressed */
-	LCME_FL_PARTIAL   = 0x00000200, /* some chunks in the component are
-					 * uncompressed
-					 */
-	LCME_FL_NOCOMPR   = 0x00000400, /* the component should not be
-					 * compressed
-					 */
-	LCME_FL_IS_LINK_ID = 0x40000000, /* EC: llc_protected_ref is link ID;
-					  * transient on a file layout (resolved
-					  * to mirror_id_of(id) at create), but
-					  * persisted on a directory default
-					  * template until a file inherits it
-					  */
-	LCME_FL_NEG	  = 0x80000000	/* used to indicate a negative flag,
-					 * won't be stored on disk
-					 */
-};
-
 #define LCME_KNOWN_FLAGS	(LCME_FL_NEG | LCME_FL_INIT | LCME_FL_STALE | \
 				 LCME_FL_PREF_RW | LCME_FL_NOSYNC | \
 				 LCME_FL_EXTENSION | LCME_FL_PARITY | \
@@ -1167,6 +1183,12 @@ enum lov_comp_md_entry_flags {
 #define LCME_TEMPLATE_FLAGS	(LCME_FL_PREF_RW | LCME_FL_NOSYNC | \
 				 LCME_FL_EXTENSION | LCME_FL_PARITY | \
 				 LCME_FL_NOCOMPR)
+
+/* Component flags stored in filter_fid on OST objects and restored by LFSCK.
+ * STALE is left out, since an object is written while its mirror is stale.
+ */
+#define LCME_FF_FLAGS		(LCME_FL_PREF_RW | LCME_FL_NOSYNC | \
+				 LCME_FL_PARITY | LCME_FL_NOCOMPR)
 
 /* lcme_id can be specified as certain flags, and the first
  * bit of lcme_id is used to indicate that the ID is representing
