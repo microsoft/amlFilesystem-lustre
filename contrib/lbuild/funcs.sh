@@ -138,6 +138,9 @@ autodetect_distro() {
             "RedHatEnterpriseServer" | "ScientificSL" | "CentOS")
                 name="rhel"
                 ;;
+	    "AzureLinux")
+		name="azl"
+		;;
 	    "SUSE LINUX" | "SUSE")
 		name="sles"
 		case "$version" in
@@ -187,13 +190,22 @@ autodetect_distro() {
 		name=rhel
 		version=$(cat /etc/redhat-release |
 			  sed -e 's/^[^0-9.]*//g' | sed -e 's/[ ].*//')
+        elif [ -f /etc/os-release ] && grep -qi '^ID=azurelinux' /etc/os-release; then
+        . /etc/os-release
+        name=azl
+        version=${VERSION_ID}
         fi
         if [ -z "$name" -o -z "$version" ]; then
             fatal 1 "I don't know how to determine distro type/version.\nEither update autodetect_distro() or use the --distro argument."
         fi
     fi
 
-    echo ${name}-${version}
+    local sep="-"
+    if [ "$name" = "azl" ]; then
+	sep=""
+    fi
+
+    echo ${name}${sep}${version}
     return 0
 
 }
@@ -228,6 +240,9 @@ autodetect_target() {
 	  oe2203) target="5.10-oe2203";;
        oe2203.sp1) target="5.10-oe2203sp1";;
        oe2203.sp2) target="5.10-oe2203sp2";;
+      azl3.*) target="6.6-azurelinux3";;
+      azl3) target="6.6-azurelinux3";;
+      azl-3*) target="6.6-azurelinux3";;
              *)   fatal 1 "I don't know what distro $distro is.\nEither update autodetect_target() or use the --target argument.";;
     esac
 

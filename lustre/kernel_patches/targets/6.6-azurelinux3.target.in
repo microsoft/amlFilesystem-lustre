@@ -1,0 +1,20 @@
+lnxmaj="6.6.104"
+lnxrel="2-4.azl3"
+
+KERNEL_SRPM=kernel-${lnxmaj}-${lnxrel}.src.rpm
+SERIES=""
+EXTRA_VERSION=${lnxrel}_lustre.@VERSION@
+LUSTRE_VERSION=@VERSION@
+
+DEVEL_PATH_ARCH_DELIMETER="."
+OFED_VERSION=inkernel
+
+# Azure Linux kernels align with upstream RPM packaging, no SMP arch split
+SMP_ARCHS=""
+
+for cc in gcc ; do
+    if which $cc >/dev/null 2>/dev/null ; then
+        export CC=$cc
+        break
+    fi
+done

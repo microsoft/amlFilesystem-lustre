@@ -128,6 +128,10 @@
 # response from them
 #%%global _use_internal_dependency_generator 0
 
+%if "%{_vendor}" == "azl" || 0%{?azl} || 0%{?azl3}
+%global azurelinux 1
+%endif
+
 %if 0%{?rhel} > 7 || 0%{?fedora} > 33
 ## SUSE uses another tool for provides:
 ## https://github.com/openSUSE/kernel-source/blob/master/patches.rpmify/Add-ksym-provides-tool.patch
@@ -164,7 +168,7 @@
 # requires want to set a version including epoch
 %global krequires %(echo %{kver} | sed -e 's/\.x86_64$//' -e 's/\.i[3456]86$//' -e 's/-smp$//' -e 's/-bigsmp$//' -e 's/[-.]ppc64$//' -e 's/\.aarch64$//' -e 's/-default$//' -e 's/-%{_flavor}//')
 
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler} || 0%{?azurelinux}
 	%global requires_kmod_name kmod-%{lustre_name}
 	%global requires_kmod_osd_zfs_name kmod-%{lustre_name}-osd-zfs
 	%if %{with lustre_tests}
@@ -206,8 +210,8 @@
 %define with_systemd 1
 %endif
 
-# openEuler comes with systemd
-%if 0%{?openEuler}
+# openEuler and Azure Linux come with systemd
+%if 0%{?openEuler} || 0%{?azurelinux}
 %define with_systemd 1
 %endif
 
@@ -282,6 +286,9 @@ BuildRequires: pkgconfig
 %if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
 Suggests: bash-completion
 %endif
+%elif "%{_vendor}" == "azl" || 0%{?azurelinux}
+BuildRequires: azurelinux-rpm-macros
+BuildRequires: pkgconfig
 %else
 %if 0%{?openEuler}
 BuildRequires: openEuler-rpm-config
@@ -318,7 +325,7 @@ Provides: %{lustre_name}
 Obsoletes: lustre-client < %{version}
 Provides: lustre-client = %{version}-%{release}
 %endif
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler} || 0%{?azurelinux}
 #suse don't support selinux
 BuildRequires: pkgconfig(libselinux)
 %endif
@@ -331,7 +338,7 @@ BuildRequires: pkgconfig(libselinux) openssl-devel
 BuildRequires: mlnx-ofa_kernel-devel
 %endif
 %if %{with multiple_lnds}
-%if "%{_vendor}" == "redhat" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?azurelinux}
 Requires: kmod-mlnx-ofa_kernel
 %else
 Requires: mlnx-ofa_kernel-kmp
@@ -341,7 +348,7 @@ Requires: mlnx-ofa_kernel-kmp
 %if %{defined kernel_module_package_buildreqs}
 BuildRequires: %kernel_module_package_buildreqs
 %else
-%if 0%{?rhel} >= 8 || 0%{?openEuler}
+%if 0%{?rhel} >= 8 || 0%{?openEuler} || 0%{?azurelinux}
 BuildRequires: kernel-rpm-macros
 %endif
 %if 0%{?sle_version} >= 150300
@@ -489,7 +496,7 @@ Requires: %{name} = %{version}, %{lustre_name}-iokit
 Requires: %{name} = %{version}
 %endif
 Requires: lustre-devel = %{version}
-%if 0%{?rhel} >= 8 || 0%{?suse_version} >= 1500 || 0%{?openEuler}
+%if 0%{?rhel} >= 8 || 0%{?suse_version} >= 1500 || 0%{?openEuler} || 0%{?azurelinux}
 Requires: python3 >= 3.6.0, python3-PyYAML
 %endif
 %if %{with lustre_modules}
@@ -520,7 +527,7 @@ Suggests: pdsh, clush
 BuildRequires: mpich-devel
 %endif
 %if "%{mpi_name}" == "openmpi"
-%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?suse_version} < 1500
+%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?azurelinux} || 0%{?suse_version} < 1500
 BuildRequires: openmpi-devel
 %else
 %if 0%{?sle_version} && 0%{?sle_version} >= 150600
@@ -878,7 +885,7 @@ echo '%{_unitdir}/lnet.service' >>lustre.files
 echo '%{_unitdir}/lsvcgss.service' >>lustre.files
 %endif
 
-%if "%{_vendor}" == "redhat" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?azurelinux}
 # The following scripts are Red Hat specific
 %if %{with servers}
 echo '%{_sysconfdir}/init.d/lustre' >>lustre.files

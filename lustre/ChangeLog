@@ -1,3 +1,6 @@
+2025-11-14 Microsoft
+	* azurelinux: add Azure Linux 3.0 client build support (kernel 6.6.104.2-4.azl3) including distro detection, RPM spec updates, lbuild target, and container image.
+
 2024-11-15 Whamcloud
        * version 2.16.1
        * See https://wiki.whamcloud.com/display/PUB/Lustre+Support+Matrix

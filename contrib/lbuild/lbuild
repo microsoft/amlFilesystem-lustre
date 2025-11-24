@@ -332,6 +332,9 @@ check_options() {
 		5.10-oe2203*)
 			CANONICAL_TARGET="oe2203"
 			;;
+        6.6-azurelinux3*)
+            CANONICAL_TARGET="azurelinux3"
+            ;;
 	esac
 
     echo "### GIT COMMIT BUILD-PARAMETERS CHECK: git log -1 ###"
