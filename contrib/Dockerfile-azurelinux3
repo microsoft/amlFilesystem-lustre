@@ -16,6 +16,7 @@ RUN tdnf -y update && \
     tdnf -y install \
         gcc \
         autoconf \
+        automake \
         libtool \
         make \
         patch \
@@ -27,6 +28,7 @@ RUN tdnf -y update && \
         python3-setuptools \
         kernel-devel \
         kernel-headers \
+        kernel-rpm-macros \
         elfutils-devel \
         elfutils-libelf-devel \
         e2fsprogs-devel \
@@ -38,6 +40,7 @@ RUN tdnf -y update && \
         json-c-devel \
         libssh-devel \
         libattr-devel \
+        openssl-devel \
         bc \
         bison \
         flex \
