@@ -234,13 +234,12 @@ Version: %{version}
 Release: %{pkg_release_ver}
 %else
 Release: 1%{?dist}
+%endif
 License: GPL-2.0-only AND LGPL-2.1-or-later
 %if 0%{?suse_version} >= 1310
 # SUSE needs Group for the kernel_module_package macro
 Group: System/Kernel
 %endif
-%endif
-License: GPL
 Group: System Environment/Kernel
 Source: %{package_version}.tar.gz
 Source1: kmp-lustre.preamble
@@ -822,7 +821,6 @@ fi
 # kernel_module_path macro.
 basemodpath=$RPM_BUILD_ROOT%{modules_fs_path}/%{name}
 %{__install} -D -m 0644 ${PWD}/Module.symvers %{buildroot}/Module.symvers
-%if %{with lustre_modules}
 %{__install} -D -m 0644 ${PWD}/Module.symvers %{buildroot}/%{_usrsrc}/lustre-%{version}/%{_arch}/%{_flavor}/Module.symvers
 %{__install} -D -m 0644 ${PWD}/config.h %{buildroot}/%{_usrsrc}/lustre-%{version}/%{_arch}/%{_flavor}/config.h
 for fname in $(find lnet/include -type f -name \*.h); do

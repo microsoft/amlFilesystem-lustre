@@ -43,6 +43,10 @@ RUN tdnf -y update && \
         flex \
         git \
         ccache \
+        tar \
+        gzip \
+        rpm-build \
+        rpmdevtools \
         keyutils \
         keyutils-devel \
         which && \
