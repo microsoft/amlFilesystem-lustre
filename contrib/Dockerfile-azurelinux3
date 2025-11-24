@@ -1,0 +1,65 @@
+# Azure Linux 3 client-build container
+# Usage:
+#   docker build -t azurelinux3-build -f contrib/Dockerfile-azurelinux3 .
+#   docker run --rm -it \
+#     --mount type=bind,src=/path/to/linux,kernel=/lib/modules/$(uname -r)/build,target=/kernel \
+#     --mount type=bind,src=/path/to/lustre,target=/lustre \
+#     azurelinux3-build /bin/bash
+#
+# Kernel headers should be supplied via a bind mount so they match the host kernel.
+
+FROM mcr.microsoft.com/azurelinux/base/core:3.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN tdnf -y update && \
+    tdnf -y install \
+        gcc \
+        autoconf \
+        automake \
+        libtool \
+        make \
+        patch \
+        diffutils \
+        file \
+        binutils-devel \
+        python3 \
+        python3-devel \
+        python3-setuptools \
+        kernel-devel \
+        kernel-headers \
+        kernel-rpm-macros \
+        elfutils-devel \
+        elfutils-libelf-devel \
+        e2fsprogs-devel \
+        libselinux-devel \
+        libaio-devel \
+        libyaml-devel \
+        libnl3-devel \
+        libmount-devel \
+        json-c-devel \
+        libssh-devel \
+        libattr-devel \
+        openssl-devel \
+        bc \
+        bison \
+        flex \
+        git \
+        ccache \
+        tar \
+        gzip \
+        rpm-build \
+        rpmdevtools \
+        keyutils \
+        keyutils-devel \
+        which && \
+    tdnf clean all
+
+ENV CC="ccache gcc"
+
+# ldiskfs is disabled for this client-only flow, so distro e2fsprogs-devel
+# headers/libs are sufficient and we skip building Whamcloud e2fsprogs here.
+
+WORKDIR /lustre
+
+CMD ["/bin/bash"]

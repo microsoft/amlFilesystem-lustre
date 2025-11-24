@@ -36,9 +36,17 @@
 %global enable_multi_lnds 1
 %endif
 
+# Detect Azure Linux early so we can use it in conditionals below
+%if "%{_vendor}" == "azl" || 0%{?azl} || 0%{?azl3}
+%global azurelinux 1
+%endif
+
 # LUTF Turn off brp-python-precompile script as we don't want the python files
 # to be compiled on installation
+# Don't apply this to Azure Linux which has its own __os_install_post handling
+%if ! 0%{?azurelinux}
 %global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g')
+%endif
 
 # By default both gss and gss keyring are disabled.
 # gss keyring requires the gss core. If the builder
