@@ -22,13 +22,7 @@
 
 #include "lov_cl_internal.h"
 
-/** \addtogroup lov
- *  @{
- */
-
-/**
- * Layout operations.
- */
+/* Layout operations. */
 struct lov_layout_operations {
 	int (*llo_init)(const struct lu_env *env, struct lov_device *dev,
 			struct lov_object *lov, struct lov_stripe_md *lsm,
@@ -65,9 +59,7 @@ static void lov_lsm_put(struct lov_stripe_md *lsm)
 		lov_free_memmd(&lsm);
 }
 
-/**
- * Lov object layout operations.
- */
+/* LOV object layout operations. */
 struct cl_object *lov_sub_find(const struct lu_env *env,
 			       struct cl_device *dev,
 			       const struct lu_fid *fid,
@@ -420,14 +412,14 @@ static int lov_attr_get_dom(const struct lu_env *env, struct lov_object *lov,
 }
 
 /**
- * Lookup FLD to get MDS index of the given DOM object FID.
+ * lov_fld_lookup() - Lookup FLD to get MDS index of the given DOM object FID.
+ * @ld: LOV device
+ * @fid: FID to lookup
+ * @nr: index in MDC array to return back [out]
  *
- * \param[in]  ld	LOV device
- * \param[in]  fid	FID to lookup
- * \param[out] nr	index in MDC array to return back
- *
- * \retval		0 and \a mds filled with MDS index if successful
- * \retval		negative value on error
+ * Return:
+ * * %0 on success, with @nr set to the MDC array index
+ * * %negative value on error
  */
 static int lov_fld_lookup(struct lov_device *ld, const struct lu_fid *fid,
 			  __u32 *nr)
@@ -470,16 +462,21 @@ static int lov_fld_lookup(struct lov_device *ld, const struct lu_fid *fid,
 }
 
 /**
- * Implementation of lov_comp_layout_entry_ops::lco_init for DOM object.
+ * lov_init_dom() - Implementation of lov_comp_layout_entry_ops::lco_init for
+ *                  DOM object.
+ * @env: execution environment
+ * @dev: LOV device
+ * @lov: LOV object
+ * @index: Composite layout entry index in LSM
+ * @conf: client object configuration structure
+ * @lle: Composite LOV layout entry
  *
  * Init the DOM object for the first time. It prepares also RAID0 entry
  * for it to use in common methods with ordinary RAID0 layout entries.
  *
- * \param[in] env	execution environment
- * \param[in] dev	LOV device
- * \param[in] lov	LOV object
- * \param[in] index	Composite layout entry index in LSM
- * \param[in] lle	Composite LOV layout entry
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 static int lov_init_dom(const struct lu_env *env, struct lov_device *dev,
 			struct lov_object *lov, unsigned int index,
@@ -566,13 +563,11 @@ out:
 }
 
 /**
- * Implementation of lov_layout_operations::llo_fini for DOM object.
+ * lov_fini_dom() - Finish the DOM object and free related memory.
+ * @env: execution environment
+ * @lle: Composite LOV layout entry
  *
- * Finish the DOM object and free related memory.
- *
- * \param[in] env	execution environment
- * \param[in] lov	LOV object
- * \param[in] state	LOV layout state
+ * Implementation of lov_comp_layout_entry_ops::lco_fini for DOM object.
  */
 static void lov_fini_dom(const struct lu_env *env,
 			 struct lov_layout_entry *lle)
@@ -1067,11 +1062,17 @@ static int lov_print_foreign(const struct lu_env *env, void *cookie,
 }
 
 /**
+ * lov_attr_get_empty() - Get attributes of an object with empty layout
+ * @env: lustre environment
+ * @obj: file object
+ * @attr: Pointer to data attributes. New values for the attributes [out]
+ *
  * Implements cl_object_operations::coo_attr_get() method for an object
  * without stripes (LLT_EMPTY layout type).
- *
  * The only attributes this layer is authoritative in this case is
  * cl_attr::cat_blocks---it's 0.
+ *
+ * Return: %0 always
  */
 static int lov_attr_get_empty(const struct lu_env *env, struct cl_object *obj,
 			      struct cl_attr *attr)
@@ -1081,12 +1082,19 @@ static int lov_attr_get_empty(const struct lu_env *env, struct cl_object *obj,
 }
 
 /**
+ * lov_attr_get_released() - Set st_blocks for the HSM release
+ * @env: lustre environment
+ * @obj: file object
+ * @attr: Pointer to data attributes. New values for the attributes [in/out]
+ *
  * The MDT returns st_blocks=1 for the HSM released file (See LU-3864).
- * The LOV layouer should also return st_blocks=1 for the HSM released file
+ * The LOV layout should also return st_blocks=1 for the HSM released file
  * in the call ->coo_attr_get().
  * Otherwise, the client may get 0 block count. This caused tools like tar
  * then to consider the file as fully sparse and to archive it as is without
  * attempting to access/restore its content.
+ *
+ * Return: %0 always
  */
 static int lov_attr_get_released(const struct lu_env *env,
 				 struct cl_object *obj, struct cl_attr *attr)
@@ -1268,20 +1276,20 @@ static const struct lov_layout_operations lov_dispatch[] = {
 	},
 };
 
-/**
+/*
  * Performs a double-dispatch based on the layout type of an object.
  */
-#define LOV_2DISPATCH_NOLOCK(obj, op, ...)		\
-({							\
-	struct lov_object *__obj = (obj);		\
-	enum lov_layout_type __llt;			\
-							\
-	__llt = __obj->lo_type;				\
-	LASSERT(__llt < ARRAY_SIZE(lov_dispatch));	\
-	lov_dispatch[__llt].op(__VA_ARGS__);		\
+#define LOV_2DISPATCH_NOLOCK(obj, op, ...)				\
+({									\
+	struct lov_object *__obj = (obj);				\
+	enum lov_layout_type __llt;					\
+									\
+	__llt = __obj->lo_type;						\
+	LASSERT(__llt < ARRAY_SIZE(lov_dispatch));			\
+	lov_dispatch[__llt].op(__VA_ARGS__);				\
 })
 
-/**
+/*
  * Return lov_layout_type associated with a given lsm
  */
 static enum lov_layout_type lov_type(struct lov_stripe_md *lsm)
@@ -1446,9 +1454,8 @@ out:
 	RETURN(rc);
 }
 
-/**
- * Lov object operations.
- */
+/* LOV object operations. */
+
 static int lov_object_init(const struct lu_env *env, struct lu_object *obj,
 			   const struct lu_object_conf *conf)
 {
@@ -1674,8 +1681,8 @@ static int lov_dio_pages_init(const struct lu_env *env, struct cl_object *obj,
 				    cdp, index);
 }
 
-/**
- * Implements cl_object_operations::clo_io_init() method for lov
+/*
+ * Implements cl_object_operations::coo_io_init() method for lov
  * layer. Dispatches to the appropriate layout io initialization method.
  */
 static int lov_io_init(const struct lu_env *env, struct cl_object *obj,
@@ -1696,8 +1703,8 @@ static int lov_io_init(const struct lu_env *env, struct cl_object *obj,
 			env, obj, io);
 }
 
-/**
- * An implementation of cl_object_operations::clo_attr_get() method for lov
+/*
+ * An implementation of cl_object_operations::coo_attr_get() method for lov
  * layer. For raid0 layout this collects and merges attributes of all
  * sub-objects.
  */
@@ -1705,7 +1712,8 @@ static int lov_attr_get(const struct lu_env *env, struct cl_object *obj,
 			struct cl_attr *attr)
 {
 	/* do not take lock, as this function is called under a
-	 * spin-lock. Layout is protected from changing by ongoing IO. */
+	 * spin-lock. Layout is protected from changing by ongoing IO.
+	 */
 	return LOV_2DISPATCH_NOLOCK(cl2lov(obj), llo_getattr, env, obj, attr);
 }
 
@@ -1727,6 +1735,13 @@ static int lov_lock_init(const struct lu_env *env, struct cl_object *obj,
 }
 
 /**
+ * fiemap_calc_last_stripe() - Calculate last stripe of FIEMAP mapping
+ * @lsm: striping information for the file
+ * @index: stripe component index
+ * @ext: logical extent of mapping
+ * @start_stripe: starting stripe of the mapping
+ * @stripe_count: the number of stripes across which to map is returned [out]
+ *
  * We calculate on which OST the mapping will end. If the length of mapping
  * is greater than (stripe_size * stripe_count) then the last_stripe
  * will be one just before start_stripe. Else we check if the mapping
@@ -1734,14 +1749,7 @@ static int lov_lock_init(const struct lu_env *env, struct cl_object *obj,
  * This function returns the last_stripe and also sets the stripe_count
  * over which the mapping is spread
  *
- * \param lsm [in]		striping information for the file
- * \param index [in]		stripe component index
- * \param ext [in]		logical extent of mapping
- * \param start_stripe [in]	starting stripe of the mapping
- * \param stripe_count [out]	the number of stripes across which to map is
- *				returned
- *
- * \retval last_stripe		return the last stripe of the mapping
+ * Return: last_stripe (last stripe of the mapping)
  */
 static int fiemap_calc_last_stripe(struct lov_stripe_md *lsm, int index,
 				   struct lu_extent *ext,
@@ -1786,14 +1794,14 @@ static int fiemap_calc_last_stripe(struct lov_stripe_md *lsm, int index,
 }
 
 /**
- * Set fe_device and copy extents from local buffer into main return buffer.
- *
- * \param fiemap [out]		fiemap to hold all extents
- * \param lcl_fm_ext [in]	array of fiemap extents get from OSC layer
- * \param ost_index [in]	OST index to be written into the fm_device
- *				field for each extent
- * \param ext_count [in]	number of extents to be copied
- * \param current_extent [in]	where to start copying in the extent array
+ * fiemap_prepare_and_copy_exts() - Set fe_device and copy extents from local
+ *                                  buffer into main return buffer.
+ * @fiemap: fiemap to hold all extents [out]
+ * @lcl_fm_ext: array of fiemap extents get from OSC layer
+ * @ost_index: OST index to be written into the fm_device field for each extent
+ * @ext_count: number of extents to be copied
+ * @current_extent: where to start copying in the extent array
+ * @abs_stripeno: stripe number
  */
 static void fiemap_prepare_and_copy_exts(struct fiemap *fiemap,
 					 struct fiemap_extent *lcl_fm_ext,
@@ -1819,6 +1827,13 @@ static void fiemap_prepare_and_copy_exts(struct fiemap *fiemap,
 #define FIEMAP_BUFFER_SIZE 4096
 
 /**
+ * fiemap_calc_fm_end_offset() - Calculate offset for FIEMAP file mapping
+ * @fiemap: fiemap request header
+ * @lsm: striping information for the file
+ * @index: stripe component index
+ * @ext: logical extent of mapping
+ * @start_stripe: starting stripe will be returned in this [out]
+ *
  * Non-zero fe_logical indicates that this is a continuation FIEMAP
  * call. The local end offset and the device are sent in the first
  * fm_extent. This function calculates the stripe number from the index.
@@ -1829,11 +1844,9 @@ static void fiemap_prepare_and_copy_exts(struct fiemap *fiemap,
  * will re-calculate proper offset in next stripe.
  * Note that the first extent is passed to lov_get_info via the value field.
  *
- * \param fiemap [in]		fiemap request header
- * \param lsm [in]		striping information for the file
- * \param index [in]		stripe component index
- * \param ext [in]		logical extent of mapping
- * \param start_stripe [out]	starting stripe will be returned in this
+ * Return:
+ * * %0 when recalculation is required
+ * * %>0 in-OST offset at which mapping should restart
  */
 static u64 fiemap_calc_fm_end_offset(struct fiemap *fiemap,
 				     struct lov_stripe_md *lsm,
@@ -2085,18 +2098,21 @@ out_unknown:
 }
 
 /**
+ * lov_object_fiemap() - Issue FIEMAP request
+ * @env: lustre environment
+ * @obj: file object
+ * @fmkey: fiemap request header and other info
+ * @fiemap: fiemap buffer holding retrived map extents [out]
+ * @buflen: max buffer length of @fiemap, when iterate each OST, it is used
+ *          to limit max map needed [in/out]
+ *
  * Break down the FIEMAP request and send appropriate calls to individual OSTs.
  * This also handles the restarting of FIEMAP calls in case mapping overflows
  * the available number of extents in single call.
  *
- * \param env [in]		lustre environment
- * \param obj [in]		file object
- * \param fmkey [in]		fiemap request header and other info
- * \param fiemap [out]		fiemap buffer holding retrived map extents
- * \param buflen [in/out]	max buffer length of @fiemap, when iterate
- *				each OST, it is used to limit max map needed
- * \retval 0	success
- * \retval < 0	error
+ * Return:
+ * * %0 on success
+ * * %negative on error
  */
 static int lov_object_fiemap(const struct lu_env *env, struct cl_object *obj,
 			     struct ll_fiemap_info_key *fmkey,
@@ -2647,5 +2663,3 @@ int lov_read_and_clear_async_rc(struct cl_object *clob)
 	RETURN(rc);
 }
 EXPORT_SYMBOL(lov_read_and_clear_async_rc);
-
-/** @} lov */
