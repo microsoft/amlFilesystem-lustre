@@ -62,7 +62,7 @@ AS_IF([test $target_cpu == "i686" -o $target_cpu == "x86_64"], [
 CFLAGS="$CFLAGS -Wall -Werror"
 ])
 ], [
-CFLAGS="$CFLAGS -Wall -Wno-error -Wno-error=incompatible-function-pointer-types -Wno-error=incompatible-pointer-types"
+CFLAGS="$CFLAGS -Wall -Wno-error -Wno-error=incompatible-pointer-types"
 ])
 ]) # LTC_CONFIG_ERROR
 
