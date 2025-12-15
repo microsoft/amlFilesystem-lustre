@@ -234,7 +234,10 @@
 Summary: Lustre File System
 Name: %{lustre_name}
 Version: %{version}
-%if %{defined pkg_release_ver}
+# Allow -D pkg_release override for distros where pkg_release_ver contains invalid chars (e.g., AL3 rejects hyphens)
+%if %{defined pkg_release}
+Release: %{pkg_release}
+%elif %{defined pkg_release_ver}
 Release: %{pkg_release_ver}
 %else
 Release: 1%{?dist}
