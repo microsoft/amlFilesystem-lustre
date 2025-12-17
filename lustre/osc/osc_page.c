@@ -26,13 +26,7 @@ static void osc_lru_use(struct osc_page *opg);
 static int osc_lru_alloc(const struct lu_env *env, struct client_obd *cli,
 			 struct osc_page *opg);
 
-/** \addtogroup osc
- *  @{
- */
-
-/*
- * Page operations.
- */
+/* Page operations. */
 static void osc_page_transfer_get(struct osc_page *opg, const char *label)
 {
 	struct cl_page *page = opg->ops_cl.cpl_page;
@@ -279,6 +273,12 @@ int osc_page_init(const struct lu_env *env, struct cl_object *obj,
 EXPORT_SYMBOL(osc_page_init);
 
 /**
+ * osc_page_submit() - Prepare all page for immediate transfer
+ * @env: Lustre execution environment.
+ * @opg: Pointer to the osc_page struct (that is being transferred)
+ * @crt: Request type (Read/Write)
+ * @brw_flags: Additional read/write flags
+ *
  * Helper function called by osc_io_submit() for every page in an immediate
  * transfer (i.e., transferred synchronously).
  */
@@ -335,6 +335,10 @@ void osc_page_submit(const struct lu_env *env, struct osc_page *opg,
 static DECLARE_WAIT_QUEUE_HEAD(osc_lru_waitq);
 
 /**
+ * osc_lru_unreserve() - function is called to unreserve LRU slots.
+ * @cli: client side OBD
+ * @npages: Number of pages to reserve
+ *
  * Record that @npages LRU slots have been freed, schedule
  * reclaim if the OSC cache is still over-full, and wake any
  * threads waiting for LRU space.
@@ -354,8 +358,13 @@ void osc_lru_unreserve(struct client_obd *cli, unsigned long npages)
 }
 
 /**
+ * lru_shrink_min() - Return minimum number pages to free when shrinking LRU
+ * @cli: client side OBD
+ *
  * LRU pages are freed in batch mode. OSC should at least free this
  * number of pages to avoid running out of LRU slots.
+ *
+ * Return: minimum number of pages to free
  */
 static inline int lru_shrink_min(struct client_obd *cli)
 {
@@ -363,7 +372,11 @@ static inline int lru_shrink_min(struct client_obd *cli)
 }
 
 /**
- * free this number at most otherwise it will take too long time to finsih.
+ * lru_shrink_max() - Free at most this number of pages otherwise it will take
+ *                    too long time to finish.
+ * @cli: client side OBD
+ *
+ * Return: maximum number of pages to free
  */
 static inline int lru_shrink_max(struct client_obd *cli)
 {
@@ -371,11 +384,14 @@ static inline int lru_shrink_max(struct client_obd *cli)
 }
 
 /**
+ * osc_cache_too_much() - Check if we can free LRU slots from this OSC.
+ * @cli: client side OBD
+ *
  * Check if we can free LRU slots from this OSC. If there exists LRU waiters,
  * we should free slots aggressively. In this way, slots are freed in a steady
  * step to maintain fairness among OSCs.
  *
- * Return how many LRU pages should be freed.
+ * Return: How many LRU pages should be freed.
  */
 static int osc_cache_too_much(struct client_obd *cli)
 {
@@ -521,6 +537,9 @@ static void __osc_lru_del(struct client_obd *cli, struct osc_page *opg)
 }
 
 /**
+ * osc_lru_del() - Page is being destroyed.
+ * @opg: Pointer to the osc_page struct being destroyed
+ *
  * Page is being destroyed. The page may be not in LRU list, if the transfer
  * has never finished(error occurred).
  */
@@ -551,7 +570,8 @@ static void osc_lru_del(struct osc_page *opg)
 }
 
 /**
- * Delete page from LRU list for redirty.
+ * osc_lru_use() - Delete page from LRU list for redirty.
+ * @opg: Pointer to the osc_page struct (that is being allocated)
  */
 static void osc_lru_use(struct osc_page *opg)
 {
@@ -595,11 +615,19 @@ static void discard_cl_pages(const struct lu_env *env, struct cl_io *io,
 }
 
 /**
+ * lru_page_busy() - Check if a cl_page can be released
+ * @cli: client side OBD
+ * @cl_page: pointer to the cl_page struct. (client managed folio)
+ *
  * Check if a cl_page can be released, i.e, it's not being used.
  *
  * If unstable account is turned on, bulk transfer may hold one refcount
  * for recovery so we need to check folio refcount as well; otherwise,
  * even we can destroy cl_page but the corresponding folio can't be reused.
+ *
+ * Return:
+ * * %true cl_page or its holding folio is busy
+ * * %false if cl_page is not busy and can be released
  */
 static inline bool lru_page_busy(struct client_obd *cli,
 				 struct cl_page *cl_page)
@@ -619,7 +647,7 @@ static inline bool lru_page_busy(struct client_obd *cli,
 	return false;
 }
 
-/**
+/*
  * Check whether a page is mlocked and unevictable.
  */
 static inline bool lru_page_unevictable(struct cl_page *clpage)
@@ -907,7 +935,15 @@ static long osc_lru_list_shrink(const struct lu_env *env,
 }
 
 /**
- * Drop @target of pages from LRU at most.
+ * osc_lru_shrink() - Drop @target of pages from LRU at most.
+ * @env: Lustre environment
+ * @cli: client side OBD
+ * @target: Number of pages to shrink (drop)
+ * @force: if %true do not check for multiple threads for shrinking
+ * @scanned: if not %NULL, store total pages scanned [out]
+ *
+ * Return:
+ * * %0 on success
  */
 long osc_lru_shrink(const struct lu_env *env, struct client_obd *cli,
 		   long target, bool force, long *scanned)
@@ -985,10 +1021,18 @@ out:
 EXPORT_SYMBOL(osc_lru_shrink);
 
 /**
+ * osc_lru_reclaim() - Reclaim LRU pages by an IO thread.
+ * @cli: client side OBD
+ * @npages: Number of pages to reclain
+ *
  * Reclaim LRU pages by an IO thread. The caller wants to reclaim at least
- * \@npages of LRU slots. For performance consideration, it's better to drop
+ * @npages of LRU slots. For performance consideration, it's better to drop
  * LRU pages in batch. Therefore, the actual number is adjusted at least
  * max_pages_per_rpc.
+ *
+ * Return:
+ * * %positive number of pages shrunk
+ * * %negative on failure
  */
 static long osc_lru_reclaim(struct client_obd *cli, unsigned long npages)
 {
@@ -1080,11 +1124,18 @@ out:
 }
 
 /**
- * osc_lru_alloc() is called to allocate an LRU slot for a cl_page.
+ * osc_lru_alloc() - function is called to allocate an LRU slot for a cl_page.
+ * @env: Lustre environment
+ * @cli: client side OBD
+ * @opg: Pointer to the osc_page struct (that is being allocated)
  *
  * Usually the LRU slots are reserved in osc_io_iter_rw_init().
  * Only in the case that the LRU slots are in extreme shortage, it should
  * have reserved enough slots for an IO.
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 static int osc_lru_alloc(const struct lu_env *env, struct client_obd *cli,
 			 struct osc_page *opg)
@@ -1139,10 +1190,16 @@ out:
 }
 
 /**
- * osc_lru_reserve() is called to reserve enough LRU slots for I/O.
+ * osc_lru_reserve() - function is called to reserve enough LRU slots for I/O.
+ * @cli: client side OBD
+ * @npages: Number of pages to reserve
  *
  * The benefit of doing this is to reduce contention against atomic counter
  * cl_lru_left by changing it from per-page access to per-IO access.
+ *
+ * Return:
+ * * %positive number of pages reserved
+ * * %negative on failure
  */
 unsigned long osc_lru_reserve(struct client_obd *cli, unsigned long npages)
 {
@@ -1217,10 +1274,17 @@ long osc_unevict_cache_shrink(const struct lu_env *env, struct client_obd *cli)
 
 /* NR_UNSTABLE_NFS is still in enum zone_stat_item  */
 /**
+ * unstable_page_accounting() - tracking unstable pages
+ * @desc: Describes bulk transfer
+ * @factor: Indicator, %1 to increase or %-1 to decrease page count
+ *
  * Atomic operations are expensive. We accumulate the accounting for the
  * same page zone to get better performance.
  * In practice this can work pretty good because the pages in the same RPC
  * are likely from the same page zone.
+ *
+ * An unstable page is a page state that WRITE RPC has finished but
+ * the transaction has NOT yet committed.
  */
 static inline void unstable_page_accounting(struct ptlrpc_bulk_desc *desc,
 					    int factor)
@@ -1318,6 +1382,9 @@ static inline void dec_unstable_pages(struct ptlrpc_bulk_desc *desc)
 }
 
 /**
+ * osc_dec_unstable_pages() - Performs "unstable" page accounting.
+ * @req: RPC request associated with this bulk transfer
+ *
  * Performs "unstable" page accounting. This function balances the
  * increment operations performed in osc_inc_unstable_pages. It is
  * registered as the RPC request callback, and is executed when the
@@ -1360,7 +1427,10 @@ void osc_dec_unstable_pages(struct ptlrpc_request *req)
 }
 
 /**
- * "unstable" page accounting. See: osc_dec_unstable_pages.
+ * osc_inc_unstable_pages() - "unstable" page accounting.
+ * @req: RPC request associated with this bulk transfer
+ *
+ * See: osc_dec_unstable_pages.
  */
 void osc_inc_unstable_pages(struct ptlrpc_request *req)
 {
@@ -1400,9 +1470,17 @@ void osc_inc_unstable_pages(struct ptlrpc_request *req)
 }
 
 /**
+ * osc_over_unstable_soft_limit() - Check if it piggybacks SOFT_SYNC flag to OST
+ *                                  from this OSC.
+ * @cli: client side OBD
+ *
  * Check if it piggybacks SOFT_SYNC flag to OST from this OSC.
  * This function will be called by every BRW RPC so it's critical
  * to make this function fast.
+ *
+ * Return:
+ * * %true soft limit reached
+ * * %false soft limit not reached
  */
 bool osc_over_unstable_soft_limit(struct client_obd *cli)
 {
@@ -1431,10 +1509,14 @@ bool osc_over_unstable_soft_limit(struct client_obd *cli)
 }
 
 /**
- * Return how many LRU pages in the cache of all OSC devices
+ * osc_cache_shrink_count() - Return how many LRU pages in the cache of all OSC
+ *                            devices
+ * @sk: shrinker struct
+ * @sc: shrink_control struct
  *
- * \retval	return # of cached LRU pages times reclaimation tendency
- * \retval	SHRINK_STOP if it cannot do any scanning in this time
+ * Return:
+ * * # of cached LRU pages times reclaimation tendency
+ * * %SHRINK_STOP if it cannot do any scanning in this time
  */
 unsigned long osc_cache_shrink_count(struct shrinker *sk,
 				     struct shrink_control *sc)
@@ -1456,10 +1538,9 @@ unsigned long osc_cache_shrink_count(struct shrinker *sk,
 }
 
 /**
- * Scan and try to reclaim sc->nr_to_scan cached LRU pages
- *
- * \retval	number of cached LRU pages reclaimed
- * \retval	SHRINK_STOP if it cannot do any scanning in this time
+ * osc_cache_shrink_scan() - Scan/try to reclaim sc->nr_to_scan cached LRU pages
+ * @sk: shrinker struct
+ * @sc: shrink_control struct
  *
  * Linux kernel will loop calling this shrinker scan routine with
  * sc->nr_to_scan = SHRINK_BATCH(128 for now) until kernel got enough memory.
@@ -1467,6 +1548,10 @@ unsigned long osc_cache_shrink_count(struct shrinker *sk,
  * If sc->nr_to_scan is 0, the VM is querying the cache size, we don't need
  * to scan and try to reclaim LRU pages, just return 0 and
  * osc_cache_shrink_count() will report the LRU page number.
+ *
+ * Return:
+ * * %number of cached LRU pages reclaimed
+ * * %SHRINK_STOP if it cannot do any scanning in this time
  */
 unsigned long osc_cache_shrink_scan(struct shrinker *sk,
 				    struct shrink_control *sc)

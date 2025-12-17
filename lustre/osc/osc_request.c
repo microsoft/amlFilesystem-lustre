@@ -1469,7 +1469,8 @@ static struct folio *osc_encrypt_pagecache_blocks(const struct inode *inode,
 
 /**
  * osc_finalize_bounce_page() - overlay to llcrypt_finalize_bounce_page
- * @pagep: pointer to a struct page
+ * @foliop: Pointer to (bounce) folio struct (collection of pages) [in/out]
+ * @pgno: Page index within folio
  *
  * This overlay function is necessary to handle bounce pages
  * allocated by ourselves.
