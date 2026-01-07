@@ -136,7 +136,7 @@
 # response from them
 #%%global _use_internal_dependency_generator 0
 
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?azurelinux}
 ## SUSE uses another tool for provides:
 ## https://github.com/openSUSE/kernel-source/blob/master/patches.rpmify/Add-ksym-provides-tool.patch
 %global __find_provides   %{_sourcedir}/find-provides
@@ -272,10 +272,13 @@ Source20: kmp-lnet-in-kernel-o2iblnd.files
 URL: https://wiki.whamcloud.com/
 BuildRoot: %{_tmppath}/%{package_version}-root
 %if %{with lustre_modules}
-%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34
+%if %{undefined lustre_version_sha}
+# Upstream builds: use soft deps (boolean OR for modern distros)
+%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34 || 0%{?azurelinux}
 Requires: (%{lustre_name}-dkms or %{requires_kmod_name} >= %{requires_release_major_minor})
 %else
 Requires: %{requires_kmod_name} >= %{requires_release_major_minor}
+%endif
 %endif
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
@@ -289,7 +292,7 @@ BuildRequires: libtool pkgconfig(yaml-0.1) pkgconfig(zlib) pkgconfig(libnl-3.0) 
 %if "%{_vendor}" == "redhat"
 BuildRequires: redhat-rpm-config
 BuildRequires: pkgconfig
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Suggests: bash-completion
 %endif
 %elif "%{_vendor}" == "azl" || 0%{?azurelinux}
@@ -476,10 +479,13 @@ Summary: Lustre include headers
 Provides: lustre-devel = %{version}
 Requires: %{lustre_name} = %{version}
 %if %{with lustre_modules}
-%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34
+%if %{undefined lustre_version_sha}
+# Upstream builds: use soft deps
+%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34 || 0%{?azurelinux}
 Requires: (%{lustre_name}-dkms or %{requires_kmod_name} >= %{requires_release_major_minor})
 %else
 Requires: %{requires_kmod_name} >= %{requires_release_major_minor}
+%endif
 %endif
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
@@ -506,12 +512,15 @@ Requires: lustre-devel = %{version}
 Requires: python3 >= 3.6.0, python3-PyYAML
 %endif
 %if %{with lustre_modules}
-%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34
+%if %{undefined lustre_version_sha}
+# Upstream builds: use soft deps
+%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34 || 0%{?azurelinux}
 Requires: (%{lustre_name}-dkms or %{requires_kmod_name} >= %{requires_release_major_minor})
 %else
 Requires: %{requires_kmod_name} >= %{requires_release_major_minor}
 %endif
 Requires: %{requires_kmod_tests_name} >= %{requires_release_major_minor}
+%endif
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
 Requires: %{requires_kmod_tests_name} = %{requires_kmod_version}
@@ -523,7 +532,7 @@ Requires: python3 >= 3.6.0
 Requires: attr, rsync, lsof, /usr/bin/getconf
 Requires: /usr/sbin/getenforce, acl, /usr/bin/killall, /usr/bin/ping, bc
 # Of the supported targets, only rhel7 doesn't support Recommends.
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Recommends: perl, dbench, iozone, vmtouch
 # Either of these is sufficient
 Suggests: pdsh, clush
@@ -601,7 +610,7 @@ This package includes:
 %package -n %{lustre_name}-iokit
 Summary: Collection of benchmark tools for a cluster with the Lustre file system
 Requires: sg3_utils
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Recommends: perl
 %endif
 
