@@ -41,10 +41,15 @@
 %global azurelinux 1
 %endif
 
-# LUTF Turn off brp-python-precompile script as we don't want the python files
-# to be compiled on installation
-# Don't apply this to Azure Linux which has its own __os_install_post handling
-%if ! 0%{?azurelinux}
+# LUTF Turn off brp-python-bytecompile script as we don't want the python files
+# to be compiled on installation.
+# Also disable brp-strip to preserve kernel module signatures for Secure Boot.
+%if 0%{?rhel} || 0%{?fedora} || 0%{?azurelinux}
+# RHEL/Fedora/Azure Linux: use __brp_* macros directly
+%global __brp_strip %{nil}
+%global __brp_python_bytecompile %{nil}
+%else
+# SUSE and others: sed out the scripts from __os_install_post
 %global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g' | sed -e 's!/usr/lib[^[:space:]]*/brp-strip.*[[:space:]].*$!!g')
 %endif
 
