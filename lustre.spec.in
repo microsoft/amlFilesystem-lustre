@@ -128,6 +128,13 @@
 %global __find_provides   %{_sourcedir}/find-provides
 %endif
 
+# Azure Linux kernel doesn't export ksym() provides in RPM metadata, so the
+# kmod's ksym() requires would be unsatisfiable. Filter them out since the
+# actual kernel symbols exist at runtime.
+%if 0%{?azurelinux}
+%global __requires_exclude ^ksym\\(
+%endif
+
 # Set the package name prefix
 %if %{undefined lustre_name}
     %if %{with servers}
