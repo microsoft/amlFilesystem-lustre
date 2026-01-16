@@ -1,12 +1,17 @@
 Summary:        Lustre LNet o2iblnd for 3rd party OFED
 License:        GPL-2.0-only
+# Azure Linux 3: kmodtool hardcodes /usr/sbin/depmod which doesn't exist on AL3.
+# The kmodtool wrapper filters that dependency; require kmod explicitly for depmod.
+%if 0%{?azurelinux}
+Requires:       kmod
+%endif
 %if 0%{?suse_version} > 1
 Requires:       kernel-%1
 %endif
 %if 0%{?mofed_source} > 0
 BuildRequires:  mlnx-ofa_kernel-devel
 %endif
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "openEuler"
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "openEuler" || "%{_vendor}" == "azl"
 Requires:       kmod-mlnx-ofa_kernel
 %else
 Requires:       mlnx-ofa_kernel-kmp
