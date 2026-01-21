@@ -721,6 +721,7 @@ enum ll_sbi_flags {
 	LL_SBI_USER_FID2PATH,		/* fid2path by unprivileged users */
 	LL_SBI_VERBOSE,			/* verbose mount/umount */
 	LL_SBI_ALWAYS_PING,		/* ping even if server suppress_pings */
+	LL_SBI_UNIQUE_FSID,		/* unique FSID per mount for k8s */
 	LL_SBI_TEST_DUMMY_ENCRYPTION,	/* test dummy encryption */
 	LL_SBI_ENCRYPT,			/* client side encryption */
 	LL_SBI_FOREIGN_SYMLINK,		/* foreign fake-symlink support */

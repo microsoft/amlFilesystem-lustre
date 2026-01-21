@@ -763,12 +763,20 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 
 	/* We set sb->s_dev equal on all lustre clients in order to support
 	 * NFS export clustering.  NFSD requires that the FSID be the same
-	 * on all clients. */
-	/* s_dev is also used in lt_compare() to compare two fs, but that is
-	 * only a node-local comparison. */
-	uuid = obd_get_uuid(sbi->ll_md_exp);
-	if (uuid != NULL)
-		sb->s_dev = get_uuid2int(uuid->uuid, strlen(uuid->uuid));
+	 * on all clients. However, this causes issues for Kubernetes which
+	 * uses (st_dev, fsroot) to uniquely identify mounts. The unique_fsid
+	 * mount option skips this, yielding a unique FSID per mount for
+	 * environments that don't need NFS export clustering.
+	 *
+	 * s_dev is also used in lt_compare() to compare two fs, but that is
+	 * only a node-local comparison.
+	 */
+	if (!test_bit(LL_SBI_UNIQUE_FSID, sbi->ll_flags)) {
+		uuid = obd_get_uuid(sbi->ll_md_exp);
+		if (uuid != NULL)
+			sb->s_dev = get_uuid2int(uuid->uuid,
+						 strlen(uuid->uuid));
+	}
 
 	if (data != NULL)
 		OBD_FREE_PTR(data);
@@ -966,6 +974,8 @@ static const match_table_t ll_sbi_flags_name = {
 	{LL_SBI_VERBOSE,		"verbose"},
 	{LL_SBI_VERBOSE,		"noverbose"},
 	{LL_SBI_ALWAYS_PING,		"always_ping"},
+	{LL_SBI_UNIQUE_FSID,		"unique_fsid"},
+	{LL_SBI_UNIQUE_FSID,		"nounique_fsid"},
 	{LL_SBI_TEST_DUMMY_ENCRYPTION,	"test_dummy_encryption=%s"},
 	{LL_SBI_TEST_DUMMY_ENCRYPTION,	"test_dummy_encryption"},
 	{LL_SBI_ENCRYPT,		"encrypt"},
@@ -1069,6 +1079,7 @@ static int ll_options(char *options, struct super_block *sb)
 		case LL_SBI_32BIT_API:
 		case LL_SBI_64BIT_HASH:
 		case LL_SBI_ALWAYS_PING:
+		case LL_SBI_UNIQUE_FSID:
 			set_bit(token, sbi->ll_flags);
 			break;
 
