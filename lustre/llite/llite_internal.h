@@ -810,6 +810,7 @@ enum ll_sbi_flags {
 	LL_SBI_NOLCK,			/* DLM locking disabled directio-only */
 	LL_SBI_STATFS_PROJECT,		/* statfs returns project quota */
 	LL_SBI_TEST_DUMMY_ENCRYPTION,	/* test dummy encryption */
+	LL_SBI_UNIQUE_FSID,		/* unique FSID per mount for k8s */
 	LL_SBI_USER_FID2PATH,		/* fid2path by unprivileged users */
 	LL_SBI_USER_XATTR,		/* support user xattr */
 	LL_SBI_VERBOSE,			/* verbose mount/umount */
