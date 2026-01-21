@@ -34,7 +34,7 @@ noinst_SCRIPTS += lustre-rsync-test.sh ost-pools.sh rpc.sh yaml.sh
 if BUILD_LUTF
 noinst_SCRIPTS += lutf.sh
 endif # BUILD_LUTF
-noinst_SCRIPTS += lnet-selftest.sh obdfilter-survey.sh mmp.sh mmp_mark.sh
+noinst_SCRIPTS += lnet-selftest.sh obdfilter-survey.sh mmp.sh
 noinst_SCRIPTS += sgpdd-survey.sh maloo_upload.sh auster setup-nfs.sh
 noinst_SCRIPTS += mds-survey.sh parallel-scale-nfs.sh large-lun.sh
 noinst_SCRIPTS += parallel-scale-nfsv3.sh parallel-scale-nfsv4.sh
