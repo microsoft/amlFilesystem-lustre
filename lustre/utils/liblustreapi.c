@@ -3413,10 +3413,13 @@ migrate:
 
 out:
 	/* Do not get down anymore? */
-	if (param->fp_depth == param->fp_max_depth)
-		ret = 1;
-	else
+	if (param->fp_depth == param->fp_max_depth) {
+		/* keep a real error rather than the depth marker */
+		if (ret == 0)
+			ret = 1;
+	} else {
 		param->fp_depth++;
+	}
 
 	if (dp != NULL) {
 		/*
@@ -3460,8 +3463,13 @@ static int cb_migrate_mdt_fini(char *path, int p, int *dp,
 		 */
 		ret = close(*dp);
 		*dp = -1;
-		if (ret)
+		if (ret) {
+			ret = -errno;
+			llapi_error(LLAPI_MSG_ERROR, ret,
+				    "%s: error closing '%s' before shrink",
+				    __func__, path);
 			goto out;
+		}
 	}
 
 	ret = setxattr(path, XATTR_NAME_LMV, lmu, lmulen, 0);

@@ -3309,7 +3309,7 @@ int llapi_semantic_traverse(char *path, int size, int parent,
 					     param->fp_lum_size, GET_LMD_INFO);
 			if (rc == 0)
 				dent->d_type = IFTODT(lmd->lmd_stx.stx_mode);
-			else if (ret == 0)
+			else if (ret >= 0)
 				ret = rc;
 
 			if (rc == -ENOENT)
@@ -3332,7 +3332,7 @@ int llapi_semantic_traverse(char *path, int size, int parent,
 							     sem_init, sem_fini,
 							     data, dent);
 			}
-			if (rc != 0 && ret == 0)
+			if (rc != 0 && ret >= 0)
 				ret = rc;
 			if (rc < 0 && rc != -EALREADY &&
 			    param->fp_stop_on_error)
@@ -3342,24 +3342,35 @@ int llapi_semantic_traverse(char *path, int size, int parent,
 			rc = 0;
 			if (sem_init) {
 				rc = sem_init(path, d, NULL, data, dent);
-				if (rc < 0 && ret == 0) {
-					ret = rc;
-					if (rc && rc != -EALREADY &&
+				if (rc < 0) {
+					if (ret >= 0)
+						ret = rc;
+					if (rc != -EALREADY &&
 					    param->fp_stop_on_error)
 						goto out;
-					break;
 				}
 			}
-			if (sem_fini && rc == 0)
-				sem_fini(path, d, NULL, data, dent);
+			if (sem_fini && rc == 0) {
+				int rc2;
+
+				rc2 = sem_fini(path, d, NULL, data, dent);
+				/* record first error, keep scanning */
+				if (rc2 < 0 && ret >= 0)
+					ret = rc2;
+			}
 		}
 	}
 
 out:
 	path[len] = 0;
 
-	if (sem_fini)
-		sem_fini(path, parent, &d, data, de);
+	if (sem_fini) {
+		int rc2;
+
+		rc2 = sem_fini(path, parent, &d, data, de);
+		if (rc2 < 0 && ret >= 0)
+			ret = rc2;
+	}
 err:
 	if (d != -1) {
 		if (dir)
@@ -3443,7 +3454,8 @@ static void *find_worker(void *arg)
 					     queue->fwq_cb_init,
 					     queue->fwq_cb_fini,
 					     unit->fwu_param, NULL);
-		if (rc && queue->fwq_error == 0)
+		/* skip the positive depth marker; keep the first error */
+		if (rc < 0 && queue->fwq_error == 0)
 			queue->fwq_error = rc;
 		if ((rc < 0 && rc != -EALREADY &&
 		     unit->fwu_param->fp_stop_on_error) ||
