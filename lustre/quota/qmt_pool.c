@@ -1138,18 +1138,20 @@ int qmt_pool_lqes_lookup_spec(const struct lu_env *env, struct qmt_device *qmt,
 }
 
 /**
- * Allocate a new pool for the specified device.
+ * qmt_pool_create() - Allocate a new pool for the specified device.
+ * @obd: Lustre OBD device on which to add a pool iterator
+ * @rtype: Type of pool. (LQUOTA_RES_MD or LQUOTA_RES_DT)
+ * @poolname: the name of the pool to be created
+ * @is_iqa: create an LQA (quota ID aggregate) pool if true
  *
- * Allocate a new pool_desc structure for the specified \a new_pool
- * device to create a pool with the given \a poolname.  The new pool
- * structure is created with a single reference, and is freed when the
- * reference count drops to zero.
+ * Allocate a new qmt_pool_info structure for @obd to create a pool
+ * with the given @poolname.  The new pool structure is created with
+ * a single reference, and is freed when the reference count drops to
+ * zero.
  *
- * \param[in] obd	Lustre OBD device on which to add a pool iterator
- * \param[in] poolname	the name of the pool to be created
- *
- * \retval		0 in case of success
- * \retval		negative error code in case of error
+ * Return:
+ * * %0 in case of success
+ * * %negative error code in case of error
  */
 int qmt_pool_create(struct obd_device *obd, enum lquota_res_type rtype,
 		    char *poolname, bool is_lqa)
@@ -1685,14 +1687,14 @@ out:
 
 
 /**
- * Add a single target device to the named pool.
+ * qmt_pool_add() - Add a single target device to the named pool.
+ * @obd: OBD device on which to add the pool
+ * @poolname: name of the pool to which to add the target @slavename
+ * @slavename: name of the target device to be added
  *
- * \param[in] obd	OBD device on which to add the pool
- * \param[in] poolname	name of the pool to which to add the target \a slavename
- * \param[in] slavename	name of the target device to be added
- *
- * \retval		0 if \a slavename was (previously) added to the pool
- * \retval		negative error number on failure
+ * Return:
+ * * %0 if @slavename was added to the pool
+ * * %negative error number on failure
  */
 int qmt_pool_add(struct obd_device *obd, char *poolname, char *slavename)
 {
@@ -1700,14 +1702,14 @@ int qmt_pool_add(struct obd_device *obd, char *poolname, char *slavename)
 }
 
 /**
- * Remove the named target from the specified pool.
+ * qmt_pool_rem() - Remove the named target from the specified pool.
+ * @obd: OBD device from which to remove @poolname
+ * @poolname: name of the pool to be changed
+ * @slavename: name of the target to remove from @poolname
  *
- * \param[in] obd	OBD device from which to remove \a poolname
- * \param[in] poolname	name of the pool to be changed
- * \param[in] slavename	name of the target to remove from \a poolname
- *
- * \retval		0 on successfully removing \a slavename from the pool
- * \retval		negative number on error (e.g. \a slavename not in pool)
+ * Return:
+ * * %0 on successfully removing @slavename from the pool
+ * * %negative number on error (e.g. @slavename not in pool)
  */
 int qmt_pool_rem(struct obd_device *obd, char *poolname, char *slavename)
 {
@@ -1715,14 +1717,15 @@ int qmt_pool_rem(struct obd_device *obd, char *poolname, char *slavename)
 }
 
 /**
- * Remove the named pool from the QMT device.
+ * qmt_pool_destroy() - Remove the named pool from the QMT device.
+ * @obd: OBD device on which pool was previously created
+ * @rtype: Type of pool. (LQUOTA_RES_MD or LQUOTA_RES_DT)
+ * @poolname: name of pool to remove from @obd
+ * @lqa: Pool is LQA
  *
- * \param[in] obd	OBD device on which pool was previously created
- * \param[in] poolname	name of pool to remove from \a obd
- * \param[in] lqa	pool is LQA
- *
- * \retval		0 on successfully removing the pool
- * \retval		negative error numbers for failures
+ * Return:
+ * * %0 on successfully removing the pool
+ * * %negative error numbers for failures
  */
 int qmt_pool_destroy(struct obd_device *obd, enum lquota_res_type rtype,
 		     char *poolname, bool lqa)
