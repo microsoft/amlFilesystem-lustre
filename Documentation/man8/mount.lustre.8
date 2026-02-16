@@ -346,14 +346,26 @@ it will not have any objects on it yet.
 .BI nosvc
 Only start the MGC (and MGS, if co-located) for a target service,
 and not the actual MDS or OSS service.
+No MGS follower is started on the target either, since it starts
+no service.
 .TP
 .BI noclient
 Do not allow any client connections other than the local interface to
 the local MGS. This is helpful for the lctl replace_nids and clear_conf
 commands to prevent unwanted client connections.
 .TP
+.BI mgs_follower
+Start a read-only MGS follower on this MDT or OST, which serves the
+configuration logs it has a copy of to clients that connect to it.
+MGS followers are disabled by default.
+A follower does not apply the MGS
+.B mgs.srpc.flavor
+rules and only serves clients connecting without an sptlrpc flavor,
+so do not enable it where those rules restrict MGS access.
+.TP
 .BI nomgs
-Start an MDT with a co-located MGS without starting the MGS service.
+Do not start an MGS service on this target: neither the co-located MGS
+of an MDT holding the MGT, nor an MGS follower.
 .TP
 .BI noscrub
 Do not trigger OI scrub automatically when an inconsistency is detected.

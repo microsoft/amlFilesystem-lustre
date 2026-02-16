@@ -191,18 +191,50 @@ bool lov_comp_md_is_ec(const struct lov_comp_md_v1 *comp_v1);
 
 int open_parent(const char *path);
 
+/* An MGS follower is readonly and handles no ioctls.  An MGS without the
+ * "state" parameter predates the follower and is always the leader, and so
+ * is one whose state cannot be read.
+ */
+static inline bool is_mgs_follower(void)
+{
+	glob_t path;
+	char buf[16];
+	ssize_t len;
+	int fd;
+	int rc;
+
+	rc = cfs_get_param_paths(&path, "mgs/MGS/state");
+	if (rc)
+		return false;
+
+	fd = open(path.gl_pathv[0], O_RDONLY);
+	cfs_free_param_data(&path);
+	if (fd < 0)
+		return false;
+
+	len = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (len <= 0)
+		return false;
+
+	buf[len] = '\0';
+
+	return strncmp(buf, "follower", strlen("follower")) == 0;
+}
+
+/* is MGS leader */
 static inline bool is_mgs(void)
 {
 	glob_t path;
 	int rc;
 
 	rc = cfs_get_param_paths(&path, "mgs/MGS/exports");
-	if (!rc) {
-		cfs_free_param_data(&path);
-		return true;
-	}
+	if (rc)
+		return false;
 
-	return false;
+	cfs_free_param_data(&path);
+
+	return !is_mgs_follower();
 }
 
 static inline bool is_mds(void)

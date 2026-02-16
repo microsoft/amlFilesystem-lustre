@@ -191,7 +191,10 @@ test_5b() {
 	grep " $MOUNT " /etc/mtab &&
 		error false "unexpected entry in mtab before mount" && return 10
 
-	start_ost || error "OST start failed"
+	# an OST otherwise starts an MGS follower here, and with no MGS0 to
+	# feed it the OST's own MGC is refused by it for as long as the test
+	# runs.  "nomgs" is accepted by every server version.
+	start_ost "-o nomgs" || error "OST start failed"
 	if ! combined_mgs_mds ; then
 		trap cleanup_5b EXIT ERR
 		start_mds || error "MDS start failed"
@@ -12048,6 +12051,61 @@ test_140() {
 	reformat_and_config
 }
 run_test 140 "remove_updatelog script actions"
+
+test_145a() { # LU-19916 MGS followers only start with "mgs_follower"
+	(( MDS1_VERSION >= $(version_code 2.17.59.3) )) ||
+		skip "need MDS >= 2.17.59.3 for mgs_follower mount option"
+
+	local mgsfacet=mgs
+	local mgs_host
+	local shared
+	local facet
+	local i
+
+	combined_mgs_mds && mgsfacet=mds1
+	mgs_host=$(facet_active_host $mgsfacet)
+	# a follower can only take over on a node with a target left on it
+	for ((i = 1; i <= MDSCOUNT; i++)); do
+		[[ mds$i != $mgsfacet ]] || continue
+		[[ $(facet_active_host mds$i) == $mgs_host ]] && shared=mds$i
+	done
+	for ((i = 1; i <= OSTCOUNT; i++)); do
+		[[ $(facet_active_host ost$i) == $mgs_host ]] && shared=ost$i
+	done
+	[[ -n "$shared" ]] || skip_env "need another target on the MGS node"
+
+	local cmd="$LCTL get_param -n mgs.MGS.state 2>/dev/null"
+	local saved=$MGS_FOLLOWER
+	local state
+	local start
+	local wait
+
+	stack_trap "MGS_FOLLOWER=$saved; stopall" EXIT
+
+	# with "mgs_follower" $shared takes over from the stopped MGS
+	stopall
+	MGS_FOLLOWER=true setupall
+	state=$(do_node $mgs_host "$cmd")
+	[[ $state == leader ]] || error "MGS state '$state' != leader"
+	stop $mgsfacet -f || error "stop $mgsfacet failed"
+	start=$SECONDS
+	while state=$(do_node $mgs_host "$cmd"); [[ $state != follower ]]; do
+		(( SECONDS - start < 60 )) ||
+			error "no follower after $mgsfacet stopped, state '$state'"
+		sleep 2
+	done
+	wait=$((SECONDS - start))
+	echo "MGS follower started ${wait}s after $mgsfacet stopped"
+
+	# without it no target does, given at least twice as long
+	stopall
+	MGS_FOLLOWER=false setupall
+	stop $mgsfacet -f || error "stop $mgsfacet failed"
+	sleep $((wait * 2 + 10))
+	state=$(do_node $mgs_host "$cmd")
+	[[ -z "$state" ]] || error "MGS state '$state' without mgs_follower"
+}
+run_test 145a "MGS followers only start with 'mgs_follower'"
 
 test_150() {
 	setup

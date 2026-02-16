@@ -127,10 +127,11 @@ static int get_mgs_device(void)
 	static int mgs_device = -1;
 
 	if (mgs_device == -1) {
-		int rc;
+		int rc = -1;
 
 		do_disconnect(NULL, 1);
-		rc = do_device("mgsioc", mgs);
+		if (!is_mgs_follower())
+			rc = do_device("mgsioc", mgs);
 		if (rc) {
 			fprintf(stderr,
 				"This command must be run on the MGS.\n");

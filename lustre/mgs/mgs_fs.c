@@ -76,7 +76,7 @@ int mgs_fs_setup(const struct lu_env *env, struct mgs_device *mgs)
 	struct lu_fid rfid;
 	struct dt_object *root;
 	struct dt_object *nm_config_file_obj;
-	struct nm_config_file *nm_config_file;
+	struct nm_config_file *nm_config_file = NULL;
 	int rc;
 
 	ENTRY;
@@ -84,10 +84,15 @@ int mgs_fs_setup(const struct lu_env *env, struct mgs_device *mgs)
 	OBD_SET_CTXT_MAGIC(&mgs->mgs_obd->obd_lvfs_ctxt);
 	mgs->mgs_obd->obd_lvfs_ctxt.dt = mgs->mgs_bottom;
 
-	/* XXX: fix when support for N:1 layering is implemented */
+	/* The site is shared with the OSD and with the MDT/OST this MGS runs
+	 * on, which may already be serving.  Nothing below consults
+	 * ls_top_dev - local_oid_storage_init() and local_file_find_or_create()
+	 * resolve through ls_locate(), and the root through dt_locate_at() -
+	 * so publishing the MGS there would only make a concurrent
+	 * mdt_object_find()/ofd_object_find() build its object through the
+	 * MGS stack.
+	 */
 	LASSERT(mgs->mgs_dt_dev.dd_lu_dev.ld_site);
-	mgs->mgs_dt_dev.dd_lu_dev.ld_site->ls_top_dev =
-		&mgs->mgs_dt_dev.dd_lu_dev;
 
 	/* Setup the configs dir */
 	fid.f_seq = FID_SEQ_LOCAL_NAME;
@@ -101,8 +106,13 @@ int mgs_fs_setup(const struct lu_env *env, struct mgs_device *mgs)
 	if (rc)
 		GOTO(out_los, rc);
 
+	/* Resolve through the local storage device, as mgc_fs_setup() and
+	 * nidtbl_read_version() do: an MGS-layer object would hold a
+	 * reference on mgs_dt_dev in a site the follower shares with a
+	 * serving MDT/OST, where nothing purges it again.
+	 */
 	root = dt_locate_at(env, mgs->mgs_bottom, &rfid,
-			    &mgs->mgs_dt_dev.dd_lu_dev, NULL);
+			    &mgs->mgs_los->los_dev->dd_lu_dev, NULL);
 	if (unlikely(IS_ERR(root)))
 		GOTO(out_los, rc = PTR_ERR(root));
 
@@ -119,33 +129,37 @@ int mgs_fs_setup(const struct lu_env *env, struct mgs_device *mgs)
 
 	mgs->mgs_configs_dir = o;
 
-	/* colocated MDT will cache config in target root dir */
-	nm_config_file_obj = local_index_find_or_create(env, mgs->mgs_los,
+	/* MGS follower doesn't handle nodemap */
+	if (mgs->mgs_lut.lut_is_mgs_leader) {
+		/* colocated MDT will cache config in target root dir */
+		nm_config_file_obj = local_index_find_or_create(env,
+							mgs->mgs_los,
 							mgs->mgs_configs_dir,
 							LUSTRE_NODEMAP_NAME,
 							S_IFREG | 0644,
 							&dt_nodemap_features);
-	if (IS_ERR(nm_config_file_obj))
-		GOTO(out_configs, rc = PTR_ERR(nm_config_file_obj));
+		if (IS_ERR(nm_config_file_obj))
+			GOTO(out_configs, rc = PTR_ERR(nm_config_file_obj));
 
-	if (nm_config_file_obj->do_index_ops == NULL) {
-		rc = nm_config_file_obj->do_ops->do_index_try(env,
+		if (nm_config_file_obj->do_index_ops == NULL) {
+			rc = nm_config_file_obj->do_ops->do_index_try(env,
 							nm_config_file_obj,
 							&dt_nodemap_features);
-		if (rc < 0) {
-			dt_object_put(env, nm_config_file_obj);
-			GOTO(out_configs, rc);
+			if (rc < 0) {
+				dt_object_put(env, nm_config_file_obj);
+				GOTO(out_configs, rc);
+			}
 		}
+		nm_config_file = nm_config_file_register_mgs(env,
+					nm_config_file_obj, mgs->mgs_los);
+		dt_object_put(env, nm_config_file_obj);
+		if (IS_ERR(nm_config_file)) {
+			CERROR("%s: error loading nodemap config file, file must be removed via ldiskfs: rc = %ld\n",
+			       mgs->mgs_obd->obd_name, PTR_ERR(nm_config_file));
+			GOTO(out_configs, rc = PTR_ERR(nm_config_file));
+		}
+		obd2obt(mgs->mgs_obd)->obt_nodemap_config_file = nm_config_file;
 	}
-	nm_config_file = nm_config_file_register_mgs(env, nm_config_file_obj,
-						     mgs->mgs_los);
-	dt_object_put(env, nm_config_file_obj);
-	if (IS_ERR(nm_config_file)) {
-		CERROR("%s: error loading nodemap config file, file must be removed via ldiskfs: rc = %ld\n",
-		       mgs->mgs_obd->obd_name, PTR_ERR(nm_config_file));
-		GOTO(out_configs, rc = PTR_ERR(nm_config_file));
-	}
-	obd2obt(mgs->mgs_obd)->obt_nodemap_config_file = nm_config_file;
 
 	/* create directory to store nid table versions */
 	o = local_file_find_or_create(env, mgs->mgs_los, root, MGS_NIDTBL_DIR,
@@ -156,7 +170,7 @@ int mgs_fs_setup(const struct lu_env *env, struct mgs_device *mgs)
 	mgs->mgs_nidtbl_dir = o;
 
 out_nm:
-	if (rc < 0) {
+	if (rc < 0 && obd2obt(mgs->mgs_obd)->obt_nodemap_config_file) {
 		nm_config_file_deregister_mgs(env, nm_config_file);
 		obd2obt(mgs->mgs_obd)->obt_nodemap_config_file = NULL;
 	}
@@ -173,8 +187,6 @@ out_los:
 		mgs->mgs_los = NULL;
 	}
 out:
-	mgs->mgs_dt_dev.dd_lu_dev.ld_site->ls_top_dev = NULL;
-
 	return rc;
 }
 
@@ -186,20 +198,25 @@ int mgs_fs_cleanup(const struct lu_env *env, struct mgs_device *mgs)
 	/*
 	 * For the MGS on independent device from MDT, it notifies the lower
 	 * layer OSD to backup index before the umount via LCFG_PRE_CLEANUP.
+	 * A follower does not own that OSD - the MDT or OST below it keeps
+	 * serving - and LCFG_PRE_CLEANUP would stop its OI scrub.
 	 */
-	lustre_cfg_bufs_reset(&bufs, mgs->mgs_obd->obd_name);
-	lustre_cfg_bufs_set_string(&bufs, 1, NULL);
-	OBD_ALLOC(lcfg, lustre_cfg_len(bufs.lcfg_bufcount, bufs.lcfg_buflen));
-	if (!lcfg) {
-		CERROR("%s: failed to trigger LCFG_PRE_CLEANUP\n",
-		       mgs->mgs_obd->obd_name);
-	} else {
-		struct lu_device *l = &mgs->mgs_bottom->dd_lu_dev;
+	if (mgs->mgs_lut.lut_is_mgs_leader) {
+		lustre_cfg_bufs_reset(&bufs, mgs->mgs_obd->obd_name);
+		lustre_cfg_bufs_set_string(&bufs, 1, NULL);
+		OBD_ALLOC(lcfg, lustre_cfg_len(bufs.lcfg_bufcount,
+					       bufs.lcfg_buflen));
+		if (!lcfg) {
+			CERROR("%s: failed to trigger LCFG_PRE_CLEANUP: rc = %d\n",
+			       mgs->mgs_obd->obd_name, -ENOMEM);
+		} else {
+			struct lu_device *l = &mgs->mgs_bottom->dd_lu_dev;
 
-		lustre_cfg_init(lcfg, LCFG_PRE_CLEANUP, &bufs);
-		l->ld_ops->ldo_process_config(env, l, lcfg);
-		OBD_FREE(lcfg, lustre_cfg_len(lcfg->lcfg_bufcount,
-					      lcfg->lcfg_buflens));
+			lustre_cfg_init(lcfg, LCFG_PRE_CLEANUP, &bufs);
+			l->ld_ops->ldo_process_config(env, l, lcfg);
+			OBD_FREE(lcfg, lustre_cfg_len(lcfg->lcfg_bufcount,
+						      lcfg->lcfg_buflens));
+		}
 	}
 
 	if (mgs->mgs_configs_dir) {

@@ -401,8 +401,13 @@ static int nidtbl_read_version(const struct lu_env *env,
 		RETURN(rc);
 	}
 
+	/* resolve through the local storage device, as
+	 * nidtbl_update_version() does: an MGS-layer object would pin
+	 * mgs_dt_dev in a site a follower shares with a serving MDT/OST,
+	 * where nothing purges it again
+	 */
 	fsdb = dt_locate_at(env, mgs->mgs_bottom, &fid,
-			    &mgs->mgs_dt_dev.dd_lu_dev, NULL);
+			    &mgs->mgs_los->los_dev->dd_lu_dev, NULL);
 	if (IS_ERR(fsdb))
 		RETURN(PTR_ERR(fsdb));
 

@@ -68,6 +68,16 @@ static inline bool cld_is_barrier(struct config_llog_data *cld)
 #endif
 }
 
+static inline bool cld_is_params(struct config_llog_data *cld)
+{
+	return cld->cld_type == MGS_CFG_T_PARAMS;
+}
+
+static inline bool cld_is_config(struct config_llog_data *cld)
+{
+	return cld->cld_type == MGS_CFG_T_CONFIG;
+}
+
 #ifdef CONFIG_LUSTRE_FS_SERVER
 int mgc_set_info_async_server(const struct lu_env *env,
 			      struct obd_export *exp,

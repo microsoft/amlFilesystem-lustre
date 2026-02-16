@@ -36,6 +36,8 @@
 #define IS_MDT(data)		((data)->lsi_flags & LDD_F_SV_TYPE_MDT)
 #define IS_OST(data)		((data)->lsi_flags & LDD_F_SV_TYPE_OST)
 #define IS_MGS(data)		((data)->lsi_flags & LDD_F_SV_TYPE_MGS)
+/* MGS0 is the primary MGS to bring targets up */
+#define IS_MGS0(data)		(IS_MGS(data) && !(data)->lsi_lmd->lmd_mgs)
 #define IS_SERVER(data)		((data) &&				  \
 				 (data)->lsi_flags & (LDD_F_SV_TYPE_MGS | \
 						      LDD_F_SV_TYPE_MDT | \
@@ -49,6 +51,7 @@
 #define IS_MDT(data)		(0)
 #define IS_OST(data)		(0)
 #define IS_MGS(data)		(0)
+#define IS_MGS0(data)		(0)
 #define IS_SERVER(data)		(0)
 #endif
 
@@ -86,6 +89,7 @@ enum lmd_flags {
 	LMD_FLG_ABORT_RECOV_MDT,	/* Abort recovery between MDTs */
 	LMD_FLG_NO_LOCAL_LOGS,		/* Use config logs from MGS */
 	LMD_FLG_NO_RCLNT,		/* Denied remote client connections */
+	LMD_FLG_MGS_FOLLOWER,		/* Start an MGS follower on target */
 	LMD_FLG_NUM_FLAGS
 };
 
@@ -162,6 +166,29 @@ struct lustre_sb_info {
 
 #define     get_profile_name(sb)   (s2lsi(sb)->lsi_lmd->lmd_profile)
 #define     get_mount_fileset(sb)  (s2lsi(sb)->lsi_lmd->lmd_fileset)
+
+#ifdef CONFIG_LUSTRE_FS_SERVER
+/* MGS followers only start with "-o mgs_follower" for now */
+#define LUSTRE_MGS_FOLLOWER_DEFAULT	false
+
+/* Do this mount's options permit running an MGS on the target?  "nomgs" says
+ * not to, a follower needs "mgs_follower" unless it is on by default, "nosvc"
+ * starts no service, and a read-only device cannot hold one.  The MGT itself
+ * is exempt from all but "nomgs": it is mounted to serve the config, and
+ * lsnapshot mounts a snapshot read-only.
+ */
+static inline bool lsi_mgs_allowed(struct lustre_sb_info *lsi)
+{
+	unsigned long *flags = lsi->lsi_lmd->lmd_flags;
+
+	return !test_bit(LMD_FLG_NOMGS, flags) &&
+	       (IS_MGS0(lsi) ||
+		((LUSTRE_MGS_FOLLOWER_DEFAULT ||
+		  test_bit(LMD_FLG_MGS_FOLLOWER, flags)) &&
+		 !test_bit(LMD_FLG_NOSVC, flags) &&
+		 !test_bit(LMD_FLG_DEV_RDONLY, flags)));
+}
+#endif /* CONFIG_LUSTRE_FS_SERVER */
 
 /* opc for target register, see also uapi/linux/lustre/lustre_disk.h.
  * For mti_flags the lower 16 bits are used for mount options so these
@@ -367,6 +394,15 @@ struct lustre_mount_info {
 int server_fill_super(struct super_block *sb);
 struct lustre_mount_info *server_get_mount(const char *name);
 int server_put_mount(const char *name, bool dereg_mnt);
+int server_start_mgs_or_follower(struct super_block *sb);
+int server_stop_mgs(struct super_block *sb);
+bool server_mgs_runs_on(struct super_block *sb);
+/* serializes starting and stopping the MGS against the MGC requeue
+ * thread.  cld_start_mgs() takes it and then cld_lock, so it nests
+ * outside that.
+ */
+void server_mgs_lock(void);
+void server_mgs_unlock(void);
 struct mgs_target_info;
 int server_mti_print(const char *title, struct mgs_target_info *mti);
 void server_calc_timeout(struct lustre_sb_info *lsi, struct obd_device *obd);

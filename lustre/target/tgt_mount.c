@@ -46,6 +46,24 @@
 static DEFINE_MUTEX(lustre_mount_info_lock);
 static LIST_HEAD(server_mount_info_list);
 
+static DEFINE_MUTEX(mgs_start_stop_mutex);
+/* the MGC requeue wakeup, kept under mgs_start_stop_mutex so a takeover need
+ * not read another target's lsi_mgc, which its umount frees without it
+ */
+static void (*server_mgc_wakeup_cb)(void);
+
+void server_mgs_lock(void)
+{
+	mutex_lock(&mgs_start_stop_mutex);
+}
+EXPORT_SYMBOL(server_mgs_lock);
+
+void server_mgs_unlock(void)
+{
+	mutex_unlock(&mgs_start_stop_mutex);
+}
+EXPORT_SYMBOL(server_mgs_unlock);
+
 static struct lustre_mount_info *server_find_mount(const char *name)
 {
 	struct list_head *tmp;
@@ -209,9 +227,10 @@ static int server_start_mgs(struct super_block *sb)
 	/* It is impossible to have more than 1 MGS per node, since
 	 * MGC wouldn't know which to connect to
 	 */
+	mutex_lock(&lustre_mount_info_lock);
 	lmi = server_find_mount(LUSTRE_MGS_OBDNAME);
+	mutex_unlock(&lustre_mount_info_lock);
 	if (lmi) {
-		lsi = s2lsi(lmi->lmi_sb);
 		LCONSOLE_ERROR("The MGS service was already started from server\n");
 		RETURN(-EALREADY);
 	}
@@ -225,13 +244,13 @@ static int server_start_mgs(struct super_block *sb)
 	rc = lustre_start_simple(LUSTRE_MGS_OBDNAME, LUSTRE_MGS_NAME,
 				 LUSTRE_MGS_OBDNAME, NULL, NULL,
 				 lsi->lsi_osd_obdname, NULL);
-	/* server_deregister_mount() is not called previously, for lsi
-	 * and other stuff can't be freed cleanly when mgs calls
-	 * server_put_mount() in error handling case (see b=17758),
-	 * this problem is caused by a bug in mgs_init0, which forgot
-	 * calling server_put_mount in error case.
-	 */
 	if (rc < 0) {
+		/* server_deregister_mount() is not called previously, for lsi
+		 * and other stuff can't be freed cleanly when mgs calls
+		 * server_put_mount() in error handling case (see b=17758),
+		 * this problem is caused by a bug in mgs_init0, which forgot
+		 * calling server_put_mount in error case.
+		 */
 		server_deregister_mount(LUSTRE_MGS_OBDNAME);
 report_err:
 		LCONSOLE_ERROR("Failed to start MGS '%s' (%d). Is the 'mgs' module loaded?\n",
@@ -240,17 +259,24 @@ report_err:
 	RETURN(rc);
 }
 
-static int server_stop_mgs(struct super_block *sb)
+/* if sb is NULL, stop the running MGS, otherwise stop the MGS on the given
+ * superblock.  Caller must hold server_mgs_lock().
+ */
+int server_stop_mgs(struct super_block *sb)
 {
+	struct lustre_mount_info *lmi;
 	struct obd_device *obd;
 	int rc;
-	struct lustre_mount_info *lmi;
 
 	ENTRY;
-	/* Do not stop MGS if this device is not the running MGT */
+	lockdep_assert_held(&mgs_start_stop_mutex);
+	mutex_lock(&lustre_mount_info_lock);
 	lmi = server_find_mount(LUSTRE_MGS_OBDNAME);
-	if (lmi && lmi->lmi_sb != sb)
+	/* Do not stop MGS if this device is not the running MGT */
+	if (!lmi || (sb && lmi->lmi_sb != sb)) {
+		mutex_unlock(&lustre_mount_info_lock);
 		RETURN(0);
+	}
 
 	CDEBUG(D_MOUNT, "Stop MGS service %s\n", LUSTRE_MGS_OBDNAME);
 
@@ -258,14 +284,82 @@ static int server_stop_mgs(struct super_block *sb)
 	obd = class_name2obd(LUSTRE_MGS_OBDNAME);
 	if (!obd) {
 		CDEBUG(D_CONFIG, "mgs %s not running\n", LUSTRE_MGS_OBDNAME);
+		mutex_unlock(&lustre_mount_info_lock);
 		RETURN(-EALREADY);
 	}
 
 	/* The MGS should always stop when we say so */
 	set_bit(OBDF_FORCE, obd->obd_flags);
+	mutex_unlock(&lustre_mount_info_lock);
+
+	/* class_manual_cleanup() will deregister the MGS mount */
 	rc = class_manual_cleanup(obd);
 	RETURN(rc);
 }
+EXPORT_SYMBOL(server_stop_mgs);
+
+/* Is the running MGS the one this mount started? */
+bool server_mgs_runs_on(struct super_block *sb)
+{
+	struct lustre_mount_info *lmi;
+	bool ours;
+
+	mutex_lock(&lustre_mount_info_lock);
+	lmi = server_find_mount(LUSTRE_MGS_OBDNAME);
+	ours = lmi && lmi->lmi_sb == sb;
+	mutex_unlock(&lustre_mount_info_lock);
+
+	return ours;
+}
+EXPORT_SYMBOL(server_mgs_runs_on);
+
+/*
+ * Start the MGS for this mount: MGS0 for the MGT, a read-only MGS follower
+ * for any other target.  Only one MGS runs per node, so a target mounted
+ * where an MGS is already running has nothing to do, and MGS0 takes over
+ * from a follower that another target on this node started.
+ *
+ * Caller must hold server_mgs_lock().
+ */
+int server_start_mgs_or_follower(struct super_block *sb)
+{
+	struct lustre_sb_info *lsi = s2lsi(sb);
+	void (*mgc_wakeup_cb)(void) = NULL;
+	struct obd_device *mgs;
+	int rc;
+
+	ENTRY;
+	lockdep_assert_held(&mgs_start_stop_mutex);
+	mgs = class_name2obd(LUSTRE_MGS_OBDNAME);
+	if (mgs) {
+		struct lu_target *lut = obd2obt(mgs)->obt_lut;
+
+		if (!IS_MGS0(lsi))
+			/* an MGS is already running on this node */
+			RETURN(0);
+
+		if (!lut || lut->lut_is_mgs_leader) {
+			LCONSOLE_ERROR("The MGS service was already started from server\n");
+			RETURN(-EALREADY);
+		}
+
+		mgc_wakeup_cb = server_mgc_wakeup_cb;
+		rc = server_stop_mgs(NULL);
+		if (rc) {
+			CERROR("%s: cannot stop MGS follower: rc = %d\n",
+			       lsi->lsi_svname, rc);
+			RETURN(rc);
+		}
+	}
+
+	rc = server_start_mgs(sb);
+	if (rc && mgc_wakeup_cb)
+		/* restart the follower stopped above on some other target */
+		mgc_wakeup_cb();
+
+	RETURN(rc);
+}
+EXPORT_SYMBOL(server_start_mgs_or_follower);
 
 static inline bool is_mdc_device(const char *devname)
 {
@@ -2004,6 +2098,8 @@ static void server_put_super(struct super_block *sb)
 	int tmpname_sz;
 	int lsiflags = lsi->lsi_flags;
 	bool stop_servers = lsi->lsi_server_started;
+	void (*mgc_wakeup_cb)(void) = NULL;
+	bool follower = false;
 
 	ENTRY;
 	LASSERT(IS_SERVER(lsi));
@@ -2085,14 +2181,34 @@ static void server_put_super(struct super_block *sb)
 		}
 	}
 
-	/* If they wanted the mgs to stop separately from the mdt, they
-	 * should have put it on a different device.
+	/* Stop the follower this target runs, unless an MGT mounting on
+	 * this node has already taken it over.
 	 */
-	lustre_stop_mgc(sb);
-	if (IS_MGS(lsi)) {
-		/* if MDS start with --nomgs, don't stop MGS then */
-		if (!test_bit(LMD_FLG_NOMGS, lsi->lsi_lmd->lmd_flags))
+	if (!IS_MGS0(lsi) &&
+	    !test_bit(LMD_FLG_NOMGS, lsi->lsi_lmd->lmd_flags)) {
+		server_mgs_lock();
+		follower = server_mgs_runs_on(sb);
+		if (follower)
 			server_stop_mgs(sb);
+		server_mgs_unlock();
+	}
+
+	if (lsi->lsi_mgc) {
+		mgc_wakeup_cb = lsi->lsi_mgc->u.cli.cl_mgc_wakeup_cb;
+		lustre_stop_mgc(sb);
+	}
+
+	/* if MDS start with --nomgs, don't stop MGS then */
+	if ((follower || IS_MGS(lsi)) &&
+	    !test_bit(LMD_FLG_NOMGS, lsi->lsi_lmd->lmd_flags)) {
+		if (!follower) {
+			server_mgs_lock();
+			server_stop_mgs(sb);
+			server_mgs_unlock();
+		}
+		/* wake MGC thread to start MGS follower on another target */
+		if (mgc_wakeup_cb)
+			mgc_wakeup_cb();
 	}
 
 	if (IS_OST(lsi) || IS_MDT(lsi)) {
@@ -2226,6 +2342,9 @@ static int server_show_options(struct seq_file *seq, struct dentry *dentry)
 
 	if (test_bit(LMD_FLG_NOMGS, lmd->lmd_flags))
 		seq_puts(seq, ",nomgs");
+
+	if (test_bit(LMD_FLG_MGS_FOLLOWER, lmd->lmd_flags))
+		seq_puts(seq, ",mgs_follower");
 
 	if (test_bit(LMD_FLG_NOSCRUB, lmd->lmd_flags))
 		seq_puts(seq, ",noscrub");
@@ -2541,7 +2660,12 @@ int server_fill_super(struct super_block *sb)
 	CDEBUG(D_MOUNT, "Found service %s on device %s\n",
 	       lsi->lsi_svname, lsi->lsi_lmd->lmd_dev);
 
-	if (class_name2obd(lsi->lsi_svname)) {
+	/* a standalone MGT shares its name with a follower, which it takes
+	 * over in server_start_mgs_or_follower()
+	 */
+	if (class_name2obd(lsi->lsi_svname) &&
+	    !(IS_MGS0(lsi) && lsi_mgs_allowed(lsi) &&
+	      strcmp(lsi->lsi_svname, LUSTRE_MGS_OBDNAME) == 0)) {
 		LCONSOLE_ERROR("The target named %s is already running. Double-mount may have compromised the disk journal.\n",
 			       lsi->lsi_svname);
 		lustre_put_lsi(sb);
@@ -2549,17 +2673,47 @@ int server_fill_super(struct super_block *sb)
 	}
 
 	/* Start MGS before MGC */
-	if (IS_MGS(lsi) && !test_bit(LMD_FLG_NOMGS, lsi->lsi_lmd->lmd_flags)) {
-		rc = server_start_mgs(sb);
-		if (rc < 0)
-			GOTO(out_mnt, rc);
+	server_mgs_lock();
+	if (lsi_mgs_allowed(lsi)) {
+		/* IS_MGS0() is "asked for an MGS and named no other one", so a
+		 * mount that carries both starts a follower and serves nothing
+		 */
+		if (IS_MGS(lsi) && !IS_MGS0(lsi))
+			LCONSOLE_INFO("%s: 'mgsnode=' names another MGS, so this mount starts an MGS follower rather than the MGS itself\n",
+				      lsi->lsi_svname);
+		rc = server_start_mgs_or_follower(sb);
+		if (rc) {
+			if (IS_MGS0(lsi)) {
+				server_mgs_unlock();
+				GOTO(out_mnt, rc);
+			}
+			/* the MGS follower is an optional service, an MDT or
+			 * OST must still mount without it
+			 */
+			CWARN("%s: cannot start MGS follower: rc = %d\n",
+			      lsi->lsi_svname, rc);
+			rc = 0;
+		}
+	} else if (IS_MGS(lsi) && !IS_MGS0(lsi) &&
+		   !LUSTRE_MGS_FOLLOWER_DEFAULT &&
+		   !test_bit(LMD_FLG_MGS_FOLLOWER, lsi->lsi_lmd->lmd_flags) &&
+		   !test_bit(LMD_FLG_NOMGS, lsi->lsi_lmd->lmd_flags)) {
+		LCONSOLE_INFO("%s: 'mgsnode=' names another MGS, and no MGS follower starts without 'mgs_follower'\n",
+			      lsi->lsi_svname);
 	}
+	server_mgs_unlock();
 
-	/* Start MGC before servers */
+	/* Start MGC before servers, without server_mgs_lock(): the last
+	 * MGC's cleanup waits for the requeue thread, which can be waiting
+	 * for that lock in cld_start_mgs()
+	 */
 	rc = lustre_start_mgc(sb);
 	if (rc < 0)
 		GOTO(out_mnt, rc);
 
+	server_mgs_lock();
+	server_mgc_wakeup_cb = lsi->lsi_mgc->u.cli.cl_mgc_wakeup_cb;
+	server_mgs_unlock();
 	/* Set up all obd devices for service */
 	if (!test_bit(LMD_FLG_NOSVC, lsi->lsi_lmd->lmd_flags) &&
 	    (IS_OST(lsi) || IS_MDT(lsi))) {

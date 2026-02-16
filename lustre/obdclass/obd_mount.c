@@ -304,7 +304,7 @@ int lustre_start_mgc(struct super_block *sb)
 			if (!nid_is_nid4(&nid))
 				large_nids = true;
 			i++;
-		} else if (IS_MGS(lsi)) {
+		} else if (IS_MGS0(lsi)) {
 			struct lnet_processid id;
 
 			large_nids = true;
@@ -401,9 +401,36 @@ int lustre_start_mgc(struct super_block *sb)
 		 * If we are restarting the MGS, don't try to keep the MGC's
 		 * old connection, or registration will fail.
 		 */
-		if (IS_MGS(lsi)) {
+		if (IS_MGS0(lsi)) {
 			CDEBUG(D_MOUNT, "New MGS with live MGC\n");
 			recov_bk = 1;
+		}
+
+		/* A client mount started this MGC, so an MGS follower accepts
+		 * it.  Drop OBD_CONNECT_FTM and reconnect, so this target is
+		 * only served by MGS0.  Not while a connect is in flight: its
+		 * reply would grant a flag no longer asked for, and fail.
+		 */
+		if (!lmd_is_client(lsi->lsi_lmd)) {
+			struct obd_import *imp = obd->u.cli.cl_import;
+
+			spin_lock(&imp->imp_lock);
+			while (imp->imp_connect_flags_orig & OBD_CONNECT_FTM) {
+				if (imp->imp_state != LUSTRE_IMP_CONNECTING) {
+					imp->imp_connect_flags_orig &=
+						~OBD_CONNECT_FTM;
+					recov_bk = 1;
+					break;
+				}
+				spin_unlock(&imp->imp_lock);
+				/* not every failed connect wakes this */
+				wait_event_idle_timeout(imp->imp_recovery_waitq,
+							imp->imp_state !=
+							LUSTRE_IMP_CONNECTING,
+							cfs_time_seconds(1));
+				spin_lock(&imp->imp_lock);
+			}
+			spin_unlock(&imp->imp_lock);
 		}
 
 		/*
@@ -431,7 +458,7 @@ int lustre_start_mgc(struct super_block *sb)
 		/* All mgsnode are listed in lmd_mgs at this moment */
 		ptr = lsi->lsi_lmd->lmd_mgs;
 		CDEBUG(D_MOUNT, "mgs NIDs %s.\n", ptr);
-		if (IS_MGS(lsi)) {
+		if (IS_MGS0(lsi)) {
 			struct lnet_processid id;
 
 			/* Use local NIDs (including LO) */
@@ -527,9 +554,11 @@ int lustre_start_mgc(struct super_block *sb)
 	data->ocd_connect_flags2 = OBD_CONNECT2_REP_MBITS |
 				   OBD_CONNECT2_LARGE_NID;
 
-	if (lmd_is_client(lsi->lsi_lmd) &&
-	    test_bit(LMD_FLG_NOIR, lsi->lsi_lmd->lmd_flags))
-		data->ocd_connect_flags &= ~OBD_CONNECT_IMP_RECOV;
+	if (lmd_is_client(lsi->lsi_lmd)) {
+		if (test_bit(LMD_FLG_NOIR, lsi->lsi_lmd->lmd_flags))
+			data->ocd_connect_flags &= ~OBD_CONNECT_IMP_RECOV;
+		data->ocd_connect_flags |= OBD_CONNECT_FTM;
+	}
 	data->ocd_version = LUSTRE_VERSION_CODE;
 	rc = obd_connect(NULL, &exp, obd, uuid, data, NULL);
 	if (rc) {
@@ -1157,6 +1186,7 @@ static const match_table_t lmd_flags_table = {
 	{LMD_FLG_NOSVC,			"nosvc"},
 	{LMD_FLG_MGS,			"mgs"},
 	{LMD_FLG_NOMGS,			"nomgs"},
+	{LMD_FLG_MGS_FOLLOWER,		"mgs_follower"},
 	{LMD_FLG_WRITECONF,		"writeconf"},
 	{LMD_FLG_NOIR,			"noir"},
 	{LMD_FLG_NOSCRUB,		"noscrub"},
@@ -1436,6 +1466,7 @@ int lustre_parse_monolithic(struct fs_context *fc, void *lmd2_data)
 		case LMD_FLG_NOIR: /* test purpose only. */
 		case LMD_FLG_NOSVC:
 		case LMD_FLG_NOMGS:
+		case LMD_FLG_MGS_FOLLOWER:
 		case LMD_FLG_NOSCRUB:
 		case LMD_FLG_SKIP_LFSCK:
 		case LMD_FLG_DEV_RDONLY:

@@ -236,6 +236,21 @@ static ssize_t mntdev_show(struct kobject *kobj, struct attribute *attr,
 }
 LUSTRE_RO_ATTR(mntdev);
 
+static ssize_t state_show(struct kobject *kobj, struct attribute *attr,
+			  char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct mgs_device *mgs = lu2mgs_dev(obd->obd_lu_dev);
+
+	if (IS_ERR_OR_NULL(mgs))
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE, "%s\n", mgs->mgs_lut.lut_is_mgs_leader ?
+			 "leader" : "follower");
+}
+LUSTRE_RO_ATTR(state);
+
 LUSTRE_OBD_UINT_PARAM_ATTR(at_min);
 LUSTRE_OBD_UINT_PARAM_ATTR(at_max);
 LUSTRE_OBD_UINT_PARAM_ATTR(at_history);
@@ -247,6 +262,7 @@ static struct attribute *mgs_attrs[] = {
 	&lustre_attr_fstype.attr,
 	&lustre_attr_ir_timeout.attr,
 	&lustre_attr_mntdev.attr,
+	&lustre_attr_state.attr,
 	&lustre_attr_eviction_count.attr,
 	&lustre_attr_num_exports.attr,
 	&lustre_attr_at_min.attr,

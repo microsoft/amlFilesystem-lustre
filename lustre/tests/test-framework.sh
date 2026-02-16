@@ -17,6 +17,8 @@ export GSS=${GSS:-false}
 export GSS_SK=${GSS_SK:-false}
 export GSS_KRB5=false
 export SHARED_KEY=${SHARED_KEY:-false}
+# MGS followers are off by default, but test them on every MDT and OST
+export MGS_FOLLOWER=${MGS_FOLLOWER:-true}
 export SK_PATH=${SK_PATH:-/tmp/test-framework-keys}
 export SK_OM_PATH=$SK_PATH'/tmp-request-mount'
 export SK_MOUNTED=${SK_MOUNTED:-false}
@@ -2753,6 +2755,12 @@ mount_facet() {
 	*)
 		error "unknown fstype!";;
 	esac
+
+	if $MGS_FOLLOWER && [[ $node_type == MDS || $node_type == OST ]] &&
+	   (( $(lustre_version_code $facet) >=
+	      $(version_code 2.17.59.3) )); then
+		opts=$(csa_add "$opts" -o mgs_follower)
+	fi
 
 	# for testing LU-482 error handling in mount_facets() and test_0a()
 	if [ -f $TMP/test-lu482-trigger ]; then

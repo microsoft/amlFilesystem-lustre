@@ -1323,6 +1323,23 @@ int target_handle_connect(struct ptlrpc_request *req)
 	if (!data)
 		GOTO(out, rc = -EPROTO);
 
+	/* An MGS follower only serves peers that ask for OBD_CONNECT_FTM,
+	 * which is client MGCs: a target MGC registering with a follower
+	 * would split the brain, and an older client's connect data cannot
+	 * be told apart from a target MGC's.  A follower has no copy of the
+	 * mgs.srpc.flavor.* rules either, so a client using an sptlrpc
+	 * flavor goes to MGS0.
+	 */
+	if ((!OCD_HAS_FLAG(data, FTM) ||
+	     req->rq_flvr.sf_rpc != SPTLRPC_FLVR_NULL) &&
+	    strcmp(target->obd_name, LUSTRE_MGS_OBDNAME) == 0 &&
+	    !obd2obt(target)->obt_lut->lut_is_mgs_leader) {
+		rc = -ENODEV;
+		CWARN("%s: refusing connection from %s: this is an MGS follower, which only serves clients that support it with no sptlrpc flavor: rc = %d\n",
+		      target->obd_name, libcfs_nidstr(&req->rq_peer.nid), rc);
+		GOTO(out, rc);
+	}
+
 	rc = req_capsule_server_pack(&req->rq_pill);
 	if (rc)
 		GOTO(out, rc);

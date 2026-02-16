@@ -567,8 +567,12 @@ static struct fs_db *mgs_new_fsdb(const struct lu_env *env,
 		lproc_mgs_add_live(mgs, fsdb);
 	}
 
+	/* An MGS follower edits no config, so the index maps built from
+	 * <fsname>-client are of no use to it.
+	 */
 	if (!test_bit(FSDB_MGS_SELF, &fsdb->fsdb_flags) &&
-	    strcmp(PARAMS_FILENAME, fsname) != 0) {
+	    strcmp(PARAMS_FILENAME, fsname) != 0 &&
+	    mgs->mgs_lut.lut_is_mgs_leader) {
 		/* populate the db from the client llog */
 		rc = mgs_get_fsdb_from_llog(env, mgs, fsdb);
 		if (rc) {

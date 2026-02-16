@@ -1,0 +1,71 @@
+.TH MGS.STATE 4 2026-10-09 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+mgs.state \- show whether the MGS is operating as leader or follower
+.SH SYNOPSIS
+.SY "lctl get_param mgs.MGS.state"
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.BR 0444 " | " -r--r--r--
+.TP
+.B Scope
+Per MGS service
+.TP
+.B Config
+Present wherever an MGS runs: on the MGS node, and on any MDT or OST
+node that runs an MGS follower
+.SH DESCRIPTION
+The
+.B mgs.MGS.state
+parameter shows whether the MGS service is operating as the
+.B leader
+or as a
+.BR follower .
+.PP
+One MGS is the
+.B leader
+that handles configuration updates.
+On each other server node, one MDT or OST mounted with
+.B mgs_follower
+runs an MGS
+.BR follower ,
+unless also mounted with
+.BR nomgs ,
+.B nosvc
+or read-only (see
+.BR mount.lustre (8)).
+A follower is a readonly backup that serves the client, params and sptlrpc
+logs to clients.
+.PP
+The
+.B mgs.state
+parameter is read-only and is set internally by the MGS subsystem
+based on whether the node is MGS leader.
+.SH MODULES
+This parameter is in the following modules:
+.EX
+.B mgs.MGS.state
+.EE
+.SH EXAMPLES
+Show the state of the MGS that handles configuration updates:
+.EX
+.RB "mgs# " "lctl get_param mgs.MGS.state"
+mgs.MGS.state=leader
+.EE
+.PP
+Show the state of a read-only MGS running on an MDT or OST:
+.EX
+.RB "oss# " "lctl get_param mgs.MGS.state"
+mgs.MGS.state=follower
+.EE
+.SH AVAILABILITY
+.B mgs.state
+is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit 2.17.59
+.SH SEE ALSO
+.BR lctl-get_param (8),
+.BR lctl-set_param (8),
+.BR mount.lustre (8)

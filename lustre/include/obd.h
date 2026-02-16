@@ -363,6 +363,7 @@ struct client_obd {
 	/* mgc datastruct */
 	struct obd_export	*cl_mgc_mgsexp;
 	atomic_t		cl_mgc_refcount;
+	void			(*cl_mgc_wakeup_cb)(void);
 	/* number of targets currently processing their config logs */
 	atomic_t		cl_mgc_tgt_processing;
 

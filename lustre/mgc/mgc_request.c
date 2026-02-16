@@ -239,9 +239,8 @@ struct config_llog_data *do_config_log_add(struct obd_device *obd,
 		GOTO(err_put, rc);
 
 #ifdef CONFIG_LUSTRE_FS_SERVER
-	if (sb && IS_SERVER(s2lsi(sb)) && !IS_MGS(s2lsi(sb)) &&
-	    (cld_is_sptlrpc(cld) || cld->cld_type == MGS_CFG_T_CONFIG ||
-	     cld->cld_type == MGS_CFG_T_PARAMS)) {
+	if (sb && IS_SERVER(s2lsi(sb)) && !IS_MGS0(s2lsi(sb)) &&
+	    (cld_is_sptlrpc(cld) || cld_is_config(cld) || cld_is_params(cld))) {
 		rc = mgc_fs_setup(&cld->cld_env, obd, sb, cld);
 		if (rc)
 			GOTO(err_env, rc);
@@ -457,7 +456,7 @@ config_log_add(struct obd_device *obd, char *logname,
 	}
 
 #ifdef CONFIG_LUSTRE_FS_SERVER
-	if (!IS_MGS(lsi) && cfg->cfg_sub_clds & CONFIG_SUB_NODEMAP) {
+	if (!IS_MGS0(lsi) && cfg->cfg_sub_clds & CONFIG_SUB_NODEMAP) {
 		nodemap_cld = config_log_find_or_add(obd, LUSTRE_NODEMAP_NAME,
 						     NULL, MGS_CFG_T_NODEMAP,
 						     cfg);
@@ -692,7 +691,7 @@ int lprocfs_mgc_rd_ir_state(struct seq_file *m, void *data)
 #define RQ_STOP		0x8
 #define RQ_PRECLEANUP	0x10
 static int                    rq_state;
-static wait_queue_head_t      rq_waitq;
+static DECLARE_WAIT_QUEUE_HEAD(rq_waitq);
 static DECLARE_COMPLETION(rq_exit);
 static DECLARE_COMPLETION(rq_start);
 
@@ -723,10 +722,77 @@ static void do_requeue(struct config_llog_data *cld)
 	EXIT;
 }
 
+#ifdef CONFIG_LUSTRE_FS_SERVER
+/* MGS follower is stopped along with the target, check whether MGS follower
+ * should be started on another target
+ */
+static bool cld_should_start_mgs(struct config_llog_data *cld)
+{
+	struct lustre_sb_info *lsi;
+	struct obd_device *obd;
+
+	if (!cld->cld_cfg.cfg_sb)
+		return false;
+
+	lsi = s2lsi(cld->cld_cfg.cfg_sb);
+	if (!IS_SERVER(lsi) || IS_MGS0(lsi) || !lsi_mgs_allowed(lsi))
+		return false;
+
+	/* try to start MGS follower by <fsname>-tgt only */
+	if (!cld_is_config(cld))
+		return false;
+
+	if (!strstr(cld->cld_logname, "-MDT") &&
+	    !strstr(cld->cld_logname, "-OST"))
+		return false;
+
+	/* check whether MGS is already started */
+	obd = class_name2obd(LUSTRE_MGS_OBDNAME);
+	if (obd)
+		return false;
+
+	return true;
+}
+
+static void cld_start_mgs(struct config_llog_data *cld)
+{
+	int rc;
+
+	/* server_mgs_lock() nests outside cld_lock */
+	server_mgs_lock();
+	mutex_lock(&cld->cld_lock);
+	/* cfg_sb is only valid while the cld is not stopping: a concurrent
+	 * umount frees the superblock once it is
+	 */
+	if (!cld->cld_stopping) {
+		rc = server_start_mgs_or_follower(cld->cld_cfg.cfg_sb);
+		if (rc)
+			CWARN("%s: cannot start MGS follower on %s: rc = %d\n",
+			      cld->cld_mgcexp->exp_obd->obd_name,
+			      cld->cld_logname, rc);
+	}
+	mutex_unlock(&cld->cld_lock);
+	server_mgs_unlock();
+}
+
+static void mgc_requeue_wakeup(void)
+{
+	/* the last MGC may be gone, and the requeue thread with it */
+	spin_lock(&config_list_lock);
+	if ((rq_state & (RQ_RUNNING | RQ_STOP)) == RQ_RUNNING) {
+		rq_state |= RQ_NOW;
+		wake_up(&rq_waitq);
+	}
+	spin_unlock(&config_list_lock);
+}
+#endif
+
 static int mgc_requeue_thread(void *data)
 {
 	int rc = 0;
 	bool first = true;
+	bool start_mgs = false;
+	bool lostlock;
 
 	ENTRY;
 
@@ -773,7 +839,14 @@ static int mgc_requeue_thread(void *data)
 		rq_state &= ~RQ_PRECLEANUP;
 		list_for_each_entry(cld, &config_llog_list,
 				    cld_list_chain) {
-			if (!cld->cld_lostlock || cld->cld_stopping)
+			if (cld->cld_stopping)
+				continue;
+
+			lostlock = cld->cld_lostlock;
+#ifdef CONFIG_LUSTRE_FS_SERVER
+			start_mgs = cld_should_start_mgs(cld);
+#endif
+			if (!lostlock && !start_mgs)
 				continue;
 
 			/* hold reference to avoid being freed during
@@ -786,7 +859,12 @@ static int mgc_requeue_thread(void *data)
 			cld_prev = cld;
 
 			if (likely(!(rq_state & RQ_STOP))) {
-				do_requeue(cld);
+#ifdef CONFIG_LUSTRE_FS_SERVER
+				if (start_mgs)
+					cld_start_mgs(cld);
+#endif
+				if (lostlock)
+					do_requeue(cld);
 				spin_lock(&config_list_lock);
 			} else {
 				spin_lock(&config_list_lock);
@@ -960,6 +1038,9 @@ static struct lu_device *mgc_device_alloc(const struct lu_env *env,
 	lu->ld_ops = &mgc_lu_ops;
 	obd = class_name2obd(lustre_cfg_string(lcfg, 0));
 	LASSERT(obd);
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	obd->u.cli.cl_mgc_wakeup_cb = mgc_requeue_wakeup;
+#endif
 
 	rc = ptlrpcd_addref();
 	if (rc < 0)
@@ -980,8 +1061,9 @@ static struct lu_device *mgc_device_alloc(const struct lu_env *env,
 		GOTO(err_sysfs, rc);
 
 	if (atomic_inc_return(&mgc_count) == 1) {
+		spin_lock(&config_list_lock);
 		rq_state = 0;
-		init_waitqueue_head(&rq_waitq);
+		spin_unlock(&config_list_lock);
 
 		/* start requeue thread */
 		task = kthread_run(mgc_requeue_thread, NULL, "ll_cfg_requeue");
@@ -1808,9 +1890,9 @@ static int mgc_process_cfg_log(struct obd_device *mgc,
 						s2lsi(cld->cld_cfg.cfg_sb),
 						mgc, cld, !local_only);
 	else if (local_only && !(cld->cld_cfg.cfg_sb &&
-				 IS_MGS(s2lsi(cld->cld_cfg.cfg_sb))))
+				 IS_MGS0(s2lsi(cld->cld_cfg.cfg_sb))))
 		/* without the MGS lock and without a local copy there is
-		 * nothing left to parse; a combined MGS/MDT falls through
+		 * nothing left to parse; a combined MGS/MDT0 falls through
 		 * and reads its config from the MGS it runs itself
 		 */
 		rc = orig_rc;

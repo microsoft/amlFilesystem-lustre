@@ -189,7 +189,8 @@ struct lu_target {
 				 /* if enabled, MDT inodes UID/GID are checked
 				  * against the nodemap mapping rules.
 				  */
-				 lut_enable_resource_id_check:1;
+				 lut_enable_resource_id_check:1,
+				 lut_is_mgs_leader:1;
 	/* checksum types supported on this node */
 	enum cksum_types	 lut_cksum_types_supported;
 	/** last_rcvd file */

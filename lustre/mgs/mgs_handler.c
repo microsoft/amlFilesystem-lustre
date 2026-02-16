@@ -700,6 +700,11 @@ static int mgs_config_read(struct tgt_session_info *tsi)
 		rc = mgs_get_ir_logs(req);
 		break;
 	case MGS_CFG_T_NODEMAP:
+		/* only the leader registers the nodemap config file */
+		if (!exp2mgs_dev(req->rq_export)->mgs_lut.lut_is_mgs_leader) {
+			rc = -EOPNOTSUPP;
+			break;
+		}
 		rc = nodemap_get_config_req(req->rq_export->exp_obd, req);
 		break;
 	case MGS_CFG_T_CONFIG:
@@ -1168,6 +1173,10 @@ static int mgs_iocontrol(unsigned int cmd, struct obd_export *exp, int len,
 		RETURN(OBD_IOC_ERROR(obd->obd_name, cmd, "karg=NULL", rc));
 	data = karg;
 
+	/* MGS follower doesn't handle ioctls */
+	if (!mgs->mgs_lut.lut_is_mgs_leader)
+		RETURN(-ENODEV);
+
 	rc = lu_env_init(&env, LCT_MG_THREAD);
 	if (rc)
 		RETURN(rc);
@@ -1479,6 +1488,12 @@ static int mgs_init0(const struct lu_env *env, struct mgs_device *mgs,
 	if (test_bit(LMD_FLG_NO_RCLNT, lsi->lsi_lmd->lmd_flags))
 		set_bit(OBDF_NO_CONN, obd->obd_flags);
 
+	/* mgs_fs_setup() below reads this to decide whether to register the
+	 * nodemap config file, and target_handle_connect() to refuse targets
+	 */
+	if (IS_MGS0(lsi))
+		mgs->mgs_lut.lut_is_mgs_leader = 1;
+
 	rc = tgt_init(env, &mgs->mgs_lut, obd, mgs->mgs_bottom,
 		      mgs_common_slice, OBD_FAIL_MGS_ALL_REQUEST_NET,
 		      OBD_FAIL_MGS_ALL_REPLY_NET);
@@ -1513,9 +1528,14 @@ static int mgs_init0(const struct lu_env *env, struct mgs_device *mgs,
 	mutex_init(&mgs->mgs_health_mutex);
 	init_rwsem(&mgs->mgs_barrier_rwsem);
 
-	rc = mgs_lcfg_rename(env, mgs);
-	if (rc)
-		GOTO(err_llog, rc);
+	/* these write into CONFIGS/, which on a follower belongs to the
+	 * MDT or OST it runs on and is the MGC's local copy of the logs
+	 */
+	if (mgs->mgs_lut.lut_is_mgs_leader) {
+		rc = mgs_lcfg_rename(env, mgs);
+		if (rc)
+			GOTO(err_llog, rc);
+	}
 
 	rc = lproc_mgs_setup(mgs, lustre_cfg_string(lcfg, 3));
 	if (rc != 0) {
@@ -1524,16 +1544,25 @@ static int mgs_init0(const struct lu_env *env, struct mgs_device *mgs,
 		GOTO(err_llog, rc);
 	}
 
-	/* Setup params fsdb and log, so that other servers can make a local
-	 * copy successfully when they are mounted. See LU-4783
-	 */
-	rc = mgs_params_fsdb_setup(env, mgs);
-	if (rc)
-		/* params fsdb and log can be setup later */
-		CERROR("%s: %s fsdb and log setup failed: rc = %d\n",
-		       obd->obd_name, PARAMS_FILENAME, rc);
+	if (mgs->mgs_lut.lut_is_mgs_leader) {
+		/* Setup params fsdb and log, so that other servers can make
+		 * a local copy successfully when they are mounted. See
+		 * LU-4783
+		 */
+		rc = mgs_params_fsdb_setup(env, mgs);
+		if (rc)
+			/* params fsdb and log can be setup later */
+			CERROR("%s: %s fsdb and log setup failed: rc = %d\n",
+			       obd->obd_name, PARAMS_FILENAME, rc);
+	}
 
-	/* Setup _mgs fsdb, useful for srpc */
+	/* Setup _mgs fsdb, useful for srpc.  A follower has no
+	 * CONFIGS/_mgs-sptlrpc - the MGC only copies <fsname>-sptlrpc,
+	 * <fsname>-client, params and the target's own log - so its rule set
+	 * stays empty, and target_handle_connect() refuses a client with an
+	 * sptlrpc flavor rather than let it through unchecked.  Replicating
+	 * those rules is left to the same later patch as the nodemap config.
+	 */
 	mgs__mgs_fsdb_setup(env, mgs);
 
 	ptlrpc_init_client(LDLM_CB_REQUEST_PORTAL, LDLM_CB_REPLY_PORTAL,
@@ -1576,11 +1605,15 @@ static int mgs_init0(const struct lu_env *env, struct mgs_device *mgs,
 
 	CDEBUG(D_INFO, "MGS %s started\n", obd->obd_name);
 
-	/* device stack is not yet fully setup to keep no objects behind */
-	lu_site_purge(env, mgs2lu_dev(mgs)->ld_site, ~0);
+	/* device stack is not yet fully setup to keep no objects behind.  On a
+	 * follower the site is the serving MDT/OST's, so leave its cache be.
+	 */
+	if (mgs->mgs_lut.lut_is_mgs_leader)
+		lu_site_purge(env, mgs2lu_dev(mgs)->ld_site, ~0);
 	RETURN(0);
 err_lproc:
-	mgs_params_fsdb_cleanup(env, mgs);
+	if (mgs->mgs_lut.lut_is_mgs_leader)
+		mgs_params_fsdb_cleanup(env, mgs);
 	lproc_mgs_cleanup(mgs);
 err_llog:
 	ctxt = llog_get_context(mgs->mgs_obd, LLOG_CONFIG_ORIG_CTXT);
@@ -1597,10 +1630,12 @@ err_ns:
 	ldlm_namespace_free(obd->obd_namespace, NULL, 0);
 	obd->obd_namespace = NULL;
 err_ops:
-	lu_site_purge(env, mgs2lu_dev(mgs)->ld_site, ~0);
-	lu_site_print(env, mgs2lu_dev(mgs)->ld_site,
-		      &mgs2lu_dev(mgs)->ld_site->ls_obj_hash.nelems,
-		      D_OTHER, lu_cdebug_printer);
+	if (mgs->mgs_lut.lut_is_mgs_leader) {
+		lu_site_purge(env, mgs2lu_dev(mgs)->ld_site, ~0);
+		lu_site_print(env, mgs2lu_dev(mgs)->ld_site,
+			      &mgs2lu_dev(mgs)->ld_site->ls_obj_hash.nelems,
+			      D_OTHER, lu_cdebug_printer);
+	}
 	obd_disconnect(mgs->mgs_bottom_exp);
 err_lmi:
 	if (lmi)
@@ -1751,7 +1786,11 @@ static struct lu_device *mgs_device_fini(const struct lu_env *env,
 	ptlrpc_unregister_service(mgs->mgs_service);
 	mutex_unlock(&mgs->mgs_health_mutex);
 
-	mgs_params_fsdb_cleanup(env, mgs);
+	/* mgs_erase_logs(PARAMS_FILENAME): a follower must not erase the
+	 * params log out of the MDT or OST it runs on
+	 */
+	if (mgs->mgs_lut.lut_is_mgs_leader)
+		mgs_params_fsdb_cleanup(env, mgs);
 	mgs_cleanup_fsdb_list(mgs);
 
 	ldlm_namespace_free_prior(obd->obd_namespace, NULL, 1);
@@ -1772,9 +1811,11 @@ static struct lu_device *mgs_device_fini(const struct lu_env *env,
 	ldlm_namespace_free_post(obd->obd_namespace);
 	obd->obd_namespace = NULL;
 
-	lu_site_purge(env, d->ld_site, ~0);
-	lu_site_print(env, d->ld_site, &d->ld_site->ls_obj_hash.nelems,
-		      D_OTHER, lu_cdebug_printer);
+	if (mgs->mgs_lut.lut_is_mgs_leader) {
+		lu_site_purge(env, d->ld_site, ~0);
+		lu_site_print(env, d->ld_site, &d->ld_site->ls_obj_hash.nelems,
+			      D_OTHER, lu_cdebug_printer);
+	}
 	LASSERT(mgs->mgs_bottom_exp);
 	obd_disconnect(mgs->mgs_bottom_exp);
 
