@@ -1384,16 +1384,30 @@ int __init sptlrpc_gssiam_init(void)
 		return rc;
 	}
 
-	/* XXX register GSSIAM policy once all patches are landed */
 	rc = gssiam_tunables_init();
 	if (rc)
-		upcall_cache_cleanup(gssiam_upcall_cache);
+		GOTO(cache_cleanup, rc);
+
+	rc = sptlrpc_register_policy(&sptlrpc_gssiam_policy);
+	if (rc) {
+		CERROR("%s: failed to register gssiam policy: rc = %d\n",
+		       GSSIAM_CACHE_NAME, rc);
+		GOTO(tunables_cleanup, rc);
+	}
+
+	return 0;
+
+tunables_cleanup:
+	gssiam_tunables_fini();
+cache_cleanup:
+	upcall_cache_cleanup(gssiam_upcall_cache);
 
 	return rc;
 }
 
 void sptlrpc_gssiam_exit(void)
 {
+	sptlrpc_unregister_policy(&sptlrpc_gssiam_policy);
 	gssiam_tunables_fini();
 	upcall_cache_cleanup(gssiam_upcall_cache);
 }
