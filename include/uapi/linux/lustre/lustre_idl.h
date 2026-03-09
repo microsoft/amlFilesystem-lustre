@@ -1067,7 +1067,9 @@ struct obd_connect_data {
 	__u32 padding1;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 ocd_connect_flags2;/* OBD_CONNECT2_* per above */
 	__u64 ocd_compr_type;	 /* bitmask of supported compression types */
-	__u64 padding4;		 /* READ BELOW! also fix lustre_swab_connect */
+	/* LOV_PATTERN_* mask, valid with OBD_CONNECT2_FLR_EC */
+	__u32 ocd_layout_pattern_types;
+	__u32 padding4;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 padding5;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 padding6;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 padding7;		 /* READ BELOW! also fix lustre_swab_connect */

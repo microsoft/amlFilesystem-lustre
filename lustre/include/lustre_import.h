@@ -275,6 +275,10 @@ struct obd_import {
 	struct obd_connect_data	  imp_connect_data;
 	__u64			  imp_connect_flags_orig;
 	__u64			  imp_connect_flags2_orig;
+	/* restored on reconnect like the flags above, so a reply cannot
+	 * ratchet the next request down
+	 */
+	__u32			  imp_connect_layout_pattern_types_orig;
 	int			  imp_connect_error;
 	unsigned int		  imp_p2pdma:1;
 

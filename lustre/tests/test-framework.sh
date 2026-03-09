@@ -1247,7 +1247,7 @@ load_modules_local() {
 		load_module osp/osp
 	fi
 
-	MODOPTS_LUSTRE=${MODOPTS_LUSTRE:-"llite_enable_flr_ec=1"}
+	MODOPTS_LUSTRE=${MODOPTS_LUSTRE:-"enable_flr_ec=1"}
 	load_module llite/lustre
 	[ -d /r ] && OGDB=${OGDB:-"/r/tmp"}
 	OGDB=${OGDB:-$TMP}
@@ -2110,14 +2110,18 @@ set_spl_panic() {
 # OBD_CONNECT2_FLR_EC. load_modules_local() passes mdt_enable_flr_ec=1
 # to mdt.ko, but that only reaches the nodes it runs on; a remote MDS
 # loads mdt.ko from the target mount with the default of 0 unless
-# LOAD_MODULES_REMOTE is set. The flag is granted at connect time, so
-# this runs from mount_facet(), before the clients mount.
+# LOAD_MODULES_REMOTE is set. mdt_enable_flr_ec only seeds
+# mdt.*.layout_pattern_types when an MDT starts, so also enable parity
+# on the MDT just mounted. This runs from mount_facet(), before the
+# clients mount.
 #
 set_mdt_flr_ec() {
 	local facet=$1
 	local param=/sys/module/mdt/parameters/mdt_enable_flr_ec
 
 	do_facet $facet "[[ ! -w $param ]] || echo 1 > $param"
+	do_facet $facet "$LCTL set_param mdt.*.layout_pattern_types=+parity" \
+		>/dev/null 2>&1 || true
 }
 
 #
@@ -6269,6 +6273,100 @@ remount_client()
 {
 	zconf_umount $HOSTNAME $1 || error "umount failed"
 	zconf_mount $HOSTNAME $1 || error "mount failed with ($?)"
+}
+
+# Establish EC layout pattern negotiation for tests that need it.
+#
+# Negotiation only happens at connect time: the MDS must advertise parity
+# in mdt.*.layout_pattern_types and the client must request OBD_CONNECT2_FLR_EC
+# (module param enable_flr_ec).  The module-load MODOPTS defaults that
+# enable both are unreliable when the modules are already resident,
+# MODOPTS_* is preset in the environment, or the server modules are loaded
+# by mount rather than by the test framework (LOAD_MODULES_REMOTE=false,
+# as in autotest), so enable both ends at runtime and remount the client
+# to renegotiate.  See conf-sanity test_163a.
+#
+# With "restore", put the MDTs and the client module parameter back when
+# the calling test ends.  Only use it inside a test: a suite-level EXIT
+# trap also runs at the end of every test that calls stack_trap.
+#
+# Return 0 once every client mount has negotiated parity, or 1 if the
+# client or the MDS cannot negotiate it (an older version).  Fail if both
+# support it but parity is still not negotiated.
+try_pattern_negotiation() {
+	local restore=$1
+	local param=lov.$FSNAME-clilov-*.layout_pattern_types
+	local flr_ec=lustre.enable_flr_ec
+	local supp pt cur no_parity
+
+	supp=$($LCTL get_param -n $param 2>/dev/null) || true
+	if [[ -z "$supp" ]]; then
+		echo "client does not support layout pattern negotiation"
+		return 1
+	fi
+
+	# MDS side: advertise parity from every MDT; idempotent, takes
+	# effect on the next client (re)connect.  Verify by read-back
+	# since do_nodes rc is unreliable without pdsh -S.
+	pt=$(do_nodes $(mdts_nodes) \
+		"$LCTL get_param -n mdt.*.layout_pattern_types" \
+		2>/dev/null) || true
+	if [[ -z "$pt" ]]; then
+		echo "MDS does not support mdt.*.layout_pattern_types"
+		return 1
+	fi
+	if [[ -n $(echo "$pt" | grep -v parity) ]]; then
+		no_parity="$LCTL set_param mdt.*.layout_pattern_types=-parity"
+		[[ "$restore" != "restore" ]] || stack_trap \
+			"do_nodes $(mdts_nodes) \"$no_parity\" || true" EXIT
+		do_nodes $(mdts_nodes) \
+			"$LCTL set_param mdt.*.layout_pattern_types=+parity" ||
+			true
+		pt=$(do_nodes $(mdts_nodes) \
+			"$LCTL get_param -n mdt.*.layout_pattern_types" \
+			2>/dev/null) || true
+		[[ -n "$pt" && -z $(echo "$pt" | grep -v parity) ]] ||
+			error "parity not enabled on all MDTs: $pt"
+	fi
+
+	# client side: request EC negotiation on every later connect too,
+	# since the caller may remount after the fast path below
+	cur=$($LCTL get_param -n --module $flr_ec 2>/dev/null) || true
+	if [[ -z "$cur" ]]; then
+		echo "client does not support module param $flr_ec"
+		return 1
+	fi
+	if (( cur != 1 )); then
+		[[ "$restore" != "restore" ]] || stack_trap \
+			"$LCTL set_param --module $flr_ec=$cur || true" EXIT
+		$LCTL set_param --module $flr_ec=1 ||
+			error "cannot set module param $flr_ec=1"
+	fi
+
+	# fast path: every client mount already negotiated parity
+	if [[ -z $(echo "$supp" | grep -v parity) ]]; then
+		echo "EC pattern support already negotiated: $supp"
+		return 0
+	fi
+
+	# enable_flr_ec is read at mount time, so remount to renegotiate
+	remount_client $MOUNT
+	if is_mounted $MOUNT2; then
+		remount_client $MOUNT2
+	fi
+
+	supp=$($LCTL get_param -n $param)
+	echo "negotiated pattern support: $supp"
+	[[ -z $(echo "$supp" | grep -v parity) ]] ||
+		error "parity missing from layout_pattern_types: $supp"
+}
+
+# Establish EC layout pattern negotiation for a suite that needs it, and
+# skip the suite if the client or the MDS cannot negotiate it.  Parity
+# stays enabled for the rest of the suite.
+setup_pattern_negotiation() {
+	try_pattern_negotiation ||
+		skip "client or MDS cannot negotiate EC layout patterns"
 }
 
 writeconf_facet() {

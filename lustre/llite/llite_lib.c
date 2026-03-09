@@ -403,6 +403,178 @@ static void ll_hybrid_io_check_ost(struct ll_sb_info *sbi,
 	spin_unlock(&sbi->ll_lock);
 }
 
+/**
+ * ll_layout_pattern_types_set() - store the MDS-negotiated layout patterns
+ * @sbi: mounted filesystem
+ * @ocd: connect data from the MDS reply
+ *
+ * The mask is only meaningful when the MDS granted OBD_CONNECT2_FLR_EC:
+ * target_handle_connect() echoes un-negotiated obd_connect_data fields
+ * back from the request, so an unconditional store would let the client's
+ * own request defeat the pre-2.18 fallback in lov_layout_pattern_mask().
+ * Without the flag the mask is cleared, so a reconnect to an MDS that no
+ * longer advertises anything beyond the baseline falls back the same way
+ * a fresh mount does.
+ *
+ * An MDS that fills the field in always reports at least the pre-2.18
+ * baseline, so a mask without it is an echo of this client's own request
+ * rather than a negotiated value, byte-swapped because the MDS did not
+ * swab a field it does not know.  Keep the fallback in that case,
+ * otherwise no pattern would be available and every IO would fail.
+ *
+ * On a DNE filesystem this is MDT0000's answer, and all MDTs are expected
+ * to agree, see mdt.layout_pattern_types(4).
+ *
+ * Called at mount and from ll_layout_pattern_types_refresh() when
+ * MDT0000's MDC reconnects.
+ * lov_init_composite() reads the mask when it sets a layout up and
+ * lov_delete_composite() does not depend on it, so a layout set up under
+ * an older mask is still torn down correctly.
+ */
+static void ll_layout_pattern_types_set(struct ll_sb_info *sbi,
+					const struct obd_connect_data *ocd)
+{
+	struct lov_obd *lov = &sbi->ll_dt_obd->u.lov;
+	enum lov_pattern support = 0;
+
+	if ((ocd->ocd_connect_flags & OBD_CONNECT_FLAGS2) &&
+	    (ocd->ocd_connect_flags2 & OBD_CONNECT2_FLR_EC)) {
+		support = ocd->ocd_layout_pattern_types;
+		if ((support & LOV_LAYOUT_PATTERN_TYPES_217) !=
+		    LOV_LAYOUT_PATTERN_TYPES_217) {
+			LCONSOLE_WARN("%s: MDS reported pattern support %#x without the pre-2.18 baseline, using the baseline\n",
+				      sbi->ll_dt_obd->obd_name, support);
+			support = 0;
+		}
+	}
+
+	if (support != READ_ONCE(lov->lov_layout_pattern_types)) {
+		CDEBUG(D_CONFIG, "%s: MDS layout pattern support %#x -> %#x\n",
+		       sbi->ll_dt_obd->obd_name,
+		       lov->lov_layout_pattern_types, support);
+		WRITE_ONCE(lov->lov_layout_pattern_types, support);
+	}
+}
+
+/**
+ * ll_layout_pattern_types_refresh() - renegotiate after an MDC reconnect
+ * @sbi: mounted filesystem
+ * @mdc: MDC whose import just (re)connected
+ *
+ * Store the mask from MDT0000's import, so a change to
+ * mdt.*.layout_pattern_types or an MDS upgrade takes effect on reconnect
+ * rather than only on remount.
+ * Layouts the client already holds keep their view until their layout
+ * lock is dropped.
+ *
+ * Not through KEY_CONN_DATA as at mount: lmv_get_info() also copies the
+ * connect data into ll_md_exp, whose flags llite reads unlocked and only
+ * expects to change at mount.
+ */
+static void ll_layout_pattern_types_refresh(struct ll_sb_info *sbi,
+					    struct obd_device *mdc)
+{
+	struct obd_uuid mdt0;
+
+	/* the first connect fires this before the mount-time store */
+	if (!sbi->ll_dt_obd || !sbi->ll_md_exp)
+		return;
+
+	snprintf(mdt0.uuid, sizeof(mdt0.uuid), "%s-MDT0000_UUID",
+		 sbi->ll_fsname);
+	if (!obd_uuid_equals(&mdc->u.cli.cl_target_uuid, &mdt0))
+		return;
+
+	ll_layout_pattern_types_set(sbi,
+				    &mdc->u.cli.cl_import->imp_connect_data);
+}
+
+/**
+ * ll_layout_patterns_check() - refuse a layout this mount cannot use
+ * @sbi: mounted filesystem
+ * @lum: layout from userspace, in host byte order
+ * @size: size of @lum in bytes
+ *
+ * Refuse a component whose pattern the client understands but the MDS did
+ * not negotiate for this mount, and any erasure coded component while
+ * llite.*.enable_erasure_coding is off.  The MDS would create such a file,
+ * but this client could not use or resync those components, so refuse it
+ * up front.
+ *
+ * lfs marks parity components with LCME_FL_PARITY and the MDS turns their
+ * pattern into LOV_PATTERN_PARITY (lod_comp_set_ec_pattern()), so do the
+ * same before the check.  Patterns the client does not know, and a layout
+ * too short for its own entries, are left to the MDS to reject with its
+ * own error.
+ *
+ * Return: 0 if every component is usable, -EOPNOTSUPP otherwise.
+ */
+int ll_layout_patterns_check(struct ll_sb_info *sbi,
+			     const struct lov_user_md *lum, size_t size)
+{
+	enum lov_pattern mask;
+	const struct lov_comp_md_v1 *comp_v1;
+	enum lov_pattern pattern;
+	int i;
+
+	if (size < sizeof(*lum))
+		return 0;
+
+	mask = lov_layout_pattern_mask(&sbi->ll_dt_obd->u.lov);
+
+	if (lum->lmm_magic == LOV_USER_MAGIC_V1 ||
+	    lum->lmm_magic == LOV_USER_MAGIC_V3) {
+		pattern = lov_pattern(lum->lmm_pattern) ?: LOV_PATTERN_RAID0;
+		if (lov_pattern_available(pattern) && (pattern & ~mask))
+			goto not_negotiated;
+		return 0;
+	}
+
+	if (lum->lmm_magic != LOV_USER_MAGIC_COMP_V1)
+		return 0;
+
+	comp_v1 = (const struct lov_comp_md_v1 *)lum;
+	if (size < sizeof(*comp_v1) ||
+	    size < offsetof(typeof(*comp_v1),
+			    lcm_entries[comp_v1->lcm_entry_count]))
+		return 0;
+
+	for (i = 0; i < comp_v1->lcm_entry_count; i++) {
+		const struct lov_comp_md_entry_v1 *ent;
+		const struct lov_user_md *v1;
+
+		ent = &comp_v1->lcm_entries[i];
+		pattern = 0;
+		if (ent->lcme_offset + sizeof(*v1) <= size) {
+			v1 = (const void *)comp_v1 + ent->lcme_offset;
+			pattern = lov_pattern(v1->lmm_pattern);
+		}
+		pattern = pattern ?: LOV_PATTERN_RAID0;
+
+		if (ent->lcme_flags & LCME_FL_PARITY) {
+			if (!sbi->ll_enable_erasure_coding) {
+				CDEBUG(D_LAYOUT,
+				       "Rejecting EC layout: erasure coding disabled\n");
+				return -EOPNOTSUPP;
+			}
+			pattern &= ~(LOV_PATTERN_RAID0 | LOV_PATTERN_RAID1 |
+				     LOV_PATTERN_COMPRESS);
+			pattern |= LOV_PATTERN_PARITY;
+		}
+
+		if (lov_pattern_available(pattern) && (pattern & ~mask))
+			goto not_negotiated;
+	}
+
+	return 0;
+
+not_negotiated:
+	CDEBUG(D_LAYOUT,
+	       "%s: rejecting layout: pattern %#x not negotiated with the MDS (%#x)\n",
+	       sbi->ll_fsname, pattern, mask);
+	return -EOPNOTSUPP;
+}
+
 static int
 ll_upcall_notify(struct obd_device *host, struct obd_device *watched,
 		 enum obd_notify_event ev, void *owner)
@@ -437,6 +609,10 @@ ll_upcall_notify(struct obd_device *host, struct obd_device *watched,
 		ll_hybrid_io_check_ost(sbi, watched);
 		result = cl_ocd_update(host, watched, ev, &sbi->ll_lco);
 	}
+
+	if (ev == OBD_NOTIFY_OCD &&
+	    strcmp(watched->obd_type->typ_name, LUSTRE_MDC_NAME) == 0)
+		ll_layout_pattern_types_refresh(sbi, watched);
 
 	RETURN(result);
 }
@@ -531,8 +707,11 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 				   OBD_CONNECT2_ONE_OBJ_SWAP |
 				   OBD_CONNECT2_DNE_INTENT;
 
-	if (llite_enable_flr_ec)
+	if (ll_enable_flr_ec) {
 		data->ocd_connect_flags2 |= OBD_CONNECT2_FLR_EC;
+		data->ocd_layout_pattern_types = LOV_LAYOUT_PATTERN_TYPES_217 |
+					    LOV_PATTERN_PARITY;
+	}
 
 	if (test_bit(LL_SBI_LRU_RESIZE, sbi->ll_flags))
 		data->ocd_connect_flags |= OBD_CONNECT_LRU_RESIZE;
@@ -758,6 +937,11 @@ retry_connect:
 		GOTO(out_md, err = -ENODEV);
 	}
 
+	/* Save the MDS-negotiated pattern support before data is reused
+	 * for the OST connect below.
+	 */
+	ll_layout_pattern_types_set(sbi, data);
+
 	/* pass client page size via ocd_grant_blkbits, the server should report
 	 * back its backend blocksize for grant calculation purpose
 	 */
@@ -783,6 +967,8 @@ retry_connect:
 				   OBD_CONNECT2_INC_XID | OBD_CONNECT2_LSEEK |
 				   OBD_CONNECT2_REP_MBITS |
 				   OBD_CONNECT2_UNALIGNED_DIO;
+	/* negotiated with the MDS only */
+	data->ocd_layout_pattern_types = 0;
 
 	if (!CFS_FAIL_CHECK(OBD_FAIL_OSC_CONNECT_GRANT_PARAM))
 		data->ocd_connect_flags |= OBD_CONNECT_GRANT_PARAM;

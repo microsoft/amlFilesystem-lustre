@@ -243,6 +243,35 @@ static int lov_io_subio_init(const struct lu_env *env, struct lov_io *lio,
 }
 
 /*
+ * Does a component in a non-primary mirror hold a copy of the data that is
+ * about to be overwritten, so that the MDS has to mark it stale?
+ *
+ * This is deliberately not lle_valid.  lle_valid answers a second question
+ * as well -- may this client do IO to the component -- and a component
+ * whose pattern was not negotiated with the MDS (LOV_PATTERN_PARITY on a
+ * client without lustre.enable_flr_ec) is !lle_valid while still mirroring
+ * the data.  Skipping such a component here would let the write land
+ * without the copy ever being marked stale, so a later resync would not
+ * rebuild it.
+ *
+ * Components already flagged stale need nothing further, and components
+ * whose pattern or magic this client does not understand at all are left
+ * alone, as they were before layout pattern negotiation.
+ *
+ * Return: true if the MDS must stale @lle to allow the write.
+ */
+static bool lov_lle_needs_stale(const struct lov_layout_entry *lle)
+{
+	const struct lov_stripe_md_entry *lsme = lle->lle_lsme;
+
+	if (lsme->lsme_flags & LCME_FL_STALE)
+		return false;
+
+	return lov_pattern_supported(lsme->lsme_pattern) &&
+	       lov_supported_comp_magic(lsme->lsme_magic);
+}
+
+/*
  * Decide if it will need write intent RPC
  */
 static int lov_io_mirror_write_intent(struct lov_io *lio,
@@ -327,7 +356,7 @@ static int lov_io_mirror_write_intent(struct lov_io *lio,
 			continue;
 
 		lov_foreach_mirror_layout_entry(obj, lle, lre) {
-			if (!lle->lle_valid)
+			if (!lov_lle_needs_stale(lle))
 				continue;
 
 			if (lu_extent_is_overlapped(ext, lle->lle_extent)) {

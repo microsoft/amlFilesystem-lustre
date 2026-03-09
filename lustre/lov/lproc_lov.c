@@ -178,6 +178,21 @@ static ssize_t desc_uuid_show(struct kobject *kobj, struct attribute *attr,
 }
 LUSTRE_RO_ATTR(desc_uuid);
 
+static ssize_t layout_pattern_types_show(struct kobject *kobj,
+					struct attribute *attr, char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct lov_obd *lov = &obd->u.lov;
+	u32 mask = lov_layout_pattern_mask(lov);
+	int len;
+
+	len = lov_pattern_mask2str(buf, PAGE_SIZE, mask, ",");
+
+	return len + scnprintf(buf + len, PAGE_SIZE - len, "\n");
+}
+LUSTRE_RO_ATTR(layout_pattern_types);
+
 static void *lov_tgt_seq_start(struct seq_file *p, loff_t *pos)
 {
 	struct obd_device *obd = p->private;
@@ -262,6 +277,7 @@ static struct attribute *lov_attrs[] = {
 	&lustre_attr_activeobd.attr,
 	&lustre_attr_numobd.attr,
 	&lustre_attr_desc_uuid.attr,
+	&lustre_attr_layout_pattern_types.attr,
 	&lustre_attr_stripesize.attr,
 	&lustre_attr_stripeoffset.attr,
 	&lustre_attr_stripetype.attr,

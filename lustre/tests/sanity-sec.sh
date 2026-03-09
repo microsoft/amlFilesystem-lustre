@@ -9597,6 +9597,9 @@ test_66d() {
 	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC 2+1"
 	(( MDS1_VERSION >= $(version_code v2_17_51-60-gafbcc0c005) )) ||
 		skip "need MDS >= 2.17.51.60 for EC"
+	# before the encrypted remount, which then negotiates parity
+	try_pattern_negotiation restore ||
+		skip "client or MDS cannot negotiate EC layout patterns"
 
 	stack_trap "cleanup_for_enc_tests" EXIT
 	setup_for_enc_tests

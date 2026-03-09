@@ -13767,6 +13767,355 @@ test_162() {
 }
 run_test 162 "replace nids with -o noclient"
 
+test_163a() {
+	(( $MDS1_VERSION >= $(version_code 2.17.62.1) )) ||
+		skip "need MDS >= 2.17.62.1 for reported pattern support"
+
+	setupall
+	stack_trap stopall
+
+	# layout_pattern_types is only advertised once EC negotiation is active
+	# on both ends.  The module-load MODOPTS that enable it are unreliable
+	# when the modules are already resident (e.g. loaded by an earlier
+	# subtest), so enable it explicitly at runtime: the MDS must advertise a
+	# pattern beyond the pre-2.18 baseline, and the client must request EC
+	# negotiation on its next (re)connect.
+	do_facet mds1 $LCTL set_param mdt.*.layout_pattern_types=+parity ||
+		error "cannot set mdt.*.layout_pattern_types=+parity"
+
+	local flr_ec=lustre.enable_flr_ec
+	local cur=$($LCTL get_param -n --module $flr_ec)
+	[[ -n "$cur" ]] || error "client lacks module parameter $flr_ec"
+	stack_trap "$LCTL set_param --module $flr_ec=$cur"
+	$LCTL set_param --module $flr_ec=1
+	remount_client $MOUNT
+
+	local mdc_pattern=$($LCTL get_param mdc.$FSNAME-MDT0000-*.import |
+			    awk '/layout_pattern_types/ {print $0; exit}')
+
+	echo "MDC layout_pattern_types: $mdc_pattern"
+	[[ -n "$mdc_pattern" ]] || {
+		$LCTL get_param mdc.*.import
+		error "MDS does not report layout_pattern_types in mdc import"
+	}
+	[[ "$mdc_pattern" =~ "raid0" ]] ||
+		error "MDS does not support RAID-0: $mdc_pattern"
+	[[ "$mdc_pattern" =~ "mdt" ]] ||
+		error "MDS does not support DoM: $mdc_pattern"
+	[[ "$mdc_pattern" =~ "overstriped" ]] ||
+		error "MDS does not support overstriping: $mdc_pattern"
+}
+run_test 163a "pattern support negotiation visible in mdc import"
+
+test_163b() {
+	(( $MDS1_VERSION >= $(version_code 2.17.62.1) )) ||
+		skip "need MDS >= 2.17.62.1 for mdt layout_pattern_types"
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC"
+
+	setupall
+	stack_trap stopall
+
+	local pt_param=mdt.$FSNAME-MDT0000.layout_pattern_types
+	local pt
+
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	[[ -n "$pt" ]] || error "MDS lacks $pt_param"
+
+	echo "default layout_pattern_types: $pt"
+	[[ "$pt" =~ "raid0" ]] || error "baseline raid0 missing: $pt"
+
+	# the client only sees advertised patterns once it requests EC
+	# negotiation; enable it explicitly rather than relying on the load-time
+	# MODOPTS, which are skipped when the modules are already resident
+	local flr_ec=lustre.enable_flr_ec
+	local cur=$($LCTL get_param -n --module $flr_ec)
+	[[ -n "$cur" ]] || error "client lacks module parameter $flr_ec"
+	stack_trap "$LCTL set_param --module $flr_ec=$cur"
+	$LCTL set_param --module $flr_ec=1
+
+	# parity is the tunable pattern under test; enable it up front so the
+	# starting set does not depend on the mdt_enable_flr_ec default
+	do_facet mds1 $LCTL set_param $pt_param=+parity
+	stack_trap "do_facet mds1 $LCTL set_param $pt_param=+parity"
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	[[ "$pt" =~ "parity" ]] || error "parity could not be enabled: $pt"
+
+	# disabling parity drops it from the advertised set, baseline stays
+	do_facet mds1 $LCTL set_param $pt_param=-parity
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	echo "after -parity: $pt"
+	[[ "$pt" =~ "parity" ]] && error "parity still set after -parity: $pt"
+	[[ "$pt" =~ "raid0" ]] || error "baseline lost after -parity: $pt"
+
+	# client renegotiates on reconnect: with no pattern beyond the baseline
+	# the MDS stops advertising FLR_EC, so parity leaves the import
+	remount_client $MOUNT
+	local imp=$($LCTL get_param -n mdc.$FSNAME-MDT0000-*.import |
+		    awk '/layout_pattern_types/ {print; exit}')
+	echo "after -parity, mdc import: '$imp'"
+	[[ "$imp" =~ "parity" ]] &&
+		error "client still sees parity after MDS -parity: $imp"
+
+	# baseline patterns are mandatory: -raid0 cannot remove raid0
+	do_facet mds1 $LCTL set_param $pt_param=-raid0
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	[[ "$pt" =~ "raid0" ]] || error "mandatory raid0 removed by -raid0: $pt"
+
+	# patterns the MDS cannot support are silently ignored, never advertised
+	do_facet mds1 $LCTL set_param $pt_param=+compress
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	[[ "$pt" =~ "compress" ]] && error "compress advertised: $pt"
+
+	# an unknown pattern token is rejected outright
+	do_facet mds1 $LCTL set_param $pt_param=+bogus &&
+		error "unknown pattern token was accepted"
+
+	# default is the list the MDT starts with
+	local seed=$(do_facet mds1 \
+		cat /sys/module/mdt/parameters/mdt_enable_flr_ec)
+	do_facet mds1 $LCTL set_param $pt_param=default
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	echo "after default, mdt_enable_flr_ec=$seed: $pt"
+	[[ "$pt" =~ "raid0" ]] || error "default lost the baseline: $pt"
+	if (( seed )); then
+		[[ "$pt" =~ "parity" ]] || error "default lacks parity: $pt"
+	else
+		[[ "$pt" =~ "parity" ]] && error "default has parity: $pt"
+	fi
+
+	# re-enabling parity restores the advertised set end-to-end
+	do_facet mds1 $LCTL set_param $pt_param=+parity
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	echo "after +parity: $pt"
+	[[ "$pt" =~ "parity" ]] || error "parity not restored: $pt"
+
+	remount_client $MOUNT
+	imp=$($LCTL get_param -n mdc.$FSNAME-MDT0000-*.import |
+	      awk '/layout_pattern_types/ {print; exit}')
+	echo "after +parity, mdc import: '$imp'"
+	[[ "$imp" =~ "parity" ]] ||
+		error "client missing parity after MDS +parity: $imp"
+
+	# with parity negotiated on both ends, EC files can be created
+	$LCTL set_param llite.*.enable_erasure_coding=1
+	local supp=$($LCTL get_param -n \
+		     lov.$FSNAME-clilov-*.layout_pattern_types)
+	[[ -n "$supp" ]] || error "client lacks lov.*.layout_pattern_types"
+	echo "negotiated: $supp"
+	[[ "$supp" =~ "parity" ]] ||
+		error "parity missing from layout_pattern_types: $supp"
+
+	mkdir_on_mdt0 $DIR/$tdir
+	local tf=$DIR/$tdir/$tfile
+
+	LFS_EC_OK=yes $LFS setstripe -E -1 -c 2 --ec 2+1 $tf ||
+		error "cannot create EC file"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	local sum
+
+	sum=$(md5sum < $tf)
+	[[ -n "$sum" ]] || error "cannot read EC file $tf"
+
+	# the mask is renegotiated on every reconnect, not only at mount:
+	# drop parity on the MDS, force the MDC to reconnect, and the mask the
+	# client actually consumes must follow without a remount
+	local mdcdev=$($LCTL dl |
+		awk "/${FSNAME}-MDT0000-mdc-/ {if (\$2 == \"UP\") {print \$1}}")
+	[[ -n "$mdcdev" ]] || error "${FSNAME}-MDT0000-mdc- not UP"
+
+	do_facet mds1 $LCTL set_param $pt_param=-parity
+	$LCTL --device $mdcdev recover || error "mdc reconnect failed"
+	supp=$($LCTL get_param -n lov.$FSNAME-clilov-*.layout_pattern_types)
+	echo "after -parity + reconnect: $supp"
+	[[ "$supp" =~ "parity" ]] &&
+		error "parity still negotiated after reconnect: $supp"
+
+	# a new EC layout is refused when it is created, not on its first
+	# write.  The kernel fails the layout setxattr with EOPNOTSUPP; lfs
+	# reports the errno it finds after closing the file instead, so only
+	# check the refusal.
+	local out
+
+	out=$(LFS_EC_OK=yes $LFS setstripe -E -1 -c 2 --ec 2+1 \
+		$tf.noparity 2>&1) &&
+		error "EC file created without parity negotiated"
+	echo "setstripe without parity: $out"
+	$LFS getstripe -v $tf.noparity 2>/dev/null |
+		grep -q lcme_flags.*parity &&
+		error "EC layout was set without parity negotiated"
+
+	# a fresh mount falls back to the pre-2.18 baseline as well, and must
+	# still read the file via its plain data component.  The client must
+	# not keep the mask echoed back from its own connect request, which
+	# would defeat the fallback.
+	remount_client $MOUNT
+	supp=$($LCTL get_param -n lov.$FSNAME-clilov-*.layout_pattern_types)
+	echo "after -parity + remount: $supp"
+	[[ "$supp" =~ "parity" ]] &&
+		error "parity still negotiated after remount: $supp"
+	[[ "$(md5sum < $tf)" == "$sum" ]] ||
+		error "content differs with parity un-negotiated"
+
+	# and back, again without a remount
+	do_facet mds1 $LCTL set_param $pt_param=+parity
+	$LCTL --device $mdcdev recover || error "mdc reconnect failed"
+	supp=$($LCTL get_param -n lov.$FSNAME-clilov-*.layout_pattern_types)
+	echo "after +parity + reconnect: $supp"
+	[[ "$supp" =~ "parity" ]] ||
+		error "parity not renegotiated after reconnect: $supp"
+
+	# EC disabled on the client entirely (the production default):
+	# opening the EC file must not crash in lov_init_raid0 and must
+	# return valid data
+	$LCTL set_param --module $flr_ec=0
+	remount_client $MOUNT
+	[[ "$(md5sum < $tf)" == "$sum" ]] ||
+		error "content differs with $flr_ec=0"
+}
+run_test 163b "layout_pattern_types tunes what clients negotiate and create"
+
+
+# Layout component flags of component $2 in file $1, e.g. "init,stale,parity"
+comp_flags_163() {
+	$LFS getstripe -I$2 $1 | awk '/lcme_flags:/ { print $2 }'
+}
+
+# Mirrored file state of file $1: "ro", "wp" or "sp"
+flr_state_163() {
+	$LFS getstripe -v $1 | awk '/lcm_flags:/ { print $2 }'
+}
+
+test_163c() {
+	(( $MDS1_VERSION >= $(version_code 2.17.62.1) )) ||
+		skip "need MDS >= 2.17.62.1 for mdt layout_pattern_types"
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for EC"
+
+	setupall
+	stack_trap stopall
+
+	local pt_param=mdt.$FSNAME-MDT0000.layout_pattern_types
+	local pt
+
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	[[ -n "$pt" ]] || error "MDS lacks $pt_param"
+
+	local flr_ec=lustre.enable_flr_ec
+	local cur=$($LCTL get_param -n --module $flr_ec)
+	[[ -n "$cur" ]] || error "client lacks module parameter $flr_ec"
+	stack_trap "$LCTL set_param --module $flr_ec=$cur"
+
+	# create the file from a client that negotiated parity
+	do_facet mds1 $LCTL set_param $pt_param=+parity
+	stack_trap "do_facet mds1 $LCTL set_param $pt_param=+parity"
+	$LCTL set_param --module $flr_ec=1
+	remount_client $MOUNT
+	$LCTL set_param llite.*.enable_erasure_coding=1
+
+	local supp=$($LCTL get_param -n \
+		     lov.$FSNAME-clilov-*.layout_pattern_types)
+	[[ "$supp" =~ parity ]] ||
+		error "client did not negotiate parity: $supp"
+
+	mkdir_on_mdt0 $DIR/$tdir
+	local tf=$DIR/$tdir/$tfile
+	local flags
+	local ids
+	local id
+
+	LFS_EC_OK=yes $LFS setstripe -E 8M -E -1 --ec 2+1 $tf ||
+		error "cannot create EC file"
+
+	# Both data components must be instantiated before the writes
+	# below, otherwise those writes take the component instantiation
+	# path, which stales parity regardless of the write intent and
+	# would hide the bug this test covers.
+	dd if=/dev/urandom of=$tf bs=1M count=2 conv=notrunc ||
+		error "write to first component failed"
+	dd if=/dev/urandom of=$tf bs=4k count=1 seek=3072 conv=notrunc ||
+		error "write to second component failed"
+	$LFS mirror resync $tf || error "initial resync failed"
+
+	ids=($($LFS getstripe $tf | awk '/lcme_id:/ { print $2 }'))
+	(( ${#ids[@]} == 4 )) ||
+		error "expected 4 components, got ${#ids[@]}"
+
+	for id in ${ids[@]}; do
+		flags=$(comp_flags_163 $tf $id)
+		[[ "$flags" =~ init ]] ||
+			error "component $id not instantiated: $flags"
+		[[ "$flags" =~ stale ]] &&
+			error "component $id stale after resync: $flags"
+	done
+
+	# A stock client does not request parity, so it cannot use the
+	# parity components, but writes from it must still invalidate them
+	$LCTL set_param --module $flr_ec=0
+	remount_client $MOUNT
+	supp=$($LCTL get_param -n lov.$FSNAME-clilov-*.layout_pattern_types)
+	echo "un-negotiated client: $supp"
+	[[ "$supp" =~ parity ]] &&
+		error "parity still negotiated with $flr_ec=0: $supp"
+
+	# the file is read-only here, which sends a write intent
+	# unconditionally and stales the parity of the first component
+	dd if=/dev/urandom of=$tf bs=4k count=1 conv=notrunc ||
+		error "write at offset 0 failed"
+
+	local state=$(flr_state_163 $tf)
+
+	[[ "$state" == "wp" ]] ||
+		error "expected write_pending state, got '$state'"
+	flags=$(comp_flags_163 $tf ${ids[2]})
+	[[ "$flags" =~ stale ]] ||
+		error "parity component ${ids[2]} was not staled: $flags"
+
+	# The file is write_pending now, so this write only stales the
+	# parity covering it if the client counts components it cannot
+	# use itself when it decides to send a write intent.
+	dd if=/dev/urandom of=$tf bs=4k count=1 seek=3072 conv=notrunc ||
+		error "write to second component failed"
+
+	flags=$(comp_flags_163 $tf ${ids[3]})
+	[[ "$flags" =~ stale ]] ||
+		error "parity comp ${ids[3]} not staled by write: $flags"
+}
+run_test 163c "writes from a client without EC stale the parity they invalidate"
+
+test_163d() {
+	(( $MDS1_VERSION >= $(version_code 2.17.62.1) )) ||
+		skip "need MDS >= 2.17.62.1 for layout pattern negotiation"
+
+	setupall
+	stack_trap stopall
+
+	mkdir_on_mdt0 $DIR/$tdir
+	local tf=$DIR/$tdir/$tfile
+	local out
+
+	# layout flags are negotiated along with the pattern types, so a
+	# component carrying a flag this client did not negotiate must be as
+	# unusable as one with an un-negotiated pattern
+	#define OBD_FAIL_LOV_COMP_FLAG 0x142a
+	# the first component gets an unknown flag when its layout is unpacked
+	$LCTL set_param fail_loc=0x142a fail_val=1
+	stack_trap "$LCTL set_param fail_loc=0 fail_val=0"
+
+	$LFS setstripe -E -1 -c 1 $tf || error "cannot create $tf"
+	out=$(dd if=/dev/zero of=$tf bs=4k count=1 conv=notrunc 2>&1) &&
+		error "write succeeded with an un-negotiated flag"
+	echo "$out"
+	[[ "$out" =~ "Input/output error" ]] || error "expected EIO, got: $out"
+
+	# with a second mirror the file stays usable through the other copy;
+	# the MDS picks the write primary and cannot know about a client side
+	# flag, so the usable mirror is marked preferred as in sanity-flr 62
+	$LFS setstripe -N -N --flags=prefer $tf.mirror ||
+		error "cannot create $tf.mirror"
+	cat /etc/passwd > $tf.mirror || error "cannot write $tf.mirror"
+	diff /etc/passwd $tf.mirror || error "cannot read $tf.mirror"
+}
+run_test 163d "component with an un-negotiated layout flag is unusable"
+
 cleanup_164() {
 	# Ensure all test mounts are cleaned up
 	for i in {1..5}; do

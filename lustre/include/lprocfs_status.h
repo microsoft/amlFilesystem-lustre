@@ -696,6 +696,8 @@ ssize_t checksum_type_show(struct kobject *kobj, struct attribute *attr,
 			   char *buf);
 ssize_t checksum_type_store(struct kobject *kobj, struct attribute *attr,
 			    const char *buffer, size_t count);
+const char *lov_pattern_bit2str(int bit);
+int lov_pattern_mask2str(char *buf, size_t size, u32 mask, const char *sep);
 
 /*
  * Stages a client passes through during a target recovery window.  Each

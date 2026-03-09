@@ -1,4 +1,4 @@
-.TH LFS-MIRROR-EXTEND 1 2026-10-23 Lustre "Lustre User Utilities"
+.TH LFS-MIRROR-EXTEND 1 2026-11-20 Lustre "Lustre User Utilities"
 .SH NAME
 lfs-mirror-extend \- add mirror(s) to an existing file
 .SH SYNOPSIS
@@ -301,11 +301,13 @@ This option cannot be used with
 or
 .BR --ec .
 It needs the FLR EC connect flag, which is negotiated when the client
-mounts: set the module parameters
-.B llite_enable_flr_ec=1
-on the client and
-.B mdt_enable_flr_ec=1
-on the MDS before mounting, otherwise the extend fails with
+connects: set the module parameter
+.B lustre.enable_flr_ec=1
+on the client before mounting, and enable
+.B parity
+in
+.BR mdt.layout_pattern_types (4)
+on the MDS, otherwise the extend fails with
 .BR EOPNOTSUPP .
 .TP
 .BR --no-verify

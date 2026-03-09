@@ -99,7 +99,7 @@ MODULE_PARM_DESC(mds_rdpg_num_cpts,
 unsigned int mdt_enable_flr_ec;
 module_param(mdt_enable_flr_ec, uint, 0644);
 MODULE_PARM_DESC(mdt_enable_flr_ec,
-		 "enable FLR EC connect flag, off by default");
+		 "advertise FLR EC (parity) layouts to clients, off by default. This only sets the initial mdt.*.layout_pattern_types value when an MDT starts up, use that parameter to change it at runtime");
 
 /* device init/fini methods */
 static void mds_stop_ptlrpc_service(struct mds_device *m)

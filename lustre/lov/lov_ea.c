@@ -771,6 +771,13 @@ lsm_unpackmd_comp_md_v1(struct lov_obd *lov, void *buf, size_t buf_size)
 								LOV_PATTERN_BAD;
 		}
 
+		/* a layout flag no client knows, so it was not negotiated */
+		if (unlikely(CFS_FAIL_CHECK(OBD_FAIL_LOV_COMP_FLAG) &&
+			     (cfs_fail_val == i + 1))) {
+			((struct lov_mds_md *)blob)->lmm_pattern |=
+							cpu_to_le32(0x00010000);
+		}
+
 		lsme = lsme_unpack_comp(lov, blob, blob_size,
 					le32_to_cpu(lcme->lcme_flags) &
 					LCME_FL_INIT,

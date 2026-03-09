@@ -1132,7 +1132,7 @@ struct ll_readahead_work {
 };
 
 extern struct kmem_cache *ll_file_data_slab;
-extern unsigned int llite_enable_flr_ec;
+extern unsigned int ll_enable_flr_ec;
 struct lustre_handle;
 struct ll_file_data {
 	struct file			*fd_file;
@@ -1514,6 +1514,8 @@ extern const struct super_operations lustre_super_operations;
 
 void ll_lli_init(struct ll_inode_info *lli);
 int ll_fill_super(struct super_block *sb);
+int ll_layout_patterns_check(struct ll_sb_info *sbi,
+			     const struct lov_user_md *lum, size_t size);
 void ll_put_super(struct super_block *sb);
 void ll_kill_super(struct super_block *sb);
 struct inode *ll_inode_from_resource_lock(struct ldlm_lock *lock);

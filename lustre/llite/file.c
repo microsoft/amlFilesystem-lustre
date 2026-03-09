@@ -3057,21 +3057,9 @@ int ll_lov_setstripe_ea_info(struct inode *inode, struct dentry *dentry,
 	int rc;
 
 	ENTRY;
-	/* Check for EC layouts when erasure coding is disabled */
-	if (lum->lmm_magic == LOV_USER_MAGIC_COMP_V1 &&
-	    !sbi->ll_enable_erasure_coding) {
-		struct lov_comp_md_v1 *comp_v1 = (struct lov_comp_md_v1 *)lum;
-		int i;
-
-		for (i = 0; i < comp_v1->lcm_entry_count; i++) {
-			if (comp_v1->lcm_entries[i].lcme_flags &
-			    LCME_FL_PARITY) {
-				CDEBUG(D_LAYOUT,
-				       "Rejecting EC layout: erasure coding disabled\n");
-				RETURN(-EOPNOTSUPP);
-			}
-		}
-	}
+	rc = ll_layout_patterns_check(sbi, lum, lum_size);
+	if (rc)
+		RETURN(rc);
 
 	if ((__swab32(lum->lmm_magic) & le32_to_cpu(LOV_MAGIC_MASK)) ==
 	    le32_to_cpu(LOV_MAGIC_MAGIC)) {

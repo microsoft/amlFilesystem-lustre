@@ -436,6 +436,7 @@ struct lov_obd {
 	struct proc_dir_entry  *lov_pool_proc_entry;
 	enum lustre_sec_part	lov_sp_me;
 
+	enum lov_pattern	lov_layout_pattern_types;
 	/* Cached LRU and unstable data from upper layer */
 	struct cl_client_cache *lov_cache;
 
@@ -445,6 +446,26 @@ struct lov_obd {
 
 	struct kobject		*lov_tgts_kobj;
 };
+
+/**
+ * lov_layout_pattern_mask() - layout patterns negotiated with the MDS
+ * @lov: client LOV device
+ *
+ * llite stores the mask from the MDS connect reply when the MDS granted
+ * OBD_CONNECT2_FLR_EC, at mount and again on every MDC reconnect.  An MDS
+ * older than 2.18 does not send it, and neither does one that advertises
+ * nothing beyond the pre-2.18 baseline, so a clear mask means exactly the
+ * patterns every such MDS supports.
+ *
+ * Return: bitmask of enum lov_pattern values the client may use.
+ */
+static inline enum lov_pattern
+lov_layout_pattern_mask(const struct lov_obd *lov)
+{
+	enum lov_pattern mask = READ_ONCE(lov->lov_layout_pattern_types);
+
+	return mask ?: LOV_LAYOUT_PATTERN_TYPES_217;
+}
 
 #define lmv_tgt_desc lu_tgt_desc
 

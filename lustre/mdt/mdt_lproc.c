@@ -1431,6 +1431,61 @@ LUSTRE_OBD_UINT_PARAM_ATTR(at_history);
 LUSTRE_OBD_UINT_PARAM_ATTR(at_unhealthy_factor);
 LUSTRE_OBD_UINT_PARAM_ATTR(ldlm_enqueue_min);
 
+/*
+ * layout_pattern_types: file layout patterns this MDS advertises to clients via
+ * ocd_layout_pattern_types.  Lists the currently enabled patterns and is tuned
+ * with the standard mask syntax, e.g. "+parity", "-parity", "parity", "NONE"
+ * or "ALL".  The pre-2.18 baseline patterns are mandatory and patterns the
+ * MDS cannot support are silently ignored.
+ */
+static ssize_t layout_pattern_types_show(struct kobject *kobj,
+					 struct attribute *attr,
+					 char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);
+	int len;
+
+	if (IS_ERR_OR_NULL(mdt))
+		return -ENOENT;
+
+	len = lov_pattern_mask2str(buf, PAGE_SIZE,
+				   mdt->mdt_layout_pattern_types, ",");
+
+	return len + scnprintf(buf + len, PAGE_SIZE - len, "\n");
+}
+
+static ssize_t layout_pattern_types_store(struct kobject *kobj,
+					  struct attribute *attr,
+					  const char *buffer, size_t count)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);
+	u64 mask;
+	int rc;
+
+	if (IS_ERR_OR_NULL(mdt))
+		return -ENOENT;
+
+	mask = mdt->mdt_layout_pattern_types;
+	rc = cfs_str2mask(buffer, lov_pattern_bit2str, &mask,
+			  LOV_LAYOUT_PATTERN_TYPES_217,
+			  MDT_LAYOUT_PATTERN_TYPES,
+			  mdt_layout_pattern_types_default());
+	if (rc)
+		return rc;
+
+	/* never advertise unsupported patterns; baseline is mandatory */
+	mask &= MDT_LAYOUT_PATTERN_TYPES;
+	mask |= LOV_LAYOUT_PATTERN_TYPES_217;
+	mdt->mdt_layout_pattern_types = mask;
+
+	return count;
+}
+LUSTRE_RW_ATTR(layout_pattern_types);
+
 static struct attribute *mdt_attrs[] = {
 	&lustre_attr_at_min.attr,
 	&lustre_attr_at_max.attr,
@@ -1500,6 +1555,7 @@ static struct attribute *mdt_attrs[] = {
 	&lustre_attr_checksum_dump.attr,
 	&lustre_attr_checksum_t10pi_enforce.attr,
 	&lustre_attr_checksum_type.attr,
+	&lustre_attr_layout_pattern_types.attr,
 	&lustre_attr_max_mod_rpcs_in_flight.attr,
 	&lustre_attr_force_sync.attr,
 	&lustre_attr_ldlm_enqueue_min.attr,

@@ -245,6 +245,10 @@ struct mdt_device {
 				   mo_cos:1;
 		unsigned int	   mo_dom_lock;
 	} mdt_opts;
+	/* layout patterns sent to clients in ocd_layout_pattern_types, see
+	 * mdt_layout_pattern_types_default() and mdt.*.layout_pattern_types
+	 */
+	__u32			   mdt_layout_pattern_types;
 	/* mdt state flags */
 	unsigned long		   mdt_state;
 
@@ -1399,6 +1403,23 @@ static inline struct obd_device *mdt2obd_dev(const struct mdt_device *mdt)
 extern const struct lu_device_operations mdt_lu_ops;
 
 extern unsigned int mdt_enable_flr_ec;
+
+/* file layout patterns this MDS is capable of advertising to clients; the
+ * pre-2.18 baseline is mandatory, parity (EC) may be toggled by the admin
+ * via mdt.*.layout_pattern_types.  mdt_enable_flr_ec only seeds the boot
+ * default.
+ * LOV_PATTERN_COMPRESS is excluded until compression is functional and
+ * negotiated via OBD_CONNECT2_COMPRESS.
+ */
+#define MDT_LAYOUT_PATTERN_TYPES \
+	(LOV_LAYOUT_PATTERN_TYPES_217 | LOV_PATTERN_PARITY)
+
+/* what an MDT advertises when it starts, and layout_pattern_types=default */
+static inline __u32 mdt_layout_pattern_types_default(void)
+{
+	return LOV_LAYOUT_PATTERN_TYPES_217 |
+	       (mdt_enable_flr_ec ? LOV_PATTERN_PARITY : 0);
+}
 
 static inline char *mdt_obd_name(struct mdt_device *mdt)
 {

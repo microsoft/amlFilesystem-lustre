@@ -586,6 +586,24 @@ static struct lov_comp_layout_entry_ops dom_ops = {
 	.lco_getattr = lov_attr_get_dom,
 };
 
+/*
+ * A layout component is usable when this client's IO stack understands
+ * its pattern and magic AND, for patterns beyond the pre-2.18 baseline
+ * (e.g. LOV_PATTERN_PARITY), the MDS negotiated the pattern via
+ * ocd_layout_pattern_types.  Unusable components are left un-initialized and
+ * !lle_valid, like unknown-pattern components, so IO steers to other
+ * entries/mirrors.  Parsing is intentionally NOT gated on negotiation:
+ * lsme_unpack()/lsme_free() must stay symmetric (see
+ * lov_pattern_available_mds()).
+ */
+static bool lov_lsme_usable(const struct lov_stripe_md_entry *lsme,
+			    enum lov_pattern mask)
+{
+	return lov_pattern_supported(lsme->lsme_pattern) &&
+	       lov_supported_comp_magic(lsme->lsme_magic) &&
+	       lov_pattern_available_mds(lsme->lsme_pattern, mask);
+}
+
 static int lov_init_composite(const struct lu_env *env, struct lov_device *dev,
 			      struct lov_object *lov, struct lov_stripe_md *lsm,
 			      const struct cl_object_conf *conf,
@@ -594,6 +612,11 @@ static int lov_init_composite(const struct lu_env *env, struct lov_device *dev,
 	struct lov_layout_composite *comp = &state->composite;
 	struct lov_layout_entry *lle;
 	struct lov_mirror_entry *lre;
+	/* read once: an MDC reconnect can change the mask under us, and
+	 * the lle_valid loop and the lco_init() loop below must agree on
+	 * which entries are usable
+	 */
+	enum lov_pattern mask = lov_layout_pattern_mask(dev->ld_lov);
 	unsigned int entry_count;
 	unsigned int psz = 0;
 	unsigned int mirror_count;
@@ -696,12 +719,16 @@ static int lov_init_composite(const struct lu_env *env, struct lov_device *dev,
 		}
 
 		lle->lle_extent = &lle->lle_lsme->lsme_extent;
-		if (!lov_pattern_supported(lle->lle_lsme->lsme_pattern) ||
-		    !lov_supported_comp_magic(lle->lle_lsme->lsme_magic))
+		if (!lov_lsme_usable(lle->lle_lsme, mask)) {
+			CDEBUG(D_LAYOUT,
+			       "%s: entry %d pattern %#x not usable on this client\n",
+			       lov2obd(dev->ld_lov)->obd_name, i,
+			       lle->lle_lsme->lsme_pattern);
 			lle->lle_valid = 0;
-		else
+		} else {
 			lle->lle_valid =
 				!(lle->lle_lsme->lsme_flags & LCME_FL_STALE);
+		}
 
 		if (flr_state != LCM_FL_NONE)
 			mirror_id = mirror_id_of(lle->lle_lsme->lsme_id);
@@ -764,8 +791,7 @@ static int lov_init_composite(const struct lu_env *env, struct lov_device *dev,
 		if (lsme_is_foreign(lle->lle_lsme))
 			continue;
 
-		if (!lov_pattern_supported(lle->lle_lsme->lsme_pattern) ||
-		    !lov_supported_comp_magic(lle->lle_lsme->lsme_magic))
+		if (!lov_lsme_usable(lle->lle_lsme, mask))
 			continue;
 
 		result = lle->lle_comp_ops->lco_init(env, dev, lov, index,
@@ -898,6 +924,11 @@ static int lov_delete_composite(const struct lu_env *env,
 		if (lsme) {
 			if (lsme_is_foreign(lsme))
 				continue;
+			/* an entry lov_init_composite() left alone because
+			 * its pattern was not negotiated has no sub-objects,
+			 * which lov_delete_raid0() tolerates; the negotiated
+			 * mask may have changed since, so do not consult it
+			 */
 			if (!lov_pattern_supported(lsme->lsme_pattern) ||
 			    !lov_supported_comp_magic(lsme->lsme_magic))
 				continue;

@@ -2185,6 +2185,11 @@ lmv_out_free:
 			GOTO(out, rc = -EOPNOTSUPP);
 		}
 
+		rc = ll_layout_patterns_check(sbi, lumv1_ptr,
+					      lum_size ?: sizeof(lumv1));
+		if (rc)
+			GOTO(out, rc);
+
 		/* in v1 and v3 cases lumv1 points to data */
 		rc = ll_dir_setstripe(inode, lumv1_ptr, set_default);
 out:

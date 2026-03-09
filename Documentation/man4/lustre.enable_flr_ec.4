@@ -1,0 +1,97 @@
+.TH LUSTRE.ENABLE_FLR_EC 4 2026-08-12 "Lustre" "Lustre Kernel Interfaces"
+.SH NAME
+lustre.enable_flr_ec \- request erasure coded FLR layout support on a client
+.SH SYNOPSIS
+.SY
+.B lctl get_param --module lustre.enable_flr_ec
+.SY
+.BI "lctl set_param --module lustre.enable_flr_ec=" 0 | 1
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per-client node, for all filesystems mounted afterwards.
+.TP
+.B Default
+.br
+.RB enable_flr_ec= 0
+.TP
+.B Valid Range
+.br
+.RB enable_flr_ec= 0
+.br
+.RB enable_flr_ec= 1
+.SH DESCRIPTION
+Whether this client asks the MDS for erasure coded FLR layout support
+when it mounts a filesystem.
+When set, the client tells the MDS that it understands the
+.B parity
+layout pattern.  An MDS from 2.18.0 on replies with the pattern types both
+ends support, see
+.BR mdt.layout_pattern_types (4);
+an older MDS cannot filter the list and the client keeps what it asked for.
+The result is visible as
+.BR lov.layout_pattern_types (4).
+.PP
+When it is not set the client requests only the pre-2.18 baseline of
+.BR raid0 ", " mdt " and " overstriped ,
+and treats components with any other pattern as unusable: reading such a
+file works only if it has another mirror.
+Such a client still writes to the data mirror of an erasure coded file, and
+those writes mark the overlapping parity components stale so that a later
+.BR lfs-mirror-resync (1)
+from a capable client rebuilds them, but resyncing an erasure coded mirror
+from the client itself fails.
+Creating erasure coded files also needs
+.B llite.*.enable_erasure_coding
+to be set.
+.SH MODULES
+This parameter is in the following modules:
+.EX
+.B lustre.enable_flr_ec
+.EE
+It is a parameter of the
+.B lustre
+client module, so
+.B lctl
+needs
+.B --module
+to reach it.
+It can also be set at module load time with an
+.B "options lustre enable_flr_ec=1"
+line in a
+.BR modprobe.d (5)
+configuration file.
+.PP
+The
+.B mdt
+module has a separate
+.B mdt_enable_flr_ec
+parameter that sets the MDT side default.
+.SH CAVEATS
+The value is read when a filesystem is mounted, so a change only affects
+subsequent mounts.  A filesystem that is already mounted keeps requesting
+the layout types it asked for at mount time until it is remounted.
+.SH EXAMPLES
+Request EC layout support for filesystems mounted from now on:
+.EX
+.RB "client# " "lctl set_param --module lustre.enable_flr_ec=1"
+.EE
+.SH AVAILABILITY
+The
+.B enable_flr_ec
+parameter is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit v2_17_60
+.SH SEE ALSO
+.BR lfs-mirror-create (1),
+.BR lov.layout_pattern_types (4),
+.BR mdt.layout_pattern_types (4),
+.BR lctl-get_param (8),
+.BR lctl-set_param (8)

@@ -364,7 +364,8 @@ int cfs_str2mask(const char *str, const char *(*bit2str)(int bit),
 				newmask = minmask;
 			found = 1;
 		}
-		if (!found && strcasecmp(str, "DEFAULT") == 0) {
+		if (!found && len == 7 &&
+		    (strncasecmp(str, "DEFAULT", len) == 0)) {
 			if (op == '-')
 				newmask = (newmask & ~defmask) | minmask;
 			else if (op == '+')

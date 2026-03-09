@@ -601,6 +601,7 @@ check_obd_connect_data(void)
 	CHECK_MEMBER(obd_connect_data, padding1);
 	CHECK_MEMBER(obd_connect_data, ocd_connect_flags2);
 	CHECK_MEMBER(obd_connect_data, ocd_compr_type);
+	CHECK_MEMBER(obd_connect_data, ocd_layout_pattern_types);
 	CHECK_MEMBER(obd_connect_data, padding4);
 	CHECK_MEMBER(obd_connect_data, padding5);
 	CHECK_MEMBER(obd_connect_data, padding6);

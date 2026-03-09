@@ -1,0 +1,144 @@
+.TH MDT.LAYOUT_PATTERN_TYPES 4 2026-11-10 "Lustre" "Lustre Kernel Interfaces"
+.SH NAME
+mdt.layout_pattern_types \- file layout pattern types advertised to clients
+.SH SYNOPSIS
+.SY
+.RI "lctl get_param mdt." FSNAME *.layout_pattern_types
+.SY
+.RI "lctl set_param mdt." FSNAME *.layout_pattern_types= TYPES
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per-MDT device, but clients use the value of MDT0000 only.
+.TP
+.B Config
+.br
+.B layout_pattern_types
+is always present for MDT devices.
+.TP
+.B Default
+.br
+.RB layout_pattern_types= raid0,mdt,overstriped,hole,released
+.TP
+.B Valid Values
+.br
+.BR raid0 ", " mdt ", " overstriped ", " hole ", " released ,
+.BR parity ", " all ", " default ", " none
+.SH DESCRIPTION
+The comma-separated list
+.I TYPES
+of file layout pattern types that this MDT advertises to clients when they
+connect.
+A client only uses the layout types that both it and the MDT support: the
+MDS sends this list in the connect reply, and the client leaves components
+whose pattern is not in the list uninitialized, reading another mirror
+instead if the file has one.
+The list a client was given is visible on that client as
+.BR lov.layout_pattern_types (4).
+.PP
+The pre-2.18 baseline of
+.BR raid0 ", " mdt " and " overstriped
+is mandatory and is restored whenever it is removed, since every client and
+MDS understands those layouts.
+The list also shows the
+.BR hole " and " released
+layout flags, which are part of that baseline.
+In practice
+.B parity
+(erasure coded FLR mirrors, see
+.BR lfs-mirror-create (1))
+is the only type that can be turned on and off, which lets an administrator
+stop advertising EC layouts to new client connections without unmounting
+the filesystem.
+.PP
+A value with no leading operator replaces the current list, keeping the
+mandatory baseline.
+A leading
+.B +
+or
+.B \-
+adds to or removes from the current list, and applies to all following
+types up to the next operator.
+The value
+.B all
+enables every type this MDT supports,
+.B default
+restores the list the MDT starts up with (see
+.BR MODULES ),
+and
+.B none
+reverts to the mandatory baseline.
+Types that this MDT does not support are ignored, while unrecognized names
+return
+.BR EINVAL .
+.SH MODULES
+This parameter is in the following modules:
+.EX
+.B mdt.*.layout_pattern_types
+.EE
+The value an MDT starts up with comes from the
+.B mdt_enable_flr_ec
+parameter of the
+.B mdt
+module, which adds
+.B parity
+when set and is off by default.
+.SH CAVEATS
+The list is negotiated when a client connects and again on every
+reconnect, so a change reaches mounted clients the next time they
+reconnect.  Layouts a client already holds keep the previous list until
+their layout lock is dropped.
+.PP
+On a filesystem with several MDTs a client takes the list from MDT0000
+only and applies it to files on every MDT.  Setting the parameter on
+another MDT has no effect on clients, so keep the MDTs in agreement by
+setting it on all of them at once, as in the persistent example below.
+A persistent setting also reaches an MDT added later, which otherwise
+starts from its own
+.B mdt_enable_flr_ec
+default.
+.PP
+Removing a type does not change files that already use it.  On a client
+that connects afterwards those components are unusable: reading such a
+file succeeds only if another mirror is available, writing it marks the
+overlapping components stale so that a later resync from a client that
+negotiated the type rebuilds them, and resyncing them from this client
+fails.
+.PP
+A client refuses to create a file with a component whose type it did not
+negotiate, so removing
+.B parity
+also stops the clients that reconnect afterwards from creating EC files.
+The MDT itself does not enforce the list: a client that did not negotiate,
+such as one older than 2.18, can still create an EC layout on request.
+.SH EXAMPLES
+Advertise EC (parity) layouts on all MDTs of the
+.B testfs
+filesystem, persistently:
+.EX
+.RB "mgs# " "lctl set_param -P mdt.testfs-*.layout_pattern_types=+parity"
+.EE
+Stop advertising EC layouts to clients until MDT0000 restarts, since
+clients take the list from MDT0000:
+.EX
+.RB "mds# " "lctl set_param mdt.testfs-MDT0000.layout_pattern_types=-parity"
+.EE
+.SH AVAILABILITY
+The
+.B layout_pattern_types
+parameter is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit v2_17_60
+.SH SEE ALSO
+.BR lfs-mirror-create (1),
+.BR lov.layout_pattern_types (4),
+.BR lustre.enable_flr_ec (4),
+.BR lctl-get_param (8),
+.BR lctl-set_param (8)

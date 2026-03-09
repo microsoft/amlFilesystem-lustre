@@ -7197,6 +7197,8 @@ static int mdt_init0(const struct lu_env *env, struct mdt_device *m,
 
 	m->mdt_enable_strict_som = 1;
 
+	m->mdt_layout_pattern_types = mdt_layout_pattern_types_default();
+
 	/* XXX: to support suppgid for ACL, we enable identity_upcall
 	 * by default, otherwise, maybe got unexpected -EACCESS.
 	 */
@@ -7645,11 +7647,18 @@ static int mdt_connect_internal(const struct lu_env *env,
 	if (data->ocd_connect_flags & OBD_CONNECT_FLAGS2) {
 		__u64 supported2 = MDT_CONNECT_SUPPORTED2;
 
-		/* Add FLR_EC to supported flags when enabled */
-		if (mdt_enable_flr_ec)
+		/* advertise EC layout negotiation when any pattern beyond the
+		 * pre-2.18 baseline is enabled in mdt.*.layout_pattern_types
+		 */
+		if (mdt->mdt_layout_pattern_types &
+		    ~LOV_LAYOUT_PATTERN_TYPES_217)
 			supported2 |= OBD_CONNECT2_FLR_EC;
 
 		data->ocd_connect_flags2 &= supported2;
+
+		if (data->ocd_connect_flags2 & OBD_CONNECT2_FLR_EC)
+			data->ocd_layout_pattern_types &=
+				mdt->mdt_layout_pattern_types;
 	}
 
 	data->ocd_ibits_known &= MDS_INODELOCK_FULL;

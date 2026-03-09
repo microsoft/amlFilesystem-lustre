@@ -1914,6 +1914,8 @@ void lustre_swab_connect(struct obd_connect_data *ocd)
 		__swab64s(&ocd->ocd_connect_flags2);
 		if (ocd->ocd_connect_flags2 & OBD_CONNECT2_COMPRESS)
 			__swab64s(&ocd->ocd_compr_type);
+		if (ocd->ocd_connect_flags2 & OBD_CONNECT2_FLR_EC)
+			__swab32s(&ocd->ocd_layout_pattern_types);
 	}
 	BUILD_BUG_ON(offsetof(typeof(*ocd), padding4) == 0);
 	BUILD_BUG_ON(offsetof(typeof(*ocd), padding5) == 0);

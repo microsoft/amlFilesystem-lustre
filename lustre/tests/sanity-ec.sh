@@ -59,6 +59,10 @@ check_runas_id $RUNAS_ID $RUNAS_GID $RUNAS
 export LFS_EC_OK=yes
 stack_trap "unset LFS_EC_OK" EXIT
 
+# EC layouts are only usable once the client has negotiated parity
+# support with the MDS at connect time; establish it deterministically
+setup_pattern_negotiation
+
 #
 # Verify mirror count with an expected value for a given file.
 #

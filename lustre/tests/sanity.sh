@@ -3160,8 +3160,13 @@ test_27D() {
 	local ost_step=1
 	local ost_list=$(seq $first_ost $ost_step $last_ost)
 	local ost_range="$first_ost $last_ost $ost_step"
-	local flr_ec_ver=v2_17_52-42-gf1b7ae0cc6
 	local mirror_id_ver=v2_17_50-223-g5c24d60098
+
+	# the EC subtests that create a parity layout need parity negotiated
+	# with the MDS, which an older client or MDS cannot do; this may
+	# remount the client, so do it first
+	try_pattern_negotiation restore ||
+		SKIP27D+=" -s 52,53,54,55,56,57,58,60,63,64,65,67"
 
 	test_mkdir $DIR/$tdir
 	pool_add $POOL || error "pool_add failed"
@@ -3179,8 +3184,6 @@ test_27D() {
 		SKIP27D+=" -s 34"
 	(( $MDS1_VERSION >= $(version_code $mirror_id_ver) )) ||
 		SKIP27D+=" -s 37"
-	(( $MDS1_VERSION >= $(version_code $flr_ec_ver) )) ||
-		SKIP27D+=" -s 52,53,54,55,56,57,58,60,63,64,65,67"
 
 	local ec_enable=$($LCTL get_param -n llite.*.enable_erasure_coding)
 	$LCTL set_param llite.*.enable_erasure_coding=1

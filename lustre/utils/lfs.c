@@ -2263,7 +2263,7 @@ static int mirror_extend_layout(char *name, struct llapi_layout *m_layout,
 	if (rc < 0) {
 		if (rc == -EOPNOTSUPP && !resync)
 			fprintf(stderr,
-				"error: %s: %s: merging a stale mirror needs llite_enable_flr_ec=1 on the client and mdt_enable_flr_ec=1 on the MDS before mounting the client\n",
+				"error: %s: %s: merging a stale mirror needs lustre.enable_flr_ec=1 on the client before mounting and parity in mdt.*.layout_pattern_types on the MDS\n",
 				progname, name);
 		err_str = "cannot merge layout";
 		goto out;

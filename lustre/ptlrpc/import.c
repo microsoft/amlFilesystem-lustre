@@ -1013,6 +1013,8 @@ int ptlrpc_connect_import_locked(struct obd_import *imp)
 	ocd = imp->imp_connect_data;
 	ocd.ocd_connect_flags = imp->imp_connect_flags_orig;
 	ocd.ocd_connect_flags2 = imp->imp_connect_flags2_orig;
+	ocd.ocd_layout_pattern_types =
+		imp->imp_connect_layout_pattern_types_orig;
 	/* Reset ocd_version each time so the server knows the exact versions */
 	ocd.ocd_version = LUSTRE_VERSION_CODE;
 	imp->imp_msghdr_flags &= ~MSGHDR_AT_SUPPORT;

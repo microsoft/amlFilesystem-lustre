@@ -81,6 +81,36 @@ struct lov_stripe_md_entry {
 #define lsme_archive_ver	lsme_hsm.lhb_archive_ver
 #define lsme_uuid		lsme_hsm.lhb_uuid
 
+/* lov_pattern_available() extended with MDS negotiation gating.
+ * Patterns like LOV_PATTERN_PARITY (EC) are parse-available so that
+ * lsme_unpack(), lsme_free(), verify, and dump paths handle layout
+ * buffers symmetrically regardless of negotiation state.  Whether a
+ * component may actually be used for IO is decided at layout init:
+ * lov_init_composite() additionally requires the pattern to be
+ * MDS-negotiated via this function, otherwise the component is left
+ * un-initialized and !lle_valid like an unknown-pattern component.
+ * Layout flags (LOV_PATTERN_F_*) are negotiated through the same mask,
+ * so a component carrying a flag the MDS did not advertise is refused
+ * the same way; that is what keeps a client safe from a flag added
+ * after it was built.
+ *
+ * @mask is the caller's snapshot of lov_layout_pattern_mask(): it can
+ * change on an MDC reconnect, so every entry of one layout must be judged
+ * against the same value, and lov_delete_composite() must not depend on
+ * it at all.
+ *
+ * Return: true if @pattern is available on the MDS, false otherwise.
+ */
+static inline bool lov_pattern_available_mds(enum lov_pattern pattern,
+					     enum lov_pattern mask)
+{
+	if (!lov_pattern_available(pattern))
+		return false;
+
+	/* the pattern type and every layout flag on it must be negotiated */
+	return (pattern & ~mask) == 0;
+}
+
 static inline bool lsme_is_dom(struct lov_stripe_md_entry *lsme)
 {
 	return (lov_pattern(lsme->lsme_pattern) & LOV_PATTERN_MDT);

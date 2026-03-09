@@ -959,6 +959,48 @@ int obd_connect_flags2str(char *page, int count, __u64 flags, __u64 flags2,
 }
 EXPORT_SYMBOL(obd_connect_flags2str);
 
+static const struct {
+	enum lov_pattern	lps_mask;
+	const char		*lps_name;
+} lov_pattern_names[] = {
+	{ LOV_PATTERN_RAID0,        "raid0" },
+	{ LOV_PATTERN_RAID1,        "raid1" },
+	{ LOV_PATTERN_PARITY,       "parity" },
+	{ LOV_PATTERN_MDT,          "mdt" },
+	{ LOV_PATTERN_OVERSTRIPING, "overstriped" },
+	{ LOV_PATTERN_FOREIGN,      "foreign" },
+	{ LOV_PATTERN_COMPRESS,     "compress" },
+	{ LOV_PATTERN_F_HOLE,       "hole" },
+	{ LOV_PATTERN_F_RELEASED,   "released" },
+};
+
+const char *lov_pattern_bit2str(int bit)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(lov_pattern_names); i++)
+		if (lov_pattern_names[i].lps_mask == BIT(bit))
+			return lov_pattern_names[i].lps_name;
+	return NULL;
+}
+EXPORT_SYMBOL(lov_pattern_bit2str);
+
+/* @mask as pattern names separated by @sep, no trailing newline */
+int lov_pattern_mask2str(char *buf, size_t size, u32 mask, const char *sep)
+{
+	int len = 0;
+	int i;
+
+	buf[0] = '\0';
+	for (i = 0; i < ARRAY_SIZE(lov_pattern_names); i++)
+		if (mask & lov_pattern_names[i].lps_mask)
+			len += scnprintf(buf + len, size - len, "%s%s",
+					 len ? sep : "",
+					 lov_pattern_names[i].lps_name);
+	return len;
+}
+EXPORT_SYMBOL(lov_pattern_mask2str);
+
 void
 obd_connect_data_seqprint(struct seq_file *m, struct obd_connect_data *ocd)
 {
@@ -1012,6 +1054,14 @@ obd_connect_data_seqprint(struct seq_file *m, struct obd_connect_data *ocd)
 	if (flags & OBD_CONNECT_MULTIMODRPCS)
 		seq_printf(m, "       max_mod_rpcs: %hu\n",
 			   ocd->ocd_maxmodrpcs);
+	if ((flags & OBD_CONNECT_FLAGS2) &&
+	    (ocd->ocd_connect_flags2 & OBD_CONNECT2_FLR_EC)) {
+		char buf[128];
+
+		lov_pattern_mask2str(buf, sizeof(buf),
+				     ocd->ocd_layout_pattern_types, ", ");
+		seq_printf(m, "       layout_pattern_types: [ %s ]\n", buf);
+	}
 }
 
 static inline const char *conn_uptodate2str(int status)

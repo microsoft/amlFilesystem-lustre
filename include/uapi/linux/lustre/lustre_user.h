@@ -924,6 +924,17 @@ enum lov_pattern {
 #define LOV_OFFSET_DEFAULT      ((__u16)-1)
 #define LMV_OFFSET_DEFAULT      ((__u32)-1)
 
+/* Patterns supported by MDS before 2.18.0 (before ocd_layout_pattern_types was
+ * sent).  Older MDSes will never gain new features, so this is static.
+ * The LOV_PATTERN_F_* layout flags every client understands are part of it,
+ * since flags are negotiated with the same mask as the pattern types.
+ */
+#define LOV_LAYOUT_PATTERN_TYPES_217	(LOV_PATTERN_RAID0 | \
+					 LOV_PATTERN_MDT | \
+					 LOV_PATTERN_OVERSTRIPING | \
+					 LOV_PATTERN_F_HOLE | \
+					 LOV_PATTERN_F_RELEASED)
+
 /* current client IO only understand these patterns */
 static inline bool lov_pattern_supported(enum lov_pattern pattern)
 {
@@ -946,7 +957,17 @@ static inline bool lov_pattern_supported(enum lov_pattern pattern)
 	return pattern_base == LOV_PATTERN_RAID0;
 }
 
-/* but we can set and server allows for these patterns */
+/* Patterns that may be set on a file and parsed from a layout: used by LOD
+ * when it validates a layout the client sends, and by lsme_unpack() and the
+ * other lov_ea.c paths that walk a layout buffer.  This asks a different
+ * question than lov_pattern_supported() above, which is about what this
+ * client's IO stack can drive, even though the two sets happen to be
+ * identical today -- a pattern can become settable before client IO grows
+ * support for it.
+ *
+ * Neither says whether a pattern may actually be used for IO against this
+ * MDS; that also depends on the patterns negotiated with it at connect.
+ */
 static inline bool lov_pattern_available(enum lov_pattern pattern)
 {
 	/* if client IO understand the pattern, it's available */
