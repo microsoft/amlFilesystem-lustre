@@ -24,6 +24,8 @@ AS_IF([test -z "$LDISKFS_SERIES"], [
 AS_IF([test x$RHEL_KERNEL = xyes], [
 	case $RHEL_RELEASE_NO in
 	810)    LDISKFS_SERIES="4.18-rhel8.10.series"
+		AS_VERSION_COMPARE([$RHEL_RELEASE_STR],[553.61.1],
+			[LDISKFS_SERIES="4.18-rhel8.10-553.22.series"],[],[])
 		AS_VERSION_COMPARE([$RHEL_RELEASE_STR],[553.22.1],
 			[LDISKFS_SERIES="4.18-rhel8.10-553.series"],[],[])
 		;;
