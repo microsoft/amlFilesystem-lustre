@@ -94,7 +94,7 @@ case $with_o2ib in
 				if test -d $O2IBDIR_PATH/$(uname -m)/${LINUXRELEASE}; then
 					O2IBDIR_PATH=$O2IBDIR_PATH/$(uname -m)/${LINUXRELEASE}
 				fi
-				O2IBPATHS=$(find $O2IBDIR_PATH -name rdma_cm.h |
+				O2IBPATHS=$(find -H $O2IBDIR_PATH -name rdma_cm.h |
 					sed -e 's/\/include\/rdma\/rdma_cm.h//')
 			fi
 
