@@ -23,6 +23,11 @@ case $1 in
     lustre-client)
 	SERVER="--disable-server --enable-client"
 	ksrc="$(dirname $4)/source"
+	# AL3 kernel-devel only creates 'build' symlink, not 'source'.
+	# Fall back to 'build' if 'source' doesn't exist.
+	if [ ! -e "$ksrc" ]; then
+		ksrc="$4"
+	fi
 	KERNEL_STUFF="--with-linux=$(realpath $ksrc) --with-linux-obj=$(realpath $4)"
 	name=$1
 	kmoddir=$8

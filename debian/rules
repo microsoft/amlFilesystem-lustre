@@ -124,7 +124,7 @@ endif
 	MODS_PKG=lustre-client-modules
 	RESOURCE_TARGET=
 	RESOURCE_PKG=
-	DKMS_PKG=lustre-client-modules-dkms
+	DKMS_PKG=lustre-client-modules-dkms-$(UPVERSION)
 endif
 
 #Build dir
@@ -287,6 +287,7 @@ configure-stamp: autogen-stamp debian/control.main debian/control.modules.in
 			--with-linux-obj=$${KERNEL_OBJ} \
 			--enable-quota \
 			--with-kmp-moddir=updates/kernel \
+			--disable-strict-errors \
 			$${EXTRAFLAGS} \
 			$(EXTRA_OPTIONS) \
 	); \
@@ -447,9 +448,24 @@ binary-$(SOURCE_PKG): build-stamp
 	dh_md5sums -p $(SOURCE_PKG)
 	dh_builddeb -p $(SOURCE_PKG)
 
-binary-$(DKMS_PKG): build-stamp
+binary-$(DKMS_PKG): patch-stamp
+	# Generate version-encoded control file from template (must precede dh_testdir)
+	sed -e 's/[@]DKMS_PKG[@]/$(DKMS_PKG)/g' \
+	    -e 's/[@]UPVERSION[@]/$(UPVERSION)/g' \
+	    debian/control.main > debian/control
 	dh_testdir
 	dh_testroot
+	# Generate version-encoded postinst/prerm from templates
+	sed -e 's/[@]DKMS_PKG[@]/$(DKMS_PKG)/g' \
+	    -e 's/[@]UPVERSION[@]/$(UPVERSION)/g' \
+	    debian/lustre-client-modules-dkms.postinst.in \
+	    > debian/$(DKMS_PKG).postinst
+	chmod +x debian/$(DKMS_PKG).postinst
+	sed -e 's/[@]DKMS_PKG[@]/$(DKMS_PKG)/g' \
+	    -e 's/[@]UPVERSION[@]/$(UPVERSION)/g' \
+	    debian/lustre-client-modules-dkms.prerm.in \
+	    > debian/$(DKMS_PKG).prerm
+	chmod +x debian/$(DKMS_PKG).prerm
 	# Create /usr/src/lustre-client-modules-<version>
 	dh_installdirs -p $(DKMS_PKG) usr/src/lustre-client-modules-$(UPVERSION)
 	# Copy the source
