@@ -1,3 +1,7 @@
+# lustre_ver holds the real Lustre version for paths, provides, etc.
+# Version: is set to a simple integer for package management.
+%global lustre_ver @VERSION@
+
 %bcond_without servers
 %bcond_without zfs
 %bcond_with ldiskfs
@@ -44,23 +48,25 @@
 # sources
 %define ext4_source_rpm kernel-debuginfo-common-x86_64
 
-Name:           %{module}-dkms
+Name:           %{module}-dkms-@VERSION@
 
-Version:        @VERSION@
-Release:        %{buildid}%{?dist}
+Version:        %{buildid}
+Release:        1%{?dist}
 Summary:        Kernel module(s) (dkms)
 
 Group:          System Environment/Kernel
 License:        GPLv2+
 URL:            http://lustre.opensfs.org/
-Source0:        @PACKAGE@-%{version}.tar.gz
-BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+Source0:        @PACKAGE@-%{lustre_ver}.tar.gz
+BuildRoot:      %{_tmppath}/%{name}-%{lustre_ver}-%{release}-root-%(%{__id_u} -n)
 BuildArch:      noarch
 
 # DKMS >= 2.2.0.3-28.git.7c3e7c5 to fully support inter-modules deps
 # (ie, "BUILD_DEPENDS[#]=<pkg>"), and have latest DKMS fixes integrated
 # for bugs that prevented our module to build/install.
 Requires:       dkms >= 2.2.0.3-28.git.7c3e7c5
+# Require version-encoded userspace tools package
+Requires:       %{lustre_name}-%{lustre_ver}
 Requires:       flex bison libmount-devel libmount
 # for lnetctl
 Requires:	libyaml-devel
@@ -75,7 +81,7 @@ Requires:   libmount-devel
 # If client package is installed when installing server, remove it since
 # the server package also includes the client.  This can be removed if/when
 # the packages are split into independent client/server/common packages.
-Obsoletes:	@PACKAGE@-client < %{version}
+Obsoletes:	@PACKAGE@-client < %{lustre_ver}
 %if %{with zfs}
 Requires:       zfs-dkms >= 0.6.5
 Conflicts:	@PACKAGE@-ldiskfs-dkms
@@ -99,18 +105,18 @@ Conflicts:	@PACKAGE@-all-dkms
 %endif
 Requires:       gcc, make, perl
 Requires:       kernel-devel
-Provides:	%{kmod_name} = %{version}
-Provides:	@PACKAGE@-modules = %{version}
+Provides:	%{kmod_name} = %{lustre_ver}
+Provides:	@PACKAGE@-modules = %{lustre_ver}
 %if %{with servers}
 %if %{with zfs}
-Provides:	@PACKAGE@-osd-zfs = %{version}
-Provides:	kmod-@PACKAGE@-osd-zfs = %{version}
-Provides:	@PACKAGE@-osd-zfs-mount = %{version}
+Provides:	@PACKAGE@-osd-zfs = %{lustre_ver}
+Provides:	kmod-@PACKAGE@-osd-zfs = %{lustre_ver}
+Provides:	@PACKAGE@-osd-zfs-mount = %{lustre_ver}
 %endif
 %if %{with ldiskfs}
-Provides:	@PACKAGE@-osd-ldiskfs = %{version}
-Provides:	kmod-@PACKAGE@-osd-ldiskfs = %{version}
-Provides:	@PACKAGE@-osd-ldiskfs-mount = %{version}
+Provides:	@PACKAGE@-osd-ldiskfs = %{lustre_ver}
+Provides:	kmod-@PACKAGE@-osd-ldiskfs = %{lustre_ver}
+Provides:	@PACKAGE@-osd-ldiskfs-mount = %{lustre_ver}
 %endif
 Provides:	@PACKAGE@-osd
 %else
@@ -126,19 +132,19 @@ the repository with other debuginfo rpms.
 %endif
 
 %prep
-%setup -q -n @PACKAGE@-%{version}
+%setup -q -n @PACKAGE@-%{lustre_ver}
 sh ./autogen.sh
 
 %build
-%{mkconf} -n %{module} -v %{version} -f dkms.conf %{mkconf_options}
+%{mkconf} -n %{module} -v %{lustre_ver} -f dkms.conf %{mkconf_options}
 
 %install
 if [ "$RPM_BUILD_ROOT" != "/" ]; then
     rm -rf $RPM_BUILD_ROOT
 fi
 mkdir -p $RPM_BUILD_ROOT/usr/src/
-cp -rfp ${RPM_BUILD_DIR}/@PACKAGE@-%{version} $RPM_BUILD_ROOT/usr/src/
-mv $RPM_BUILD_ROOT/usr/src/@PACKAGE@-%{version} $RPM_BUILD_ROOT/usr/src/%{module}-%{version}
+cp -rfp ${RPM_BUILD_DIR}/@PACKAGE@-%{lustre_ver} $RPM_BUILD_ROOT/usr/src/
+mv $RPM_BUILD_ROOT/usr/src/@PACKAGE@-%{lustre_ver} $RPM_BUILD_ROOT/usr/src/%{module}-%{lustre_ver}
 
 %clean
 if [ "$RPM_BUILD_ROOT" != "/" ]; then
@@ -147,12 +153,12 @@ fi
 
 %files
 %defattr(-,root,root)
-/usr/src/%{module}-%{version}
+/usr/src/%{module}-%{lustre_ver}
 
 %post
 for POSTINST in /usr/lib/dkms/common.postinst; do
     if [ -f $POSTINST ]; then
-        $POSTINST %{module} %{version}
+        $POSTINST %{module} %{lustre_ver}
         exit $?
     fi
     echo "WARNING: $POSTINST does not exist."
@@ -164,7 +170,7 @@ echo -e "support or upgrade DKMS to a more current version."
 exit 1
 
 %preun
-dkms remove -m %{module} -v %{version} --all --rpm_safe_upgrade
+dkms remove -m %{module} -v %{lustre_ver} --all --rpm_safe_upgrade
 exit 0
 
 %changelog

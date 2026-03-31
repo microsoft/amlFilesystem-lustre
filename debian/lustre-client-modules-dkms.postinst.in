@@ -4,16 +4,16 @@
 #
 # This file is part of Lustre, http://www.lustre.org/
 #
-# debian/lustre-client-module-dkms.postinst
+# debian/lustre-client-modules-dkms.postinst.in
 #
-# Script run after Lustre DKMS modules are installed
+# Template for DKMS postinst script.
+# @DKMS_PKG@ and @UPVERSION@ are substituted by debian/rules.
 #
 
 set -e
 
-# Get the package version
 package="lustre-client-modules"
-version="$(dpkg-query -W -f='${Version}' "${package}-dkms" | sed -e 's/-[^-]*$//')"
+version="@UPVERSION@"
 
 dkms add -m "${package}" -v "${version}"
 dkms build -m "${package}" -v "${version}" && dkms install -m "${package}" -v "${version}" --force || true
