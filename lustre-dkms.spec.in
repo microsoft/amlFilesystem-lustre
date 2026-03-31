@@ -5,8 +5,18 @@
 #
 # lustre-dkms.spec.in
 #
-# spec file template for RHEL dkms package builds
+# spec file template for RHEL/AL3 dkms package builds
 #
+
+# lustre_ver holds the real Lustre version for paths, provides, etc.
+# Version: is set to a simple integer for package management.
+%global lustre_ver @VERSION@
+
+# Detect Azure Linux early so we can use it in conditionals below.
+# On AL3, _vendor is "azl" (not "redhat"), and azl/azl3 dist macros are set.
+%if "%{_vendor}" == "azl" || 0%{?azl} || 0%{?azl3}
+%global azurelinux 1
+%endif
 
 %bcond_without servers
 %bcond_without zfs
@@ -42,7 +52,7 @@
     %define lustre_kmp_name %{lustre_name}-client
 %endif
 
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?azurelinux}
 	%global kmod_name kmod-%{lustre_kmp_name}
 	%define mkconf_options %{nil}
 #for Suse / Ubuntu
@@ -58,22 +68,24 @@
 # sources
 %define ext4_source_rpm kernel-debuginfo-common-x86_64
 
-Name:           %{module}-dkms
+Name:           %{module}-dkms-@VERSION@
 
-Version:        @VERSION@
-Release:        %{buildid}%{?dist}
+Version:        %{buildid}
+Release:        1%{?dist}
 Summary:        Kernel module(s) (dkms)
 
 License:        GPL-2.0-only
 URL:            http://lustre.opensfs.org/
-Source0:        @PACKAGE@-%{version}.tar.gz
-BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+Source0:        @PACKAGE@-%{lustre_ver}.tar.gz
+BuildRoot:      %{_tmppath}/%{name}-%{lustre_ver}-%{release}-root-%(%{__id_u} -n)
 BuildArch:      noarch
 
 # DKMS >= 2.2.0.3-28.git.7c3e7c5 to fully support inter-modules deps
 # (ie, "BUILD_DEPENDS[#]=<pkg>"), and have latest DKMS fixes integrated
 # for bugs that prevented our module to build/install.
 Requires:       dkms >= 2.2.0.3-28.git.7c3e7c5
+# Require version-encoded userspace tools package
+Requires:       %{lustre_kmp_name}-%{lustre_ver}
 Requires:       flex bison libmount-devel
 # for lnetctl
 Requires:	libyaml-devel
@@ -88,7 +100,7 @@ Requires:   libmount-devel
 # If client package is installed when installing server, remove it since
 # the server package also includes the client.  This can be removed if/when
 # the packages are split into independent client/server/common packages.
-Obsoletes:	%{lustre_name}-client < %{version}
+Obsoletes:	%{lustre_name}-client < %{lustre_ver}
 %if %{with zfs}
 Requires:       zfs-dkms >= 0.6.5
 Conflicts:	%{lustre_name}-ldiskfs-dkms
@@ -112,24 +124,27 @@ Conflicts:	%{lustre_name}-all-dkms
 %endif
 Requires:	gcc, make
 Requires:	kernel-devel >= 3.10
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+# DKMS configure checks for Python dev headers and keyutils for GSS support
+Requires:	python3-devel
+Requires:	keyutils-devel
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Recommends:	perl
 Suggests:	bash-completion
 %else
 Requires:	perl
 %endif
-Provides:	%{kmod_name} = %{version}
-Provides:	%{lustre_name}-modules = %{version}
+Provides:	%{kmod_name} = %{lustre_ver}
+Provides:	%{lustre_name}-modules = %{lustre_ver}
 %if %{with servers}
 %if %{with zfs}
-Provides:	%{lustre_name}-osd-zfs = %{version}
-Provides:	kmod-%{lustre_name}-osd-zfs = %{version}
-Provides:	%{lustre_name}-osd-zfs-mount = %{version}
+Provides:	%{lustre_name}-osd-zfs = %{lustre_ver}
+Provides:	kmod-%{lustre_name}-osd-zfs = %{lustre_ver}
+Provides:	%{lustre_name}-osd-zfs-mount = %{lustre_ver}
 %endif
 %if %{with ldiskfs}
-Provides:	%{lustre_name}-osd-ldiskfs = %{version}
-Provides:	kmod-%{lustre_name}-osd-ldiskfs = %{version}
-Provides:	%{lustre_name}-osd-ldiskfs-mount = %{version}
+Provides:	%{lustre_name}-osd-ldiskfs = %{lustre_ver}
+Provides:	kmod-%{lustre_name}-osd-ldiskfs = %{lustre_ver}
+Provides:	%{lustre_name}-osd-ldiskfs-mount = %{lustre_ver}
 %endif
 Provides:	%{lustre_name}-osd
 %else
@@ -145,19 +160,19 @@ the repository with other debuginfo rpms.
 %endif
 
 %prep
-%setup -q -n @PACKAGE@-%{version}
+%setup -q -n @PACKAGE@-%{lustre_ver}
 sh ./autogen.sh
 
 %build
-%{mkconf} -n %{module} -v %{version} -f dkms.conf %{mkconf_options}
+%{mkconf} -n %{module} -v %{lustre_ver} -f dkms.conf %{mkconf_options}
 
 %install
 if [ "$RPM_BUILD_ROOT" != "/" ]; then
     rm -rf $RPM_BUILD_ROOT
 fi
 mkdir -p $RPM_BUILD_ROOT/usr/src/
-cp -rfp ${RPM_BUILD_DIR}/@PACKAGE@-%{version} $RPM_BUILD_ROOT/usr/src/
-mv $RPM_BUILD_ROOT/usr/src/@PACKAGE@-%{version} $RPM_BUILD_ROOT/usr/src/%{module}-%{version}
+cp -rfp ${RPM_BUILD_DIR}/@PACKAGE@-%{lustre_ver} $RPM_BUILD_ROOT/usr/src/
+mv $RPM_BUILD_ROOT/usr/src/@PACKAGE@-%{lustre_ver} $RPM_BUILD_ROOT/usr/src/%{module}-%{lustre_ver}
 
 %clean
 if [ "$RPM_BUILD_ROOT" != "/" ]; then
@@ -166,12 +181,12 @@ fi
 
 %files
 %defattr(-,root,root)
-/usr/src/%{module}-%{version}
+/usr/src/%{module}-%{lustre_ver}
 
 %post
 for POSTINST in /usr/lib/dkms/common.postinst; do
     if [ -f $POSTINST ]; then
-	$POSTINST %{module} %{version}
+	$POSTINST %{module} %{lustre_ver}
 	exit $?
     fi
     echo "WARNING: $POSTINST does not exist."
@@ -183,7 +198,7 @@ echo -e "support or upgrade DKMS to a more current version."
 exit 1
 
 %preun
-dkms remove -m %{module} -v %{version} --all --rpm_safe_upgrade
+dkms remove -m %{module} -v %{lustre_ver} --all --rpm_safe_upgrade
 exit 0
 
 %changelog

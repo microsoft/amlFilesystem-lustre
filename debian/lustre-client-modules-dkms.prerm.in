@@ -4,15 +4,15 @@
 #
 # This file is part of Lustre, http://www.lustre.org/
 #
-# debian/lustre-client-module-dkms.prerm
+# debian/lustre-client-modules-dkms.prerm.in
 #
-# Script run before Lustre DKMS modules are removed
+# Template for DKMS prerm script.
+# @DKMS_PKG@ and @UPVERSION@ are substituted by debian/rules.
 #
 
 set -e
 
-# Get the package version
 package="lustre-client-modules"
-version="$(dpkg-query -W -f='${Version}' "${package}-dkms" | sed -e 's/-[^-]*$//')"
+version="@UPVERSION@"
 
 dkms remove -m "${package}" -v "${version}" --all || true
