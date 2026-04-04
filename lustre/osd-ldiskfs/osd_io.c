@@ -3000,6 +3000,30 @@ static void osd_partial_page_flush_punch(struct osd_device *d,
 	}
 }
 
+static void osd_invalidate_partial_page(struct inode *inode, loff_t offset)
+{
+	struct address_space *mapping = inode->i_mapping;
+	struct ldiskfs_inode_info *ei = LDISKFS_I(inode);
+	struct page *page;
+	int rc;
+
+	if (!test_bit(LDISKFS_INODE_JOURNAL_DATA, &ei->i_flags))
+		return;
+
+	page = find_or_create_page(mapping, i_size_read(inode) >> PAGE_SHIFT,
+				   mapping_gfp_constraint(mapping, ~__GFP_FS));
+	if (!page)
+		return;
+
+	rc = osd_jbd_invalidate_page(LDISKFS_SB(inode->i_sb)->s_journal,
+				     page, 0, PAGE_SIZE);
+	LASSERTF(rc == 0, "  last page %lu %s%s rc=%d\n",
+		 folio_index_page(page),
+		 PageChecked(page) ? "C" : "", PageDirty(page) ? "D" : "", rc);
+	unlock_page(page);
+	put_page(page);
+}
+
 /*
  * For a partial-page truncate, flush the page to disk immediately to
  * avoid data corruption during direct disk write.  b=17397
