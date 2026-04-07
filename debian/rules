@@ -382,7 +382,7 @@ binary-$(SOURCE_PKG): build-stamp
 	dh_md5sums -p $(SOURCE_PKG)
 	dh_builddeb -p $(SOURCE_PKG)
 
-binary-$(DKMS_PKG): build-stamp
+binary-$(DKMS_PKG): patch-stamp
 	dh_testdir
 	dh_testroot
 	# Create /usr/src/lustre-client-modules-<version>

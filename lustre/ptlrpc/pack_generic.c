@@ -1780,7 +1780,8 @@ void lustre_swab_connect(struct obd_connect_data *ocd)
 	if (ocd->ocd_connect_flags & OBD_CONNECT_FLAGS2)
 		__swab64s(&ocd->ocd_connect_flags2);
 	BUILD_BUG_ON(offsetof(typeof(*ocd), padding3) == 0);
-	BUILD_BUG_ON(offsetof(typeof(*ocd), padding4) == 0);
+	if (OCD_HAS_FLAG2(ocd, CLIENT_VERSION))
+		__swab64s(&ocd->ocd_client_version);
 	BUILD_BUG_ON(offsetof(typeof(*ocd), padding5) == 0);
 	BUILD_BUG_ON(offsetof(typeof(*ocd), padding6) == 0);
 	BUILD_BUG_ON(offsetof(typeof(*ocd), padding7) == 0);
