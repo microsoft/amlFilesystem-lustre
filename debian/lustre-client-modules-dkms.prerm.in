@@ -1,0 +1,18 @@
+#!/bin/bash
+# SPDX-License-Identifier: NOASSERTION
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# debian/lustre-client-modules-dkms.prerm.in
+#
+# Template for DKMS prerm script.
+# @DKMS_PKG@ and @UPVERSION@ are substituted by debian/rules.
+#
+
+set -e
+
+package="lustre-client-modules"
+version="@UPVERSION@"
+
+dkms remove -m "${package}" -v "${version}" --all || true

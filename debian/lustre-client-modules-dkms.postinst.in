@@ -1,0 +1,19 @@
+#!/bin/bash
+# SPDX-License-Identifier: NOASSERTION
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# debian/lustre-client-modules-dkms.postinst.in
+#
+# Template for DKMS postinst script.
+# @DKMS_PKG@ and @UPVERSION@ are substituted by debian/rules.
+#
+
+set -e
+
+package="lustre-client-modules"
+version="@UPVERSION@"
+
+dkms add -m "${package}" -v "${version}"
+dkms build -m "${package}" -v "${version}" && dkms install -m "${package}" -v "${version}" --force || true
