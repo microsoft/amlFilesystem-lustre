@@ -2604,10 +2604,22 @@ lock_parent:
 	info->mti_spec.sp_cr_lookup = 0;
 	info->mti_spec.sp_feat = &dt_directory_features;
 
+retry_migrate:
 	rc = mdo_migrate(env, mdt_object_child(spobj),
 			 mdt_object_child(tpobj), mdt_object_child(sobj),
 			 mdt_object_child(tobj), &rr->rr_name,
 			 &info->mti_spec, ma);
+	if (rc == -EALREADY && spobj != tpobj &&
+	    !info->mti_spec.sp_migrate_nsonly) {
+		/*
+		 * The object is already on the target MDT, but the source and
+		 * target parent stripes differ, so the old-stripe name may
+		 * still exist. Retry as namespace-only to clean up the old
+		 * name entry before layout shrink finalization.
+		 */
+		info->mti_spec.sp_migrate_nsonly = 1;
+		GOTO(retry_migrate, rc);
+	}
 	if (rc)
 		GOTO(put_target, rc);
 

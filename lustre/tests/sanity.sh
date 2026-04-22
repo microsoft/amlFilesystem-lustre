@@ -27281,6 +27281,66 @@ test_230B() {
 }
 run_test 230B "create duplicated entries in a migrating dir"
 
+test_230C() {
+	(( MDSCOUNT >= 2 )) || skip "needs >= 2 MDTs"
+	(( MDS1_VERSION >= $(version_code 2.17.56) )) ||
+		skip "need MDS >= 2.17.56 for migrate nsonly retry"
+
+	# Create a directory with 2 stripes, the master stripe on MDT1.
+	# Shrinking it to a single stripe makes its LMV layout-changing, which
+	# recursively migrates the subdirectories below across the two parent
+	# stripes (the spobj != tpobj case that can hit the -EALREADY retry).
+	$LFS mkdir -i 1 -c 2 $DIR/$tdir ||
+		error "lfs mkdir -i 1 -c 2 $tdir failed"
+
+	# Force a child directory onto the migration target (MDT0) so the
+	# recursive migration deterministically hits the -EALREADY path: its
+	# FID already resolves to the target lum_stripe_offset, one of the
+	# cases mdd_migrate_cmd_check() returns -EALREADY for. Regular files
+	# never reach that check, so only subdirectories matter here.
+	$LFS mkdir -i 0 $DIR/$tdir/d_mdt0 ||
+		error "lfs mkdir -i 0 $tdir/d_mdt0 failed"
+	local d_mdt=$($LFS getstripe -m $DIR/$tdir/d_mdt0)
+	(( d_mdt == 0 )) ||
+		error "expected $tdir/d_mdt0 on MDT0, got MDT$d_mdt"
+
+	# Add more subdirectories spread across the parent stripes by name hash
+	local ndirs=10
+	createmany -d $DIR/$tdir/d $ndirs ||
+		error "createmany dirs under $tdir failed"
+
+	local stripe_before
+	stripe_before=$($LFS getdirstripe -c $DIR/$tdir)
+	(( stripe_before == 2 )) ||
+		error "expected 2 stripes before migrate, got $stripe_before"
+
+	# Shrink $tdir to a single stripe on MDT0. The request on $tdir itself
+	# has spobj == tpobj (its parent $DIR is not striped), so the retry
+	# fires while recursively migrating d_mdt0, whose old-stripe name entry
+	# would otherwise be left behind and fail the shrink with ENOTEMPTY.
+	$LFS migrate -m 0 -c 1 $DIR/$tdir ||
+		error "lfs migrate -m 0 -c 1 $tdir failed"
+
+	local stripe_after
+	stripe_after=$($LFS getdirstripe -c $DIR/$tdir)
+	(( stripe_after == 1 )) ||
+		error "expected 1 stripe after migrate, got $stripe_after"
+
+	# The subdirectories are the entries the fix relocates, so verify they
+	# all survive: $tdir itself + d_mdt0 + $ndirs created above.
+	local found
+	found=$($LFS find -type d $DIR/$tdir | wc -l)
+	(( found == ndirs + 2 )) ||
+		error "expected $((ndirs + 2)) dirs after migrate, found $found"
+
+	# The MDT0-resident subdir that drove the -EALREADY retry must survive
+	[ -d $DIR/$tdir/d_mdt0 ] ||
+		error "$tdir/d_mdt0 missing after migrate"
+
+	rm -rf $DIR/$tdir || error "rm -rf $tdir failed after migrate"
+}
+run_test 230C "dir migrate shrink cleans stale stripe name entries (LU-20177)"
+
 test_231a()
 {
 	# For simplicity this test assumes that max_pages_per_rpc
