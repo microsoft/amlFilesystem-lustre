@@ -993,7 +993,7 @@ static int osc_extent_truncate(struct osc_extent *ext, pgoff_t trunc_index,
 	io->ci_obj = cl_object_top(osc2cl(obj));
 	io->ci_ignore_layout = 1;
 	fbatch = &osc_env_info(env)->oti_fbatch;
-	ll_folio_batch_init(fbatch, 0);
+	ll_folio_batch_init(fbatch);
 	rc = cl_io_init(env, io, CIT_MISC, io->ci_obj);
 	if (rc < 0)
 		GOTO(out, rc);
@@ -3356,7 +3356,7 @@ bool osc_page_gang_lookup(const struct lu_env *env, struct cl_io *io,
 	idx = start;
 	pvec = osc_env_info(env)->oti_pvec;
 	fbatch = &osc_env_info(env)->oti_fbatch;
-	ll_folio_batch_init(fbatch, 0);
+	ll_folio_batch_init(fbatch);
 	spin_lock(&osc->oo_tree_lock);
 	while ((nr = radix_tree_gang_lookup(&osc->oo_tree, pvec,
 					    idx, OTI_PVEC_SIZE)) > 0) {

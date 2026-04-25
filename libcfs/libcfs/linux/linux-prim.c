@@ -29,6 +29,7 @@
 #endif
 
 #include <lustre_compat.h>
+#include <linux/libcfs/libcfs.h>
 #include <lustre_compat/linux/timer.h>
 #include <lustre_compat/linux/linux-misc.h>
 #include <lustre_compat/linux/mm.h>

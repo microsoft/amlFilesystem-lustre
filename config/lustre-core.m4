@@ -2369,6 +2369,98 @@ AC_DEFUN([LC_BI_BDEV], [
 ]) # LC_BI_BDEV
 
 #
+
+#
+
+#
+# LC_HAVE_SG_SET_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_SG_SET_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_sg_set_folio], [
+		#include <linux/scatterlist.h>
+	],[
+		sg_set_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SG_SET_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if sg_set_folio() exists],
+	[have_sg_set_folio], [
+		AC_DEFINE(HAVE_SG_SET_FOLIO, 1, [sg_set_folio() exists])
+	])
+])
+
+#
+# LC_HAVE_BIO_ADD_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_BIO_ADD_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_bio_add_folio], [
+		#include <linux/bio.h>
+	],[
+		bio_add_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BIO_ADD_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if bio_add_folio() exists],
+	[have_bio_add_folio], [
+		AC_DEFINE(HAVE_BIO_ADD_FOLIO, 1, [bio_add_folio() exists])
+	])
+])
+
+# LC_HAVE___FILEMAP_GET_FOLIO
+#
+# kernel v5.16-rc1-1-g233fdad845fb
+#   mm/filemap: Add __filemap_get_folio
+#
+AC_DEFUN([LC_SRC_HAVE___FILEMAP_GET_FOLIO],[
+	LB2_LINUX_TEST_SRC([have___filemap_get_folio], [
+		#include <linux/pagemap.h>
+	],[
+		struct folio *f = __filemap_get_folio(NULL, 0, 0, 0);
+		(void)f;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE___FILEMAP_GET_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if __filemap_get_folio() exists],
+	[have___filemap_get_folio], [
+		AC_DEFINE(HAVE___FILEMAP_GET_FOLIO, 1, [__filemap_get_folio() exists])
+	])
+]) 
+#
+# LC_HAVE_SG_SET_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_SG_SET_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_sg_set_folio], [
+		#include <linux/scatterlist.h>
+	],[
+		sg_set_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SG_SET_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if sg_set_folio() exists],
+	[have_sg_set_folio], [
+		AC_DEFINE(HAVE_SG_SET_FOLIO, 1, [sg_set_folio() exists])
+	])
+])
+
+#
+# LC_HAVE_BIO_ADD_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_BIO_ADD_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_bio_add_folio], [
+		#include <linux/bio.h>
+	],[
+		bio_add_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BIO_ADD_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if bio_add_folio() exists],
+	[have_bio_add_folio], [
+		AC_DEFINE(HAVE_BIO_ADD_FOLIO, 1, [bio_add_folio() exists])
+	])
+])
+
+# LC_HAVE___FILEMAP_GET_FOLIO
+
 # LC_INTERVAL_TREE_CACHED
 #
 # 4.14 f808c13fd3738948e10196496959871130612b61
@@ -2376,21 +2468,11 @@ AC_DEFUN([LC_BI_BDEV], [
 #
 AC_DEFUN([LC_SRC_INTERVAL_TREE_CACHED], [
 	LB2_LINUX_TEST_SRC([itree_cached], [
-		#include <linux/interval_tree_generic.h>
-		struct foo { struct rb_node rb; int last; int a,b;};
-		#define START(n) ((n)->a)
-		#define LAST(n) ((n)->b)
-		struct rb_root_cached tree;
-		/* forward declare functions created by INTERVAL_TREE_DEFINE */
-		void ftree_insert(struct foo *, struct rb_root_cached *);
-		void ftree_remove(struct foo *, struct rb_root_cached *);
-		struct foo *ftree_iter_first(struct rb_root_cached *, int, int);
-		struct foo *ftree_iter_next(struct foo *, int, int);
-		INTERVAL_TREE_DEFINE(struct foo, rb, int, last,
-			START, LAST, , ftree);
+		#include <linux/rbtree.h>
 	],[
-		ftree_insert(NULL, &tree);
-	],[-Werror])
+		struct rb_root_cached tree = RB_ROOT_CACHED;
+		(void)tree.rb_root.rb_node;
+	])
 ])
 AC_DEFUN([LC_INTERVAL_TREE_CACHED], [
 	LB2_MSG_LINUX_TEST_RESULT([if interval_trees use rb_tree_cached],
@@ -2398,7 +2480,99 @@ AC_DEFUN([LC_INTERVAL_TREE_CACHED], [
 		AC_DEFINE(HAVE_INTERVAL_TREE_CACHED, 1,
 			[interval trees use rb_tree_cached])
 	])
-]) # LC_INTERVAL_TREE_CACHED
+]) 
+#
+
+#
+# LC_HAVE_SG_SET_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_SG_SET_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_sg_set_folio], [
+		#include <linux/scatterlist.h>
+	],[
+		sg_set_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SG_SET_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if sg_set_folio() exists],
+	[have_sg_set_folio], [
+		AC_DEFINE(HAVE_SG_SET_FOLIO, 1, [sg_set_folio() exists])
+	])
+])
+
+#
+# LC_HAVE_BIO_ADD_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_BIO_ADD_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_bio_add_folio], [
+		#include <linux/bio.h>
+	],[
+		bio_add_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BIO_ADD_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if bio_add_folio() exists],
+	[have_bio_add_folio], [
+		AC_DEFINE(HAVE_BIO_ADD_FOLIO, 1, [bio_add_folio() exists])
+	])
+])
+
+# LC_HAVE___FILEMAP_GET_FOLIO
+#
+# kernel v5.16-rc1-1-g233fdad845fb
+#   mm/filemap: Add __filemap_get_folio
+#
+AC_DEFUN([LC_SRC_HAVE___FILEMAP_GET_FOLIO],[
+	LB2_LINUX_TEST_SRC([have___filemap_get_folio], [
+		#include <linux/pagemap.h>
+	],[
+		struct folio *f = __filemap_get_folio(NULL, 0, 0, 0);
+		(void)f;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE___FILEMAP_GET_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if __filemap_get_folio() exists],
+	[have___filemap_get_folio], [
+		AC_DEFINE(HAVE___FILEMAP_GET_FOLIO, 1, [__filemap_get_folio() exists])
+	])
+]) 
+#
+# LC_HAVE_SG_SET_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_SG_SET_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_sg_set_folio], [
+		#include <linux/scatterlist.h>
+	],[
+		sg_set_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SG_SET_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if sg_set_folio() exists],
+	[have_sg_set_folio], [
+		AC_DEFINE(HAVE_SG_SET_FOLIO, 1, [sg_set_folio() exists])
+	])
+])
+
+#
+# LC_HAVE_BIO_ADD_FOLIO
+#
+AC_DEFUN([LC_SRC_HAVE_BIO_ADD_FOLIO],[
+	LB2_LINUX_TEST_SRC([have_bio_add_folio], [
+		#include <linux/bio.h>
+	],[
+		bio_add_folio(NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BIO_ADD_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if bio_add_folio() exists],
+	[have_bio_add_folio], [
+		AC_DEFINE(HAVE_BIO_ADD_FOLIO, 1, [bio_add_folio() exists])
+	])
+])
+
+# LC_HAVE___FILEMAP_GET_FOLIO
+
+# LC_INTERVAL_TREE_CACHED
 
 #
 # LC_IS_ENCRYPTED
@@ -5850,6 +6024,9 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_WRITE_BEGIN_KIOCB
 	LC_SRC_FS_STRUCT_HAS_SEQLOCK
 	LC_SRC_HAVE_NETIF_GET_FLAGS
+	LC_SRC_HAVE_SG_SET_FOLIO
+	LC_SRC_HAVE_BIO_ADD_FOLIO
+	LC_SRC_HAVE___FILEMAP_GET_FOLIO
 
 	# 6.18
 	LC_SRC_HAVE_INODE_JUST_DROP
@@ -6207,6 +6384,9 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_HAVE_WRITE_BEGIN_KIOCB
 	LC_FS_STRUCT_HAS_SEQLOCK
 	LC_HAVE_NETIF_GET_FLAGS
+	LC_HAVE_SG_SET_FOLIO
+	LC_HAVE_BIO_ADD_FOLIO
+	LC_HAVE___FILEMAP_GET_FOLIO
 
 	# 6.18
 	LC_HAVE_INODE_JUST_DROP

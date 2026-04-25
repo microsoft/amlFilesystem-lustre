@@ -2926,7 +2926,7 @@ static int pcc_mmap_pages_convert(struct inode *inode,
 	unsigned int nr;
 	int rc = 0;
 
-	ll_folio_batch_init(&fbatch, 0);
+	ll_folio_batch_init(&fbatch);
 	for ( ; ; ) {
 		struct page *page;
 		int i;

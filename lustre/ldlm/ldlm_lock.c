@@ -20,6 +20,7 @@
 #include <obd_class.h>
 
 #include "ldlm_internal.h"
+#include <lustre_compat/linux/wait.h>
 
 struct kmem_cache *ldlm_glimpse_work_kmem;
 EXPORT_SYMBOL(ldlm_glimpse_work_kmem);

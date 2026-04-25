@@ -21,6 +21,7 @@
 #include <linux/workqueue.h>
 #include <cfs_hash.h>
 #include <obd_class.h>
+#include <lustre_compat.h>
 #include <lustre_log.h>
 #include <lprocfs_status.h>
 #include <lustre_disk.h>

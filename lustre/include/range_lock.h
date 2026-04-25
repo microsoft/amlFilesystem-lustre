@@ -21,6 +21,8 @@
 
 #include <linux/spinlock.h>
 #include <linux/rbtree.h>
+#include <linux/interval_tree.h>
+#include <lustre_compat/linux/linux-misc.h>
 
 #define RL_FMT "[%llu, %llu]"
 #define RL_PARA(range)					\

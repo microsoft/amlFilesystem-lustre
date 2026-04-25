@@ -46,6 +46,7 @@
 #include <obd.h>
 
 #include "ldlm_internal.h"
+#include <lustre_compat/linux/wait.h>
 
 unsigned int ldlm_enqueue_min = OBD_TIMEOUT_DEFAULT;
 module_param(ldlm_enqueue_min, uint, 0644);

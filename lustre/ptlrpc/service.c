@@ -18,6 +18,7 @@
 #include <linux/kthread.h>
 #include <linux/ratelimit.h>
 #include <lustre_compat/linux/timer.h>
+#include <lustre_compat/linux/wait.h>
 
 #include <obd_support.h>
 #include <obd_class.h>

@@ -12,6 +12,7 @@
  */
 
 #ifndef _LUSTRE_COMPAT_H
+#include <lustre_compat/linux/wait.h>
 #define _LUSTRE_COMPAT_H
 
 #include <linux/aio.h>
@@ -540,5 +541,12 @@ static inline void ll_security_release_secctx(char *secdata, u32 seclen,
 #else /* !HAVE_RADIX_TREE_REPLACE_SLOT_3ARGS */
 # define radix_tree_rcu
 #endif /* HAVE_RADIX_TREE_REPLACE_SLOT_3ARGS */
+
+#ifndef mapping_clear_exiting
+static inline void mapping_clear_exiting(struct address_space *mapping)
+{
+	clear_bit(AS_EXITING, &mapping->flags);
+}
+#endif
 
 #endif /* _LUSTRE_COMPAT_H */

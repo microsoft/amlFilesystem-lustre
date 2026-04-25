@@ -67,6 +67,7 @@ int debugfs_doint(const struct ctl_table *table, int write,
 /*
  * Memory
  */
+unsigned long cfs_totalram_pages(void);
 #if BITS_PER_LONG == 32
 /* limit to lowmem on 32-bit systems */
 #define NUM_CACHEPAGES \

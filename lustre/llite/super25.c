@@ -16,6 +16,7 @@
 #define D_MOUNT (D_SUPER | D_CONFIG/*|D_WARNING */)
 
 #include <linux/module.h>
+#include <linux/fs_context.h>
 #include <linux/types.h>
 #include <linux/version.h>
 #include <lustre_ha.h>
@@ -105,7 +106,6 @@ const struct super_operations lustre_super_operations = {
 	.put_super     = ll_put_super,
 	.statfs        = ll_statfs,
 	.umount_begin  = ll_umount_begin,
-	.remount_fs    = ll_remount_fs,
 	.show_options  = ll_show_options,
 	.show_devname  = ll_show_devname,
 };
@@ -206,10 +206,31 @@ out:
 }
 
 /***************** FS registration ******************/
-static struct dentry *lustre_mount(struct file_system_type *fs_type, int flags,
-				   const char *devname, void *data)
+static int lustre_fill_super_fc(struct super_block *sb, struct fs_context *fc)
 {
-	return mount_nodev(fs_type, flags, data, lustre_fill_super);
+	return lustre_fill_super(sb, fc->fs_private, fc->sb_flags & SB_SILENT ? 1 : 0);
+}
+
+static int lustre_get_tree(struct fs_context *fc)
+{
+	return get_tree_nodev(fc, lustre_fill_super_fc);
+}
+
+static int lustre_parse_monolithic(struct fs_context *fc, void *data)
+{
+	fc->fs_private = data;
+	return 0;
+}
+
+static const struct fs_context_operations lustre_context_ops = {
+	.get_tree	= lustre_get_tree,
+	.parse_monolithic	= lustre_parse_monolithic,
+};
+
+static int lustre_init_fs_context(struct fs_context *fc)
+{
+	fc->ops = &lustre_context_ops;
+	return 0;
 }
 
 static void lustre_kill_super(struct super_block *sb)
@@ -226,7 +247,7 @@ static void lustre_kill_super(struct super_block *sb)
 static struct file_system_type lustre_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "lustre",
-	.mount		= lustre_mount,
+	.init_fs_context	= lustre_init_fs_context,
 	.kill_sb	= lustre_kill_super,
 	.fs_flags	= FS_RENAME_DOES_D_MOVE,
 };

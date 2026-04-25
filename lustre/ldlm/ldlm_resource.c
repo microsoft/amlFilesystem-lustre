@@ -19,6 +19,7 @@
 #include <lustre_fid.h>
 #include <obd_class.h>
 #include "ldlm_internal.h"
+#include <lustre_compat/linux/wait.h>
 
 struct kmem_cache *ldlm_resource_slab, *ldlm_lock_slab;
 struct kmem_cache *ldlm_interval_tree_slab;
