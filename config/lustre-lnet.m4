@@ -1337,6 +1337,57 @@ AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 ])
 ]) # LN_USR_RDMA
 
+=======
+#
+# LN_CONFIG_SENDPAGE_OK
+#
+# kernel commit v5.9-rc6-325-gc381b07941 added sendpage_ok() helper
+# check if sendpage_ok() is available
+#
+AC_DEFUN([LN_SRC_CONFIG_SENDPAGE_OK], [
+	LB2_LINUX_TEST_SRC([sendpage_ok], [
+		#include <linux/net.h>
+	],[
+		struct page *page = NULL;
+		(void)sendpage_ok(page);
+	],[-Werror])
+])
+AC_DEFUN([LN_CONFIG_SENDPAGE_OK], [
+	LB2_MSG_LINUX_TEST_RESULT([if sendpage_ok() is available],
+	[sendpage_ok], [
+		AC_DEFINE(HAVE_SENDPAGE_OK, 1,
+			[sendpage_ok() is available])
+	])
+]) # LN_CONFIG_SENDPAGE_OK
+
+#
+## LN_HAVE_STRUCT_SOCKADDR_UNSIZED
+#
+# Linux commit v6.18-rc3-603-gbf33247a90d3e
+#   net: Add struct sockaddr_unsized for sockaddr of unknown length
+#
+AC_DEFUN([LN_SRC_HAVE_STRUCT_SOCKADDR_UNSIZED],[
+	LB2_LINUX_TEST_SRC([struct_sockaddr_unsized], [
+		#include <linux/socket.h>
+		#include <linux/net.h>
+	],[
+		struct sockaddr_unsized *addr = NULL;
+
+		(void)kernel_bind(NULL, addr, 0);
+	],[-Werror])
+])
+AC_DEFUN([LN_HAVE_STRUCT_SOCKADDR_UNSIZED],[
+	LB2_MSG_LINUX_TEST_RESULT([if struct sockaddr_unsized exists],
+	[struct_sockaddr_unsized], [
+		AC_DEFINE(HAVE_STRUCT_SOCKADDR_UNSIZED, 1,
+			  [struct sockaddr_unsized exists])
+	], [
+		AC_DEFINE([sockaddr_unsized], [sockaddr],
+			  [struct sockaddr_unsized does not exist])
+	])
+]) # LN_HAVE_STRUCT_SOCKADDR_UNSIZED
+
+>>>>>>> 219eae4f0f (LU-19837 build: Compatibility updates for kernel v6.19)
 AC_DEFUN([LN_PROG_LINUX_SRC], [
 	LN_CONFIG_O2IB_SRC
 	# 3.15
@@ -1355,11 +1406,15 @@ AC_DEFUN([LN_PROG_LINUX_SRC], [
 	# 4.17
 	LN_SRC_CONFIG_SOCK_GETNAME
 	# 5.3 and 4.18.0-193.el8
-	LN_SRC_HAVE_IN_DEV_FOR_EACH_IFA_RTNL
+	# 5.9
+	LN_SRC_CONFIG_SENDPAGE_OK
+	# 6.15
+	# 6.19
+	LN_SRC_HAVE_STRUCT_SOCKADDR_UNSIZED
 ])
 
+
 AC_DEFUN([LN_PROG_LINUX_RESULTS], [
-	LN_CONFIG_O2IB_RESULTS
 	# 3.15
 	LN_CONFIG_SK_DATA_READY
 	# 4.x
@@ -1376,8 +1431,7 @@ AC_DEFUN([LN_PROG_LINUX_RESULTS], [
 	# 4.17
 	LN_CONFIG_SOCK_GETNAME
 	# 5.3 and 4.18.0-193.el8
-	LN_HAVE_IN_DEV_FOR_EACH_IFA_RTNL
-])
+]) # LN_PROG_LINUX_RESULTS
 
 #
 # LN_PROG_LINUX
