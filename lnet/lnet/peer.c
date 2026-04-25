@@ -14,6 +14,7 @@
 #ifdef HAVE_SCHED_HEADERS
 #include <linux/sched/signal.h>
 #endif
+#include <lustre_compat/linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/libcfs/libcfs.h>
 #include <lnet/udsp.h>

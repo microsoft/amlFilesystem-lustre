@@ -2716,7 +2716,7 @@ static struct attribute *hsm_attrs[] = {
 	NULL,
 };
 
-KOBJ_ATTRIBUTE_GROUPS(hsm); /* creates hsm_groups from hsm_attrs */
+ATTRIBUTE_GROUPS(hsm); /* creates hsm_groups from hsm_attrs */
 
 static void hsm_kobj_release(struct kobject *kobj)
 {
@@ -2730,7 +2730,7 @@ static void hsm_kobj_release(struct kobject *kobj)
 }
 
 static struct kobj_type hsm_ktype = {
-	.default_groups = KOBJ_ATTR_GROUPS(hsm),
+	.default_groups = hsm_groups,
 	.sysfs_ops	= &lustre_sysfs_ops,
 	.release	= hsm_kobj_release,
 };

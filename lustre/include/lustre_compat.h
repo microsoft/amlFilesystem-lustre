@@ -15,7 +15,7 @@
 #define _LUSTRE_COMPAT_H
 
 #include <linux/aio.h>
-#include <linux/fs.h>
+#include <lustre_compat/linux/fs.h>
 #include <linux/namei.h>
 #include <linux/pagemap.h>
 #include <linux/posix_acl_xattr.h>
@@ -28,12 +28,9 @@
 #include <linux/security.h>
 #include <linux/pagevec.h>
 #include <linux/workqueue.h>
-#include <lustre_compat/linux/linux-fs.h>
 #include <lustre_compat/linux/shrinker.h>
 #include <lustre_compat/linux/xarray.h>
 #include <obd_support.h>
-
-#include <lustre_compat/linux/linux-misc.h>
 
 #ifdef HAVE_4ARGS_VFS_SYMLINK
 #define ll_vfs_symlink(dir, dentry, mnt, path, mode) \
@@ -157,11 +154,6 @@ static inline int d_in_lookup(struct dentry *dentry)
 #define vfs_unlink(ns, dir, de) vfs_unlink(dir, de, NULL)
 #else
 #define vfs_unlink(ns, dir, de) vfs_unlink(dir, de)
-#endif
-
-#ifndef HAVE_MNT_IDMAP_ARG
-#define mnt_idmap	user_namespace
-#define nop_mnt_idmap	init_user_ns
 #endif
 
 static inline int ll_vfs_getattr(struct path *path, struct kstat *st,
@@ -498,22 +490,6 @@ static inline bool is_root_inode(struct inode *inode)
 #define HAVE_DIO_ITER 1
 #endif
 
-#if !defined HAVE_IOV_ITER_GET_PAGES_ALLOC2 && defined HAVE_DIO_ITER
-static inline ssize_t iov_iter_get_pages_alloc2(struct iov_iter *i,
-						   struct page ***pages,
-						   size_t maxsize,
-						   size_t *start)
-{
-	ssize_t result = 0;
-
-	/* iov_iter_get_pages_alloc is non advancing version of alloc2 */
-	result = iov_iter_get_pages_alloc(i, pages, maxsize, start);
-	if (result > 0 && user_backed_iter(i))
-		iov_iter_advance(i, result);
-
-	return result;
-}
-#endif
 
 #ifdef HAVE_AOPS_MIGRATE_FOLIO
 #define folio_migr	folio
