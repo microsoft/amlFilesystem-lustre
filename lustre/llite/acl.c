@@ -150,19 +150,16 @@ int ll_set_acl(struct mnt_idmap *map,
 		return rc;
 
 	if (acl) {
-		value_size = posix_acl_xattr_size(acl->a_count);
-		value = kmalloc(value_size, GFP_NOFS);
-		if (value == NULL)
-			GOTO(out, rc = -ENOMEM);
-
-		{
 		size_t xsz = 0;
-		void *xv = posix_acl_to_xattr(&init_user_ns, acl, &xsz, GFP_NOFS);
-		if (IS_ERR(xv)) { rc = PTR_ERR(xv); } else {
-			if (value) OBD_FREE(value, value_size);
-			value = xv; value_size = xsz; rc = xsz;
+
+		value = posix_acl_to_xattr(&init_user_ns, acl, &xsz, GFP_NOFS);
+		if (IS_ERR(value)) {
+			rc = PTR_ERR(value);
+			value = NULL;
+			GOTO(out, rc);
 		}
-		}
+		value_size = xsz;
+		rc = xsz;
 		if (rc < 0)
 			GOTO(out_value, rc);
 	}

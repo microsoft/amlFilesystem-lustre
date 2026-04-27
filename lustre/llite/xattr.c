@@ -575,16 +575,17 @@ static int ll_xattr_get_common(const struct xattr_handler *handler,
 		if (!acl)
 			RETURN(-ENODATA);
 
+		posix_acl_release(acl);
 		{
 		size_t xsz = 0;
-		void *xv = posix_acl_to_xattr(&init_user_ns, acl, &xsz, GFP_NOFS);
-		posix_acl_release(acl);
+		void *xv = posix_acl_to_xattr(&init_user_ns, acl, &xsz,
+					       GFP_NOFS);
 		if (IS_ERR(xv))
 			RETURN(PTR_ERR(xv));
-		OBD_FREE(buffer, size);
-		buffer = xv;
-		size = xsz;
-		RETURN(xsz);
+		rc = min_t(size_t, xsz, size);
+		memcpy(buffer, xv, rc);
+		kfree(xv);
+		RETURN(rc);
 		}
 	}
 	if (handler->flags == XATTR_ACL_DEFAULT_T && !S_ISDIR(inode->i_mode))

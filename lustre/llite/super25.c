@@ -222,9 +222,18 @@ static int lustre_parse_monolithic(struct fs_context *fc, void *data)
 	return 0;
 }
 
+static int lustre_reconfigure(struct fs_context *fc)
+{
+	struct super_block *sb = fc->root->d_sb;
+	int flags = fc->sb_flags;
+
+	return ll_remount_fs(sb, &flags, NULL);
+}
+
 static const struct fs_context_operations lustre_context_ops = {
 	.get_tree	= lustre_get_tree,
 	.parse_monolithic	= lustre_parse_monolithic,
+	.reconfigure	= lustre_reconfigure,
 };
 
 static int lustre_init_fs_context(struct fs_context *fc)
