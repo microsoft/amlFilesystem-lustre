@@ -2280,6 +2280,17 @@ out:
 	RETURN(dio_switch);
 }
 
+/* -EINVAL and -EFAULT reject the request itself (e.g. unaligned AIO) */
+static bool ll_dio_ec_read_retry(int rc)
+{
+	return rc && rc != -EINVAL && rc != -EFAULT;
+}
+
+static bool ll_dio_aio_ec_sync(struct cl_io *io, ssize_t result)
+{
+	return io->ci_dio_aio && io->ci_ec_layout && result == 0;
+}
+
 #define RETRY_ATTEMPTS 1000
 
 static ssize_t
@@ -2417,6 +2428,18 @@ restart:
 		rc = io->ci_result;
 	}
 
+	/* The submission reference keeps end_io from running until the
+	 * wait below, so async completion can still be disarmed here.
+	 * Not after an earlier async pass has counted bytes: the wait
+	 * would return its error and recovery rebuilds only this pass.
+	 */
+	if (is_aio && iot == CIT_READ && ll_dio_aio_ec_sync(io, result)) {
+		io->ci_dio_aio->cda_no_aio_complete = 1;
+		io->ci_dio_aio->cda_creator_free = 1;
+		/* complete as sync DIO, across restarts and error exits */
+		is_aio = false;
+	}
+
 	if (io->ci_dio_aio && !is_aio) {
 		struct cl_sync_io *anchor = &io->ci_dio_aio->cda_sync;
 
@@ -2439,16 +2462,12 @@ restart:
 		 * after cl_io_end, so the synchronous -EAGAIN handling in
 		 * cl_io_loop cannot catch it.  Switch to CIT_EC_RD and
 		 * restart to reconstruct from parity (buffered IO).
-		 *
-		 * This only handles sync DIO (!is_aio).  For true AIO, the
-		 * completion fires externally via cl_dio_aio_end after the
-		 * syscall returns, so we cannot restart the IO from that
-		 * context.  AIO EC recovery is not yet implemented.
-		 * Nor for O_CIPHERTEXT with the key, which buffered IO would
-		 * decrypt.
+		 * Also reached for AIO converted to sync above.
+		 * O_CIPHERTEXT with the key cannot use buffered recovery,
+		 * which would decrypt the data.
 		 */
-		if (rc && iot == CIT_READ && io->ci_cross_ec &&
-		    !io->ci_switch_ec_io &&
+		if (ll_dio_ec_read_retry(rc) && iot == CIT_READ &&
+		    io->ci_cross_ec && !io->ci_switch_ec_io &&
 		    !(ll_dio_ciphertext(file) &&
 		      ll_has_encryption_key(inode))) {
 			CDEBUG(D_VFSTRACE,

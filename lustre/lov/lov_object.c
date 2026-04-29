@@ -767,6 +767,9 @@ static int lov_init_composite(const struct lu_env *env, struct lov_device *dev,
 		lre->lre_parity = lsme_is_parity(lle->lle_lsme);
 	}
 
+	for (i = 0; i < comp->lo_mirror_count; i++)
+		comp->lo_has_parity |= comp->lo_mirrors[i].lre_parity;
+
 	/* sanity check for FLR */
 	if (mirror_count != comp->lo_mirror_count) {
 		CDEBUG(D_INODE, DFID

@@ -27,9 +27,6 @@ ALWAYS_EXCEPT="$SANITY_EC_EXCEPT "
 always_except LU-20708 41d
 always_except LU-20709 53a
 
-# aio EC recovery is not working yet
-always_except LU-20566 41j 41k 41l 41m 41n
-
 if [[ "$ost1_FSTYPE" == "zfs" ]]; then
 	# test 5b: EC resync hole-punches stale parity, but osd-zfs has no
 	# fallocate hole-punch, so resync fails with EOPNOTSUPP (LU-20435)
@@ -7103,6 +7100,92 @@ test_41n() {
 			"$sum_aio"
 }
 run_test 41n "test AIO vs buffered recovery on same file"
+
+test_41p() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+	enable_ec
+	which aiocp || skip_env "no aiocp installed"
+
+	local tf=$DIR/$tfile
+	local tmp=$TMP/$tfile.aio
+	local ostname osc
+
+	stack_trap "rm -f $tf $tmp"
+	$LFS setstripe -E eof -S 1M -c 4 --ec 4+2 $tf ||
+		error "setstripe --ec 4+2 failed"
+	dd if=/dev/urandom of=$tf bs=1M count=8 oflag=direct ||
+		error "dd write failed"
+	$LFS mirror resync $tf || error "mirror resync failed"
+	local sum_before=$(md5sum $tf | awk '{print $1}')
+
+	ec_data_stripe_osts $tf 1
+	ostname=$(ostname_from_index ${EC_STRIPE_OSTS[0]} $DIR)
+	osc=$(get_clientosc_proc_path $ostname)
+	cancel_lru_locks osc
+	$LCTL set_param osc.$osc.active=0 ||
+		error "deactivate $ostname failed"
+	stack_trap "$LCTL set_param osc.$osc.active=1"
+
+	# The first stripe queues DIO before the inactive second stripe.
+	touch $tmp
+	aiocp -a $PAGE_SIZE -b 8M -s 8M -f O_DIRECT $tf $tmp ||
+		error "AIO read with inactive stripe failed"
+	local sum_after=$(md5sum $tmp | awk '{print $1}')
+
+	[[ "$sum_before" == "$sum_after" ]] ||
+		error "AIO inactive stripe checksum: $sum_before vs $sum_after"
+}
+run_test 41p "test AIO recovery with an inactive later stripe"
+
+test_41q() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+	remote_ost || skip_env "client and OST fail_loc need separate nodes"
+	enable_ec
+	which aiocp || skip_env "no aiocp installed"
+
+	local tf=$DIR/$tfile
+	local tmp=$TMP/$tfile.aio
+	local id ost
+
+	stack_trap "rm -f $tf $tmp"
+	# The preferred plain mirror is read first, so the first pass of
+	# the read is not on an EC component.
+	$LFS setstripe -N -E eof -S 1M -c 2 --flags=prefer \
+		-N -E eof -S 1M -c 4 --ec 4+2 $tf ||
+		error "setstripe plain + EC mirrors failed"
+	dd if=/dev/urandom of=$tf bs=1M count=8 oflag=direct ||
+		error "dd write failed"
+	$LFS mirror resync $tf || error "mirror resync failed"
+	local sum_before=$(md5sum $tf | awk '{print $1}')
+
+	id=$($LFS getstripe $tf | awk '/lcme_id/ { print $2; exit }')
+	ost=$($LFS getstripe -I$id $tf | awk '/l_ost_idx:/ { print $5; exit }')
+	ost=${ost%,}
+	ec_check_fault_index $ost
+	ec_set_resend_count 1
+	stack_trap "ec_ost_fail_loc 0 0; ec_restore_resend_count"
+	#define OBD_FAIL_OST_BRW_READ_BULK 0x20f
+	ec_ost_fail_loc 0x20f $(( 0x10000 | (1 << ost) ))
+	cancel_lru_locks osc
+
+	# Queue the failing first stripe, then restart the read at the
+	# second stripe, which moves it to the EC mirror.
+	#define OBD_FAIL_LLITE_LOST_LAYOUT 0x1407
+	stack_trap "$LCTL set_param fail_loc=0"
+	$LCTL set_param fail_loc=0xa0001407 fail_val=1
+	touch $tmp
+	if aiocp -a $PAGE_SIZE -b 8M -s 8M -f O_DIRECT $tf $tmp; then
+		local sum_after=$(md5sum $tmp | awk '{print $1}')
+
+		[[ "$sum_before" == "$sum_after" ]] ||
+			error "AIO read returned wrong data:" \
+				"$sum_before vs $sum_after"
+	else
+		echo "AIO read failed, as sync DIO does"
+	fi
+}
+run_test 41q "test AIO read error on a plain mirror of an EC file"
 
 test_42a() {
 	enable_ec

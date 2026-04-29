@@ -795,6 +795,8 @@ static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 		index = (index + 1) % comp->lo_mirror_count;
 	}
 
+	io->ci_ec_layout = comp->lo_has_parity;
+
 	for (i = 0; i < comp->lo_mirror_count; i++) {
 		struct lu_extent ext = { .e_start = lio->lis_pos,
 					 .e_end   = lio->lis_pos + 1 };

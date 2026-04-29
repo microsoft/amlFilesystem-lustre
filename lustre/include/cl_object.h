@@ -2105,6 +2105,8 @@ struct cl_io {
 			     ci_switch_ec_io:1,
 	/* this IO is lockless */
 			     ci_lockless:1,
+	/* the layout has a parity mirror, even where pos is not covered */
+			     ci_ec_layout:1,
 	/* Normal read tried all data mirrors, and if it is across component
 	 * which have matching parity codes, so it's possible to recover the
 	 * missing data with ec read.

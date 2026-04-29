@@ -1994,7 +1994,9 @@ EXPORT_SYMBOL(cl_sync_io_note);
 
 /* this function waits for completion of outstanding io and then re-initializes
  * the anchor used to track it.  This is used to wait to complete DIO before
- * returning to userspace, and is never called for true AIO
+ * returning to userspace; a true AIO may only call this after disarming its
+ * async completion (cda_no_aio_complete, cda_creator_free), converting the
+ * rest of the IO to synchronous behavior
  */
 int cl_sync_io_wait_recycle(const struct lu_env *env, struct cl_sync_io *anchor,
 			    long timeout, int ioret)

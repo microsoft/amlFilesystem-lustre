@@ -379,6 +379,8 @@ struct lov_object {
 			int             lo_preferred_mirror;
 			/* For FLR: Number of (valid) mirrors. */
 			unsigned int lo_mirror_count;
+			/* For EC: a mirror has a parity component */
+			bool		lo_has_parity;
 			struct lov_mirror_entry *lo_mirrors;
 			/* Current entry count of lo_entries, include
 			 * invalid entries.
