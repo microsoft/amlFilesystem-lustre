@@ -1,4 +1,9 @@
 License:        GPL-2.0-only
+# Azure Linux 3: kmodtool hardcodes /usr/sbin/depmod which doesn't exist on AL3.
+# The kmodtool wrapper filters that dependency; require kmod explicitly for depmod.
+%if 0%{?azurelinux}
+Requires:       kmod
+%endif
 %if 0%{?suse_version} > 1
 Requires:       kernel-%1
 %endif

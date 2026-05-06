@@ -1,0 +1,14 @@
+# vim:expandtab:shiftwidth=4:softtabstop=4:tabstop=4:
+source ${LBUILD_DIR}/lbuild-rhel
+
+DEVEL_PATH_ARCH_DELIMETER="."
+RPM_HELPERS_DIR="/usr/lib/rpm/azl"
+KERNEL_DEBUGINFO="kernel-debugsource-${lnxmaj}-${lnxrel}.${TARGET_ARCH}.rpm"
+
+# Force %dist in ~/.rpmmacros to keep RPM names consistent with Azure Linux
+RMAC=$HOME/.rpmmacros
+if ! grep -q '^%dist' "$RMAC" 2>/dev/null; then
+    echo '%dist .azl3' >> "$RMAC"
+fi
+
+# Reuse the RHEL helper implementations

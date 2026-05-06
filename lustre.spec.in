@@ -36,9 +36,42 @@
 %global enable_multi_lnds 1
 %endif
 
-# LUTF Turn off brp-python-precompile script as we don't want the python files
-# to be compiled on installation
+# Detect Azure Linux early so we can use it in conditionals below
+%if "%{_vendor}" == "azl" || 0%{?azl} || 0%{?azl3}
+%global azurelinux 1
+%endif
+
+# Azure Linux 3: kmodtool hardcodes /usr/sbin/depmod and /usr/sbin/weak-modules
+# which don't exist on AL3. Create a wrapper that filters these out.
+# The wrapper is created at spec parse time; echo 1 ensures no problematic output.
+# We use -s option to kernel_module_package to specify the kmodtool script.
+# _kmodtool_opt is empty on other distros so it has no effect there.
+%if 0%{?azl3}
+%global _kmodtool_wrapper_init %(cat > /tmp/kmodtool-wrapper << 'KMODWRAP'
+#!/bin/bash
+/usr/lib/rpm/redhat/kmodtool "$@" | sed \\
+    -e '/Requires(post):.*\\/usr\\/sbin\\/depmod/d' \\
+    -e '/Requires(postun):.*\\/usr\\/sbin\\/depmod/d' \\
+    -e '/Requires(post):.*\\/usr\\/sbin\\/weak-modules/d' \\
+    -e '/Requires(postun):.*\\/usr\\/sbin\\/weak-modules/d'
+KMODWRAP
+chmod +x /tmp/kmodtool-wrapper && echo 1)
+%global _kmodtool_opt -s /tmp/kmodtool-wrapper
+%else
+%global _kmodtool_opt %{nil}
+%endif
+
+# LUTF Turn off brp-python-bytecompile script as we don't want the python files
+# to be compiled on installation.
+# Also disable brp-strip to preserve kernel module signatures for Secure Boot.
+%if 0%{?rhel} || 0%{?fedora} || 0%{?azurelinux}
+# RHEL/Fedora/Azure Linux: use __brp_* macros directly
+%global __brp_strip %{nil}
+%global __brp_python_bytecompile %{nil}
+%else
+# SUSE and others: sed out the scripts from __os_install_post
 %global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g' | sed -e 's!/usr/lib[^[:space:]]*/brp-strip.*[[:space:]].*$!!g')
+%endif
 
 # By default both gss and gss keyring are disabled.
 # gss keyring requires the gss core. If the builder
@@ -128,7 +161,7 @@
 # response from them
 #%%global _use_internal_dependency_generator 0
 
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?azurelinux}
 ## SUSE uses another tool for provides:
 ## https://github.com/openSUSE/kernel-source/blob/master/patches.rpmify/Add-ksym-provides-tool.patch
 %global __find_provides   %{_sourcedir}/find-provides
@@ -171,7 +204,7 @@
 # requires want to set a version including epoch
 %global krequires %(echo %{kver} | sed -e 's/\.x86_64$//' -e 's/\.i[3456]86$//' -e 's/-smp$//' -e 's/-bigsmp$//' -e 's/[-.]ppc64$//' -e 's/\.aarch64$//' -e 's/-default$//' -e 's/-%{_flavor}//')
 
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler} || 0%{?azurelinux}
 	%global kmod_prefix kmod-
 	%global kmod_postfix %{nil}
 	%global kmod_flavor %{nil}
@@ -213,8 +246,8 @@
 %define with_systemd 1
 %endif
 
-# openEuler comes with systemd
-%if 0%{?openEuler}
+# openEuler and Azure Linux come with systemd
+%if 0%{?openEuler} || 0%{?azurelinux}
 %define with_systemd 1
 %endif
 
@@ -234,7 +267,10 @@
 Summary: Lustre File System
 Name: %{lustre_name}
 Version: %{version}
-%if %{defined pkg_release_ver}
+# Allow -D pkg_release override for distros where pkg_release_ver contains invalid chars (e.g., AL3 rejects hyphens)
+%if %{defined pkg_release}
+Release: %{pkg_release}
+%elif %{defined pkg_release_ver}
 Release: %{pkg_release_ver}
 %else
 Release: %{release_id}%{?dist}
@@ -244,8 +280,6 @@ License: GPL-2.0-only AND LGPL-2.1-or-later
 # SUSE needs Group for the kernel_module_package macro
 Group: System/Kernel
 %endif
-%endif
-License: GPL
 Group: System Environment/Kernel
 Source: %{package_version}.tar.gz
 Source1: kmp-lustre.preamble
@@ -282,10 +316,13 @@ Provides: lustre-client = %{version}-%{release}
 # Lustre modules
 %if %{with lustre_modules}
 #
-%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34
+%if %{undefined lustre_version_sha}
+# Upstream builds: use soft deps (boolean OR for modern distros)
+%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34 || 0%{?azurelinux}
 Requires: (%{lustre_name}-dkms or %{requires_kmod_name} >= %{requires_release_major_minor})
 %else
 Requires: %{requires_kmod_name} >= %{requires_release_major_minor}
+%endif
 %endif
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
@@ -305,7 +342,7 @@ BuildRequires: kernel-source
 %if %{defined kernel_module_package_buildreqs}
 BuildRequires: %kernel_module_package_buildreqs
 %else
-%if 0%{?rhel} >= 8 || 0%{?openEuler}
+%if 0%{?rhel} >= 8 || 0%{?openEuler} || 0%{?azurelinux}
 BuildRequires: kernel-rpm-macros
 %endif
 %if 0%{?sle_version} >= 150300
@@ -358,14 +395,18 @@ BuildRequires: pkgconfig(libselinux) openssl-devel
 #
 # Vendor specifics:
 #
-%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora" || 0%{?openEuler} || 0%{?azurelinux}
 # selinux is used by default
 BuildRequires: pkgconfig(libselinux)
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Suggests: bash-completion
 %endif
 %if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
 BuildRequires: redhat-rpm-config
+%endif
+%if "%{_vendor}" == "azl" || 0%{?azurelinux}
+BuildRequires: azurelinux-rpm-macros
+BuildRequires: pkgconfig
 %endif
 #
 %if 0%{?openEuler}
@@ -402,10 +443,10 @@ echo $TMPFILE
 %else
 %define preamble %{SOURCE1}
 %endif
-%kernel_module_package -n %{name} -p %preamble -f %SOURCE2 %{_flavor}
+%kernel_module_package %{_kmodtool_opt} -n %{name} -p %preamble -f %SOURCE2 %{_flavor}
 
 %if %{with ldiskfs}
-%kernel_module_package -n %{name}-osd-ldiskfs -p %SOURCE3 -f %SOURCE4 %{_flavor}
+%kernel_module_package %{_kmodtool_opt} -n %{name}-osd-ldiskfs -p %SOURCE3 -f %SOURCE4 %{_flavor}
 %if %{with lustre_utils}
 %package osd-ldiskfs-mount
 Summary: Lustre mount's ldiskfs-specific helper library
@@ -427,7 +468,7 @@ lustre tools (mount/mkfs) to provide support for ldisfs
 
 %if %{with zfs}
 %global confzfsdobjpath %(echo '%configure_args' | grep -q -- --with-zfs-obj= ; echo $?)
-%kernel_module_package -n %{name}-osd-zfs -p %SOURCE5 -f %SOURCE6 %{_flavor}
+%kernel_module_package %{_kmodtool_opt} -n %{name}-osd-zfs -p %SOURCE5 -f %SOURCE6 %{_flavor}
 %if %{with lustre_utils}
 %package osd-zfs-mount
 Summary: Lustre mount's zfs-specific helper library
@@ -503,10 +544,13 @@ Summary: Lustre include headers
 Provides: lustre-devel = %{version}
 Requires: %{lustre_name} = %{version}
 %if %{with lustre_modules}
-%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34
+%if %{undefined lustre_version_sha}
+# Upstream builds: use soft deps
+%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34 || 0%{?azurelinux}
 Requires: (%{lustre_name}-dkms or %{requires_kmod_name} >= %{requires_release_major_minor})
 %else
 Requires: %{requires_kmod_name} >= %{requires_release_major_minor}
+%endif
 %endif
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
@@ -529,16 +573,19 @@ Requires: %{name} = %{version}, %{lustre_name}-iokit
 Requires: %{name} = %{version}
 %endif
 Requires: lustre-devel = %{version}
-%if 0%{?rhel} >= 8 || 0%{?suse_version} >= 1500 || 0%{?openEuler}
+%if 0%{?rhel} >= 8 || 0%{?suse_version} >= 1500 || 0%{?openEuler} || 0%{?azurelinux}
 Requires: python3 >= 3.6.0, python3-PyYAML
 %endif
 %if %{with lustre_modules}
-%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34
+%if %{undefined lustre_version_sha}
+# Upstream builds: use soft deps
+%if 0%{?suse_version} >= 1500 || 0%{?rhel} >= 8 || 0%{?fedora} >= 34 || 0%{?azurelinux}
 Requires: (%{lustre_name}-dkms or %{requires_kmod_name} >= %{requires_release_major_minor})
 %else
 Requires: %{requires_kmod_name} >= %{requires_release_major_minor}
 %endif
 Requires: %{requires_kmod_tests_name} >= %{requires_release_major_minor}
+%endif
 %if %{with kmod_dep}
 Requires: %{requires_kmod_name} = %{requires_kmod_version}
 Requires: %{requires_kmod_tests_name} = %{requires_kmod_version}
@@ -550,7 +597,7 @@ Requires: python3 >= 3.6.0
 Requires: attr, rsync, lsof, /usr/bin/getconf
 Requires: /usr/sbin/getenforce, acl, /usr/bin/killall, /usr/bin/ping, bc
 # Of the supported targets, only rhel7 doesn't support Recommends.
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Recommends: perl, dbench, iozone, vmtouch
 # Either of these is sufficient
 Suggests: pdsh, clush
@@ -560,7 +607,7 @@ Suggests: pdsh, clush
 BuildRequires: mpich-devel
 %endif
 %if "%{mpi_name}" == "openmpi"
-%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?suse_version} < 1500
+%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?azurelinux} || 0%{?suse_version} < 1500
 BuildRequires: openmpi-devel
 %else
 %if 0%{?sle_version} && 0%{?sle_version} >= 150600
@@ -655,7 +702,7 @@ This package includes:
 %package -n %{lustre_name}-iokit
 Summary: Collection of benchmark tools for a cluster with the Lustre file system
 Requires: sg3_utils
-%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Recommends: perl
 %endif
 
@@ -882,7 +929,6 @@ fi
 # kernel_module_path macro.
 basemodpath=$RPM_BUILD_ROOT%{modules_fs_path}/%{name}
 %{__install} -D -m 0644 ${PWD}/Module.symvers %{buildroot}/Module.symvers
-%if %{with lustre_modules}
 %{__install} -D -m 0644 ${PWD}/Module.symvers %{buildroot}/%{_usrsrc}/lustre-%{version}/%{_arch}/%{_flavor}/Module.symvers
 %{__install} -D -m 0644 ${PWD}/config.h %{buildroot}/%{_usrsrc}/lustre-%{version}/%{_arch}/%{_flavor}/config.h
 for fname in $(find lnet/include -type f -name \*.h); do
@@ -957,7 +1003,7 @@ echo '%{_unitdir}/lsvcgss.service' >>lustre.files
 %endif
 
 # vendor is redhat
-%if "%{_vendor}" == "redhat" || 0%{?openEuler}
+%if "%{_vendor}" == "redhat" || 0%{?openEuler} || 0%{?azurelinux}
 # The following scripts are Red Hat specific
 %if %{with servers}
 echo '%{_sysconfdir}/init.d/lustre' >>lustre.files

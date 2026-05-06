@@ -6142,6 +6142,7 @@ lustre/kernel_patches/targets/3.x-fc18.target
 lustre/kernel_patches/targets/5.10-oe2203.target
 lustre/kernel_patches/targets/5.10-oe2203sp1.target
 lustre/kernel_patches/targets/5.10-oe2203sp2.target
+lustre/kernel_patches/targets/6.6-azurelinux3.target
 lustre/ldlm/Makefile
 lustre/ldlm/autoMakefile
 lustre/fid/Makefile
