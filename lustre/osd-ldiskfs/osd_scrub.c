@@ -198,7 +198,7 @@ int osd_scrub_refresh_mapping(struct osd_thread_info *info,
 			      enum oi_check_flags flags, bool *exist)
 {
 	handle_t *th;
-	int	  rc;
+	int rc = 0;
 
 	ENTRY;
 

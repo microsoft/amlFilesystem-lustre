@@ -996,6 +996,7 @@ kiblnd_destroy_conn(struct kib_conn *conn)
 	default:
 		/* conn must be completely disengaged from the network */
 		LBUG();
+		fallthrough;
 
 	case IBLND_CONN_DISCONNECTED:
 		/* connvars should have been freed already */
@@ -3397,6 +3398,7 @@ kiblnd_base_shutdown(void)
 	switch (kiblnd_data.kib_init) {
 	default:
 		LBUG();
+		fallthrough;
 
 	case IBLND_INIT_ALL:
 	case IBLND_INIT_DATA:
@@ -3462,6 +3464,7 @@ kiblnd_shutdown(struct lnet_ni *ni)
 	switch (net->ibn_init) {
 	default:
 		LBUG();
+		fallthrough;
 
 	case IBLND_INIT_ALL:
 		/* nuke all existing peers within this net */

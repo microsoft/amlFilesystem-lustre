@@ -10428,17 +10428,6 @@ static inline int has_times_option(int argc, char **argv)
 	return 0;
 }
 
-static inline int has_lqa_option(int argc, char **argv)
-{
-	int i;
-
-	for (i = 1; i < argc; i++)
-		if (!strcmp(argv[i], "--lqa"))
-			return 1;
-
-	return 0;
-}
-
 /*
  * Strip a leading "fsname." qualifier from a --pool/--not-pool argument,
  * matching llapi_pool_name_validate()'s handling of the same "fsname.pool"

@@ -829,7 +829,7 @@ static int ll_intent_file_open(struct dentry *de, void *lmm, ssize_t lmmsize,
 	u64 len = 0;
 	struct md_op_data *op_data;
 	struct ptlrpc_request *req = NULL;
-	int rc;
+	int rc = 0;
 
 	ENTRY;
 	LASSERT(parent != NULL);

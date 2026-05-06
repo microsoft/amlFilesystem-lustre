@@ -1393,6 +1393,7 @@ kiblnd_queue_tx_locked(struct kib_tx *tx, struct kib_conn *conn)
 	switch (tx->tx_msg->ibm_type) {
 	default:
 		LBUG();
+		fallthrough;
 
 	case IBLND_MSG_PUT_REQ:
 	case IBLND_MSG_GET_REQ:
@@ -2126,7 +2127,8 @@ kiblnd_recv(struct lnet_ni *ni, void *private, struct lnet_msg *lntmsg,
 	switch (rxmsg->ibm_type) {
 	default:
 		LBUG();
-		/* fallthrough */
+		fallthrough;
+
 	case IBLND_MSG_IMMEDIATE:
 		nob = offsetof(struct kib_msg,
 			       ibm_u.immediate.ibim_payload[rlen]);
@@ -3515,6 +3517,7 @@ kiblnd_cm_callback(struct rdma_cm_id *cmid, struct rdma_cm_event *event)
 		CERROR("Unexpected event: %d, status: %d\n",
 		       event->event, event->status);
 		LBUG();
+		fallthrough;
 
 	case RDMA_CM_EVENT_CONNECT_REQUEST:
 		/* destroy cmid on failure */
@@ -4116,6 +4119,7 @@ kiblnd_complete(struct ib_wc *wc)
 	switch (kiblnd_wreqid2type(wc->wr_id)) {
 	default:
 		LBUG();
+		fallthrough;
 
 	case IBLND_WID_MR:
 		if (wc->status != IB_WC_SUCCESS &&

@@ -1543,12 +1543,10 @@ int osd_fid_unpack(struct lu_fid *fid, const struct osd_fid_pack *pack)
 	int result = 0;
 
 	/* More then one fid can be stored but now copy the first one */
-	switch (pack->fp_len > sizeof(*fid) && pack->fp_len % sizeof(*fid)) {
-	case 1:
+	if (pack->fp_len > sizeof(*fid) && pack->fp_len % sizeof(*fid) == 1) {
 		memcpy(fid, pack->fp_area, sizeof(*fid));
 		fid_be_to_cpu(fid, fid);
-		break;
-	default:
+	} else {
 		CERROR("unexpected packed fid size: %d\n", pack->fp_len);
 		result = -EIO;
 	}

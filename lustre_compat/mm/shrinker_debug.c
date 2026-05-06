@@ -282,18 +282,14 @@ EXPORT_SYMBOL(ll_shrinker_alloc);
 void ll_shrinker_register(struct shrinker *shrinker)
 {
 #ifndef HAVE_SHRINKER_ALLOC
-#ifdef HAVE_REGISTER_SHRINKER_FORMAT_NAMED
+ #ifdef HAVE_REGISTER_SHRINKER_FORMAT_NAMED
 	struct ll_shrinker *s = container_of(shrinker, struct ll_shrinker,
 					     ll_shrinker);
-#endif
-	int rc;
-
- #ifdef HAVE_REGISTER_SHRINKER_FORMAT_NAMED
-	rc = register_shrinker(shrinker, "%pV", &s->vaf);
+	(void)register_shrinker(shrinker, "%pV", &s->vaf);
  #else
-	rc = register_shrinker(shrinker);
+	(void)register_shrinker(shrinker);
  #endif
-#else
+#else /* HAVE_SHRINKER_ALLOC */
 	shrinker_register(shrinker);
 #endif
 }
