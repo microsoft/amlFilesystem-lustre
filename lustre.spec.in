@@ -268,7 +268,6 @@ Source22: kmp-lustre-osd-wbcfs.files
 URL: https://wiki.whamcloud.com/
 BuildRoot: %{_tmppath}/lustre-%{version}-root
 BuildRequires: libtool pkgconfig(yaml-0.1) pkgconfig(zlib) pkgconfig(libnl-3.0) flex bison
-Obsoletes: lustre-client < %{version}
 Provides: lustre-client = %{version}-%{release}
 # Lustre modules
 %if %{with lustre_modules}
