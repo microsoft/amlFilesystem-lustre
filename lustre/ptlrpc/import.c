@@ -38,7 +38,6 @@
 #include <linux/fs_struct.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
-#include <linux/utsname.h>
 #include <obd_support.h>
 #include <lustre_ha.h>
 #include <lustre_net.h>
@@ -734,29 +733,12 @@ int ptlrpc_connect_import_locked(struct obd_import *imp)
 	/* Reset ocd_version each time so the server knows the exact versions */
 	ocd.ocd_version = LUSTRE_VERSION_CODE;
 
-	/* Encode client distro and kernel info for server-side telemetry.
-	 * Layout of ocd_client_version (64 bits):
-	 *   [63:48] distro name   (2 ASCII chars, e.g. "UB" = Ubuntu)
-	 *   [47:32] distro version (2 ASCII chars, e.g. "22" = 22.04)
-	 *   [31:16] kernel release prefix (2 ASCII chars from utsname)
-	 *   [15:0]  reserved
-	 * When built without DISTRO_NAME/DISTRO_VERSION, bits 63:32 are zero
-	 * and the server logs kernel-only info.
+	/* Populate opaque client data for server-side telemetry.
+	 * The value is provided at mount time via the client_data= option
+	 * and cached in imp_client_data for reconnects.
 	 */
-	if (OCD_HAS_FLAG2(&ocd, CLIENT_VERSION)) {
-		struct new_utsname *uts = init_utsname();
-
-		ocd.ocd_client_version =
-			((__u64)(uts->release[0]) << 24) |
-			((__u64)(uts->release[1]) << 16);
-#if defined(DISTRO_NAME) && defined(DISTRO_VERSION)
-		ocd.ocd_client_version |=
-			((__u64)(DISTRO_NAME[0]) << 56) |
-			((__u64)(DISTRO_NAME[1]) << 48) |
-			((__u64)(DISTRO_VERSION[0]) << 40) |
-			((__u64)(DISTRO_VERSION[1]) << 32);
-#endif
-	}
+	if (OCD_HAS_FLAG2(&ocd, CLIENT_DATA))
+		ocd.ocd_client_data = imp->imp_client_data;
 
 	imp->imp_msghdr_flags &= ~MSGHDR_AT_SUPPORT;
 	imp->imp_msghdr_flags &= ~MSGHDR_CKSUM_INCOMPAT18;

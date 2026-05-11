@@ -842,7 +842,7 @@ struct ptlrpc_body_v2 {
 #define OBD_CONNECT2_ATOMIC_OPEN_LOCK	  0x4000000ULL /* lock on first open */
 #define OBD_CONNECT2_ENCRYPT_NAME	  0x8000000ULL /* name encrypt */
 #define OBD_CONNECT2_ENCRYPT_FID2PATH	 0x40000000ULL /* fid2path enc file */
-#define OBD_CONNECT2_CLIENT_VERSION  0x8000000000000000ULL /* AMLFS: client version (bit 63, private) */
+#define OBD_CONNECT2_CLIENT_DATA	 0x80000000ULL /* opaque client data */
 /* XXX README XXX README XXX README XXX README XXX README XXX README XXX
  * Please DO NOT add OBD_CONNECT flags before first ensuring that this value
  * is not in use by some other branch/patch.  Email adilger@whamcloud.com
@@ -910,7 +910,7 @@ struct ptlrpc_body_v2 {
 				OBD_CONNECT2_ATOMIC_OPEN_LOCK | \
 				OBD_CONNECT2_ENCRYPT_NAME | \
 				OBD_CONNECT2_ENCRYPT_FID2PATH | \
-				OBD_CONNECT2_CLIENT_VERSION)
+				OBD_CONNECT2_CLIENT_DATA)
 
 #define OST_CONNECT_SUPPORTED  (OBD_CONNECT_SRVLOCK | OBD_CONNECT_GRANT | \
 				OBD_CONNECT_REQPORTAL | OBD_CONNECT_VERSION | \
@@ -934,7 +934,7 @@ struct ptlrpc_body_v2 {
 #define OST_CONNECT_SUPPORTED2 (OBD_CONNECT2_LOCKAHEAD | OBD_CONNECT2_INC_XID |\
 				OBD_CONNECT2_ENCRYPT | OBD_CONNECT2_LSEEK |\
 				OBD_CONNECT2_REP_MBITS | \
-				OBD_CONNECT2_CLIENT_VERSION)
+				OBD_CONNECT2_CLIENT_DATA)
 
 #define ECHO_CONNECT_SUPPORTED (OBD_CONNECT_FID | OBD_CONNECT_FLAGS2)
 #define ECHO_CONNECT_SUPPORTED2 OBD_CONNECT2_REP_MBITS
@@ -982,7 +982,7 @@ struct obd_connect_data {
 	__u32 padding1;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 ocd_connect_flags2;/* OBD_CONNECT2_* per above */
 	__u64 padding3;		 /* READ BELOW! also fix lustre_swab_connect */
-	__u64 ocd_client_version;/* AMLFS: client distro/kernel version info */
+	__u64 ocd_client_data;	 /* opaque vendor client data */
 	__u64 padding5;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 padding6;		 /* READ BELOW! also fix lustre_swab_connect */
 	__u64 padding7;		 /* READ BELOW! also fix lustre_swab_connect */

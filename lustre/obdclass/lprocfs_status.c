@@ -681,6 +681,7 @@ static const char *const obd_connect_names[] = {
 	"mkdir_replay",			/* 0x10000000 */
 	"dmv_inherit",			/* 0x20000000 */
 	"encryption_fid2path",		/* 0x40000000 */
+	"client_data",			/* 0x80000000 */
 	NULL
 };
 
@@ -812,6 +813,11 @@ obd_connect_data_seqprint(struct seq_file *m, struct obd_connect_data *ocd)
 	if (flags & OBD_CONNECT_MULTIMODRPCS)
 		seq_printf(m, "       max_mod_rpcs: %hu\n",
 			   ocd->ocd_maxmodrpcs);
+	if (ocd->ocd_connect_flags & OBD_CONNECT_FLAGS2) {
+		if (ocd->ocd_connect_flags2 & OBD_CONNECT2_CLIENT_DATA)
+			seq_printf(m, "       client_data: 0x%016llx\n",
+				   ocd->ocd_client_data);
+	}
 }
 
 static void lprocfs_import_seq_show_locked(struct seq_file *m,

@@ -327,6 +327,7 @@ struct obd_import {
 	struct obd_connect_data	  imp_connect_data;
 	__u64			  imp_connect_flags_orig;
 	__u64			  imp_connect_flags2_orig;
+	__u64			  imp_client_data;
 	int			  imp_connect_error;
 
 	enum lustre_msg_magic	imp_msg_magic;

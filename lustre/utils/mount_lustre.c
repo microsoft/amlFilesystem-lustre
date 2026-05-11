@@ -332,6 +332,21 @@ int parse_options(struct mount_opts *mop, char *orig_options,
 			rc = append_option(options, options_len, opt, NULL);
 			if (rc != 0)
 				goto out_options;
+		} else if (val && strncmp(arg, "client_data=", 12) == 0) {
+			/* Pass through to kernel as-is */
+			rc = append_option(options, options_len, opt, NULL);
+			if (rc != 0)
+				goto out_options;
+		} else if (val && strncmp(arg, "client_data_cmd=", 16) == 0) {
+			if (strlen(val + 1) + 1 >= sizeof(mop->mo_client_data_cmd)) {
+				fprintf(stderr,
+					"%s: client_data_cmd path too long\n",
+					progname);
+				free(options);
+				return EINVAL;
+			}
+			strncpy(mop->mo_client_data_cmd, val + 1,
+				sizeof(mop->mo_client_data_cmd) - 1);
 		} else if (strncmp(arg, "nosvc", 5) == 0) {
 			mop->mo_nosvc = 1;
 			rc = append_option(options, options_len, opt, NULL);
@@ -902,6 +917,57 @@ int main(int argc, char *const argv[])
 		fprintf(stderr, "%s: can't parse options: %s\n",
 			progname, options);
 		goto out_options;
+	}
+
+	/* If client_data_cmd was specified but client_data= was not provided
+	 * directly, run the command and inject the result as client_data=.
+	 */
+	if (mop.mo_client_data_cmd[0] != '\0' &&
+	    strstr(options, "client_data=") == NULL) {
+		FILE *fp;
+		char buf[32];
+		unsigned long long val;
+		char *end;
+
+		fp = popen(mop.mo_client_data_cmd, "r");
+		if (fp == NULL) {
+			fprintf(stderr,
+				"%s: warning: failed to run client_data_cmd '%s': %s\n",
+				progname, mop.mo_client_data_cmd,
+				strerror(errno));
+		} else {
+			if (fgets(buf, sizeof(buf), fp) != NULL) {
+				/* Strip trailing whitespace */
+				end = buf + strlen(buf) - 1;
+				while (end >= buf && (*end == '\n' ||
+				       *end == '\r' || *end == ' '))
+					*end-- = '\0';
+
+				errno = 0;
+				val = strtoull(buf, &end, 0);
+				if (errno == 0 && *end == '\0' && end != buf) {
+					char opt[64];
+
+					snprintf(opt, sizeof(opt),
+						 "client_data=0x%llx", val);
+					rc = append_option(options, maxopt_len,
+							   opt, NULL);
+					if (rc != 0) {
+						pclose(fp);
+						goto out_options;
+					}
+				} else {
+					fprintf(stderr,
+						"%s: warning: client_data_cmd output is not a valid 64-bit value: '%s'\n",
+						progname, buf);
+				}
+			} else {
+				fprintf(stderr,
+					"%s: warning: client_data_cmd produced no output\n",
+					progname);
+			}
+			pclose(fp);
+		}
 	}
 
 	if (!mop.mo_force) {

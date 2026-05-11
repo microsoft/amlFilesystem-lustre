@@ -1180,10 +1180,10 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct obd_connect_data, padding3));
 	LASSERTF((int)sizeof(((struct obd_connect_data *)0)->padding3) == 8, "found %lld\n",
 		 (long long)(int)sizeof(((struct obd_connect_data *)0)->padding3));
-	LASSERTF((int)offsetof(struct obd_connect_data, ocd_client_version) == 96, "found %lld\n",
-		 (long long)(int)offsetof(struct obd_connect_data, ocd_client_version));
-	LASSERTF((int)sizeof(((struct obd_connect_data *)0)->ocd_client_version) == 8, "found %lld\n",
-		 (long long)(int)sizeof(((struct obd_connect_data *)0)->ocd_client_version));
+	LASSERTF((int)offsetof(struct obd_connect_data, ocd_client_data) == 96, "found %lld\n",
+		 (long long)(int)offsetof(struct obd_connect_data, ocd_client_data));
+	LASSERTF((int)sizeof(((struct obd_connect_data *)0)->ocd_client_data) == 8, "found %lld\n",
+		 (long long)(int)sizeof(((struct obd_connect_data *)0)->ocd_client_data));
 	LASSERTF((int)offsetof(struct obd_connect_data, padding5) == 104, "found %lld\n",
 		 (long long)(int)offsetof(struct obd_connect_data, padding5));
 	LASSERTF((int)sizeof(((struct obd_connect_data *)0)->padding5) == 8, "found %lld\n",

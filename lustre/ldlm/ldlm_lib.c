@@ -668,6 +668,7 @@ int client_connect_import(const struct lu_env *env,
 		*ocd = *data;
 		imp->imp_connect_flags_orig = data->ocd_connect_flags;
 		imp->imp_connect_flags2_orig = data->ocd_connect_flags2;
+		imp->imp_client_data = data->ocd_client_data;
 	}
 
 	rc = ptlrpc_connect_import(imp);

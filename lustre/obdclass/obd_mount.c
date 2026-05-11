@@ -1403,6 +1403,10 @@ int lmd_parse(char *options, struct lustre_mount_data *lmd)
 			if (rc)
 				goto invalid;
 			clear++;
+		} else if (strncmp(s1, "client_data=", 12) == 0) {
+			lmd->lmd_client_data = simple_strtoull(s1 + 12,
+							       NULL, 0);
+			clear++;
 			/* ost exclusion list */
 		} else if (strncmp(s1, "exclude=", 8) == 0) {
 			rc = lmd_make_exclusion(lmd, s1 + 7);

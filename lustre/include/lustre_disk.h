@@ -87,7 +87,8 @@ struct lustre_mount_data {
 	u32    *lmd_exclude;	/* array of OSTs to ignore */
 	char   *lmd_mgs;	/* MGS nid */
 	char   *lmd_osd_type;	/* OSD type */
-	char   *lmd_nidnet;     /* network to restrict this client to */
+	char   *lmd_nidnet;	/* network to restrict this client to */
+	__u64	lmd_client_data;	/* opaque client data for OBD connect */
 };
 
 #define LMD_FLG_SERVER		0x0001	/* Mounting a server */
