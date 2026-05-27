@@ -101,8 +101,8 @@ struct lu_object *osc_object_alloc(const struct lu_env *env,
 
 static inline int osc_recoverable_error(int rc)
 {
-        return (rc == -EIO || rc == -EROFS || rc == -ENOMEM ||
-                rc == -EAGAIN || rc == -EINPROGRESS);
+	return (rc == -EIO || rc == -EROFS || rc == -ENOMEM ||
+		rc == -EAGAIN || rc == -EINPROGRESS);
 }
 
 static inline unsigned long rpcs_in_flight(struct client_obd *cli)
@@ -125,7 +125,7 @@ int osc_quota_setdq(struct client_obd *cli, __u64 xid, const unsigned int qid[],
 		    u64 valid, u32 flags);
 int osc_quota_chkdq(struct client_obd *cli, const unsigned int qid[]);
 int osc_quotactl(struct obd_device *unused, struct obd_export *exp,
-                 struct obd_quotactl *oqctl);
+		 struct obd_quotactl *oqctl);
 void osc_inc_unstable_pages(struct ptlrpc_request *req);
 void osc_dec_unstable_pages(struct ptlrpc_request *req);
 bool osc_over_unstable_soft_limit(struct client_obd *cli);

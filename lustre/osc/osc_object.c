@@ -103,8 +103,8 @@ EXPORT_SYMBOL(osc_object_free);
 int osc_lvb_print(const struct lu_env *env, void *cookie,
 		  lu_printer_t p, const struct ost_lvb *lvb)
 {
-	return (*p)(env, cookie, "size: %llu mtime: %llu atime: %llu "
-		    "ctime: %llu blocks: %llu",
+	return (*p)(env, cookie,
+		    "size: %llu mtime: %llu atime: %llu ctime: %llu blocks: %llu",
 		    lvb->lvb_size, lvb->lvb_mtime, lvb->lvb_atime,
 		    lvb->lvb_ctime, lvb->lvb_blocks);
 }
@@ -117,9 +117,8 @@ int osc_object_print(const struct lu_env *env, void *cookie,
 	struct lov_oinfo *oinfo = osc->oo_oinfo;
 	struct osc_async_rc *ar = &oinfo->loi_ar;
 
-	(*p)(env, cookie, "id: "DOSTID" "
-	     "idx: %d gen: %d kms_valid: %u kms %llu "
-	     "rc: %d force_sync: %d min_xid: %llu ",
+	(*p)(env, cookie,
+	     "id: "DOSTID" idx: %d gen: %d kms_valid: %u kms %llu rc: %d force_sync: %d min_xid: %llu ",
 	     POSTID(&oinfo->loi_oi), oinfo->loi_ost_idx,
 	     oinfo->loi_ost_gen, oinfo->loi_kms_valid, oinfo->loi_kms,
 	     ar->ar_rc, ar->ar_force_sync, ar->ar_min_xid);
@@ -181,6 +180,7 @@ static int osc_object_ast_clear(struct ldlm_lock *lock, void *data)
 	struct osc_object *osc = (struct osc_object *)data;
 	struct ost_lvb *lvb = lock->l_lvb_data;
 	struct lov_oinfo *oinfo;
+
 	ENTRY;
 
 	if (lock->l_ast_data == data) {
@@ -198,13 +198,13 @@ static int osc_object_ast_clear(struct ldlm_lock *lock, void *data)
 		/* Updates lvb in lock by the cached oinfo */
 		oinfo = osc->oo_oinfo;
 
-		LDLM_DEBUG(lock, "update lock size %llu blocks %llu [cma]time: "
-			   "%llu %llu %llu by oinfo size %llu blocks %llu "
-			   "[cma]time %llu %llu %llu", lvb->lvb_size,
-			   lvb->lvb_blocks, lvb->lvb_ctime, lvb->lvb_mtime,
-			   lvb->lvb_atime, oinfo->loi_lvb.lvb_size,
-			   oinfo->loi_lvb.lvb_blocks, oinfo->loi_lvb.lvb_ctime,
-			   oinfo->loi_lvb.lvb_mtime, oinfo->loi_lvb.lvb_atime);
+		LDLM_DEBUG(lock,
+			   "update lock size %llu blocks %llu [cma]time: %llu %llu %llu by oinfo size %llu blocks %llu [cma]time %llu %llu %llu",
+			   lvb->lvb_size, lvb->lvb_blocks, lvb->lvb_ctime,
+			   lvb->lvb_mtime, lvb->lvb_atime,
+			   oinfo->loi_lvb.lvb_size, oinfo->loi_lvb.lvb_blocks,
+			   oinfo->loi_lvb.lvb_ctime, oinfo->loi_lvb.lvb_mtime,
+			   oinfo->loi_lvb.lvb_atime);
 		LASSERTF(oinfo->loi_lvb.lvb_size >= oinfo->loi_kms,
 			 "lvb_size %#llx, loi_kms %#llx\n",
 			 oinfo->loi_lvb.lvb_size, oinfo->loi_kms);
@@ -265,6 +265,7 @@ static int osc_object_fiemap(const struct lu_env *env, struct cl_object *obj,
 	struct fiemap *reply;
 	char *tmp;
 	int rc;
+
 	ENTRY;
 
 	fmkey->lfik_oa.o_oi = cl2osc(obj)->oo_oinfo->loi_oi;

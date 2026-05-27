@@ -65,36 +65,36 @@ static inline int osc_lock_invariant(struct osc_lock *ols)
 	/*
 	 * If all the following "ergo"s are true, return 1, otherwise 0
 	 */
-	if (! ergo(olock != NULL, handle_used))
+	if (!ergo(olock != NULL, handle_used))
 		return 0;
 
-	if (! ergo(olock != NULL,
-		   olock->l_handle.h_cookie == ols->ols_handle.cookie))
+	if (!ergo(olock != NULL,
+		  olock->l_handle.h_cookie == ols->ols_handle.cookie))
 		return 0;
 
-	if (! ergo(handle_used,
-		   ergo(lock != NULL && olock != NULL, lock == olock) &&
-		   ergo(lock == NULL, olock == NULL)))
+	if (!ergo(handle_used,
+		  ergo(lock != NULL && olock != NULL, lock == olock) &&
+		  ergo(lock == NULL, olock == NULL)))
 		return 0;
 	/*
 	 * Check that ->ols_handle and ->ols_dlmlock are consistent, but
 	 * take into account that they are set at the different time.
 	 */
-	if (! ergo(ols->ols_state == OLS_CANCELLED,
-		   olock == NULL && !handle_used))
+	if (!ergo(ols->ols_state == OLS_CANCELLED,
+		  olock == NULL && !handle_used))
 		return 0;
 	/*
 	 * DLM lock is destroyed only after we have seen cancellation
 	 * ast.
 	 */
-	if (! ergo(olock != NULL && ols->ols_state < OLS_CANCELLED,
-		   !(olock->l_flags & LDLM_FL_DESTROYED)))
+	if (!ergo(olock != NULL && ols->ols_state < OLS_CANCELLED,
+		  !(olock->l_flags & LDLM_FL_DESTROYED)))
 		return 0;
 
-	if (! ergo(ols->ols_state == OLS_GRANTED,
-		   olock != NULL &&
-		   ldlm_is_granted(olock) &&
-		   ols->ols_hold))
+	if (!ergo(ols->ols_state == OLS_GRANTED,
+		  olock != NULL &&
+		  ldlm_is_granted(olock) &&
+		  ols->ols_hold))
 		return 0;
 	return 1;
 }
@@ -162,17 +162,18 @@ void osc_lock_lvb_update(const struct lu_env *env,
 		check_res_locked(dlmlock->l_resource);
 
 		LASSERT(lvb == dlmlock->l_lvb_data);
-                size = lvb->lvb_size;
+		size = lvb->lvb_size;
 
-                /* Extend KMS up to the end of this lock and no further
-                 * A lock on [x,y] means a KMS of up to y + 1 bytes! */
-                if (size > dlmlock->l_policy_data.l_extent.end)
-                        size = dlmlock->l_policy_data.l_extent.end + 1;
-                if (size >= oinfo->loi_kms) {
-                        valid |= CAT_KMS;
-                        attr->cat_kms = size;
+		/* Extend KMS up to the end of this lock and no further
+		 * A lock on [x,y] means a KMS of up to y + 1 bytes!
+		 */
+		if (size > dlmlock->l_policy_data.l_extent.end)
+			size = dlmlock->l_policy_data.l_extent.end + 1;
+		if (size >= oinfo->loi_kms) {
+			valid |= CAT_KMS;
+			attr->cat_kms = size;
 			setkms = 1;
-                }
+		}
 		ldlm_lock_allow_match_locked(dlmlock);
 	}
 
@@ -180,8 +181,9 @@ void osc_lock_lvb_update(const struct lu_env *env,
 	if (attr->cat_size < oinfo->loi_kms)
 		attr->cat_size = oinfo->loi_kms;
 
-	LDLM_DEBUG(dlmlock, "acquired size %llu, setting rss=%llu;%s "
-		   "kms=%llu, end=%llu", lvb->lvb_size, attr->cat_size,
+	LDLM_DEBUG(dlmlock,
+		   "acquired size %llu, setting rss=%llu;%s kms=%llu, end=%llu",
+		   lvb->lvb_size, attr->cat_size,
 		   setkms ? "" : " leaving",
 		   setkms ? attr->cat_kms : oinfo->loi_kms,
 		   dlmlock ? dlmlock->l_policy_data.l_extent.end : -1ull);
@@ -310,10 +312,11 @@ static int osc_lock_upcall_speculative(void *cookie,
 				       struct lustre_handle *lockh,
 				       int errcode)
 {
-	struct osc_object	*osc = cookie;
-	struct ldlm_lock	*dlmlock;
-	struct lu_env           *env;
-	__u16			 refcheck;
+	struct osc_object *osc = cookie;
+	struct ldlm_lock *dlmlock;
+	struct lu_env *env;
+	__u16 refcheck;
+
 	ENTRY;
 
 	env = cl_env_get(&refcheck);
@@ -406,10 +409,11 @@ static int __osc_dlm_blocking_ast(const struct lu_env *env,
 				  struct ldlm_lock *dlmlock, void *data,
 				  int flag)
 {
-	struct cl_object	*obj = NULL;
-	int			result = 0;
-	bool			discard;
-	enum cl_lock_mode	mode = CLM_READ;
+	struct cl_object *obj = NULL;
+	int result = 0;
+	bool discard;
+	enum cl_lock_mode mode = CLM_READ;
+
 	ENTRY;
 
 	LASSERT(flag == LDLM_CB_CANCELING);
@@ -526,6 +530,7 @@ static int osc_ldlm_blocking_ast(struct ldlm_lock *dlmlock,
 				 int flag)
 {
 	int result = 0;
+
 	ENTRY;
 
 	switch (flag) {
@@ -635,7 +640,7 @@ int osc_ldlm_glimpse_ast(struct ldlm_lock *dlmlock, void *data)
 		cap = &req->rq_pill;
 		req_capsule_extend(cap, &RQF_LDLM_GL_CALLBACK);
 		req_capsule_set_size(cap, &RMF_DLM_LVB, RCL_SERVER,
-					sizeof *lvb);
+					sizeof(*lvb));
 		result = req_capsule_server_pack(cap);
 		if (result == 0) {
 			lvb = req_capsule_server_get(cap, &RMF_DLM_LVB);
@@ -1002,7 +1007,7 @@ static int osc_lock_enqueue(const struct lu_env *env,
 	__u32 projid;
 	int result;
 
-        ENTRY;
+	ENTRY;
 
 	LASSERTF(ergo(oscl->ols_glimpse, lock->cll_descr.cld_mode <= CLM_READ),
 		"lock = %px, ols = %px\n", lock, oscl);
@@ -1300,10 +1305,10 @@ static void osc_lock_lockless_cancel(const struct lu_env *env,
 }
 
 static const struct cl_lock_operations osc_lock_lockless_ops = {
-        .clo_fini      = osc_lock_fini,
-        .clo_enqueue   = osc_lock_enqueue,
-        .clo_cancel    = osc_lock_lockless_cancel,
-        .clo_print     = osc_lock_print
+	.clo_fini      = osc_lock_fini,
+	.clo_enqueue   = osc_lock_enqueue,
+	.clo_cancel    = osc_lock_lockless_cancel,
+	.clo_print     = osc_lock_print
 };
 
 void osc_lock_set_writer(const struct lu_env *env, const struct cl_io *io,

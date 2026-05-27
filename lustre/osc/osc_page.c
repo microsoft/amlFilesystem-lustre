@@ -58,6 +58,7 @@ int osc_page_cache_add(const struct lu_env *env, struct osc_object *osc,
 		       cl_commit_cbt cb)
 {
 	int result;
+
 	ENTRY;
 
 	osc_page_transfer_get(opg, "transfer\0cache");
@@ -73,7 +74,7 @@ int osc_page_cache_add(const struct lu_env *env, struct osc_object *osc,
 void osc_index2policy(union ldlm_policy_data *policy,
 		      const struct cl_object *obj, pgoff_t start, pgoff_t end)
 {
-	memset(policy, 0, sizeof *policy);
+	memset(policy, 0, sizeof(*policy));
 	policy->l_extent.start = start << PAGE_SHIFT;
 	policy->l_extent.end = ((end + 1) << PAGE_SHIFT) - 1;
 }
@@ -87,13 +88,9 @@ static int osc_page_print(const struct lu_env *env,
 	struct osc_object *obj = osc_page_object(opg);
 	struct client_obd *cli = &osc_export(obj)->exp_obd->u.cli;
 
-	return (*printer)(env, cookie, LUSTRE_OSC_NAME"-page@%p %lu: "
-			  "1< %d %c %c > "
-			  "2< %lld %u %u %#x %#x | %p %p > "
-			  "3< %d %d > "
-			  "4< %d %d %d %lu %c | %c %c %c %c > "
-			  "5< %c %c %c %c | %d %c | %d %c %c>\n",
-			  opg, osc_index(opg),
+	return (*printer)(env, cookie,
+			  "%s-page@%p %lu: 1< %d %c %c > 2< %lld %u %u %#x %#x | %p %p > 3< %d %d > 4< %d %d %d %lu %c | %c %c %c %c > 5< %c %c %c %c | %d %c | %d %c %c>\n",
+			  LUSTRE_OSC_NAME, opg, osc_index(opg),
 			  /* 1 */
 			  oap->oap_cmd,
 			  list_empty_marker(&oap->oap_pending_item),
@@ -262,7 +259,7 @@ int osc_page_init(const struct lu_env *env, struct cl_object *obj,
 						old = radix_tree_deref_slot(
 									slot);
 						CERROR("%s: radix tree insert encountered EXISTING page %p (index=%lu)\n",
-						       obd ->obd_name, old,
+						       obd->obd_name, old,
 						       osc_index(old));
 					}
 				} else {

@@ -463,6 +463,7 @@ static void osc_extent_insert(struct osc_object *obj, struct osc_extent *ext)
 static void osc_extent_erase(struct osc_extent *ext)
 {
 	struct osc_object *obj = ext->oe_obj;
+
 	assert_osc_object_is_locked(obj);
 	if (!RB_EMPTY_NODE(&ext->oe_node)) {
 		rb_erase(&ext->oe_node, &obj->oo_root);
@@ -698,13 +699,14 @@ static struct osc_extent *osc_extent_find(const struct lu_env *env,
 	struct osc_extent *ext;
 	struct osc_extent *conflict = NULL;
 	struct osc_extent *found = NULL;
-	pgoff_t    chunk;
-	pgoff_t    max_end;
+	pgoff_t chunk;
+	pgoff_t max_end;
 	unsigned int max_pages; /* max_pages_per_rpc */
 	unsigned int chunksize;
-	int        ppc_bits; /* pages per chunk bits */
-	pgoff_t    chunk_mask;
-	int        rc;
+	int ppc_bits; /* pages per chunk bits */
+	pgoff_t chunk_mask;
+	int rc;
+
 	ENTRY;
 
 	cur = osc_extent_alloc(obj);
@@ -902,6 +904,7 @@ int osc_extent_finish(const struct lu_env *env, struct osc_extent *ext,
 	loff_t last_off = 0;
 	int last_count = -1;
 	enum cl_req_type crt;
+
 	ENTRY;
 
 	crt = ext->oe_write;
@@ -942,6 +945,7 @@ int osc_extent_finish(const struct lu_env *env, struct osc_extent *ext,
 		int offset = last_off & ~PAGE_MASK;
 		int count = last_count + (offset & (blocksize - 1));
 		int end = (offset + last_count) & (blocksize - 1);
+
 		if (end)
 			count += blocksize - end;
 
@@ -975,6 +979,7 @@ static int osc_extent_wait(const struct lu_env *env, struct osc_extent *ext,
 {
 	struct osc_object *obj = ext->oe_obj;
 	int rc = 0;
+
 	ENTRY;
 
 	osc_object_lock(obj);
@@ -1186,6 +1191,7 @@ static int osc_extent_make_ready(const struct lu_env *env,
 	struct osc_object *obj = ext->oe_obj;
 	unsigned int page_count = 0;
 	int rc;
+
 	ENTRY;
 
 	/* we're going to grab page lock, so object lock must not be taken. */
@@ -1276,6 +1282,7 @@ static int osc_extent_expand(struct osc_extent *ext, pgoff_t index,
 	pgoff_t end_index;
 	unsigned int chunksize = 1 << cli->cl_chunkbits;
 	int rc = 0;
+
 	ENTRY;
 
 	LASSERT(ext->oe_max_end >= index && ext->oe_start <= index);
@@ -1863,6 +1870,7 @@ out:
 static int osc_max_rpc_in_flight(struct client_obd *cli, struct osc_object *osc)
 {
 	int hprpc = !!list_empty(&osc->oo_hp_exts);
+
 	return rpcs_in_flight(cli) >= cli->cl_max_rpcs_in_flight + hprpc;
 }
 
@@ -1882,6 +1890,7 @@ static int osc_makes_rpc(struct client_obd *cli, struct osc_object *osc,
 			 int cmd)
 {
 	int invalid_import = 0;
+
 	ENTRY;
 
 	/* if we have an invalid import we want to drain the queued pages
@@ -1941,6 +1950,7 @@ static int osc_makes_rpc(struct client_obd *cli, struct osc_object *osc,
 static void osc_update_pending(struct osc_object *obj, int cmd, int delta)
 {
 	struct client_obd *cli = osc_cli(obj);
+
 	if (cmd & OBD_BRW_WRITE) {
 		atomic_add(delta, &obj->oo_nr_writes);
 		atomic_add(delta, &cli->cl_pending_w_pages);
@@ -2039,10 +2049,10 @@ struct extent_rpc_data {
 		(cli)->cl_import->imp_connect_data.ocd_brw_size), \
 }
 
-static inline unsigned osc_extent_chunks(const struct osc_extent *ext)
+static inline unsigned int osc_extent_chunks(const struct osc_extent *ext)
 {
 	struct client_obd *cli = osc_cli(ext->oe_obj);
-	unsigned ppc_bits = cli->cl_chunkbits - PAGE_SHIFT;
+	unsigned int ppc_bits = cli->cl_chunkbits - PAGE_SHIFT;
 
 	return (ext->oe_end >> ppc_bits) - (ext->oe_start >> ppc_bits) + 1;
 }
@@ -2113,8 +2123,8 @@ static int try_to_add_extent_for_io(struct client_obd *cli,
 	chunk_count = osc_extent_chunks(ext);
 	EASSERTF(data->erd_page_count != 0 ||
 		 chunk_count <= data->erd_max_chunks, ext,
-		 "The first extent to be fit in a RPC contains %u chunks, "
-		 "which is over the limit %u.\n", chunk_count,
+		 "The first extent to be fit in a RPC contains %u chunks, which is over the limit %u.\n",
+		 chunk_count,
 		 data->erd_max_chunks);
 	if (chunk_count > data->erd_max_chunks)
 		RETURN(0);
@@ -2122,8 +2132,8 @@ static int try_to_add_extent_for_io(struct client_obd *cli,
 	data->erd_max_pages = max(ext->oe_mppr, data->erd_max_pages);
 	EASSERTF(data->erd_page_count != 0 ||
 		 ext->oe_nr_pages <= data->erd_max_pages, ext,
-		 "The first extent to be fit in a RPC contains %u pages, "
-		 "which is over the limit %u.\n", ext->oe_nr_pages,
+		 "The first extent to be fit in a RPC contains %u pages, which is over the limit %u.\n",
+		 ext->oe_nr_pages,
 		 data->erd_max_pages);
 	if (data->erd_page_count + ext->oe_nr_pages > data->erd_max_pages)
 		RETURN(0);
@@ -2244,6 +2254,7 @@ __must_hold(osc)
 	unsigned int page_count = 0;
 	int srvlock = 0;
 	int rc = 0;
+
 	ENTRY;
 
 	assert_osc_object_is_locked(osc);
@@ -2419,6 +2430,7 @@ __must_hold(&cli->cl_loi_list_lock)
 {
 	struct osc_object *osc;
 	int rc = 0;
+
 	ENTRY;
 
 	while ((osc = osc_next_obj(cli)) != NULL) {
@@ -2763,6 +2775,7 @@ int osc_teardown_async_page(const struct lu_env *env,
 {
 	struct osc_async_page *oap = &ops->ops_oap;
 	int rc = 0;
+
 	ENTRY;
 
 	CDEBUG(D_INFO, "teardown oap %p page %p at index %lu.\n",
@@ -3127,6 +3140,7 @@ int osc_cache_truncate_start(const struct lu_env *env, struct osc_object *obj,
 	LIST_HEAD(list);
 	int result = 0;
 	bool partial;
+
 	ENTRY;
 
 	/* pages with index greater or equal to index will be truncated. */
@@ -3300,7 +3314,8 @@ int osc_cache_wait_range(const struct lu_env *env, struct osc_object *obj,
 {
 	struct osc_extent *ext;
 	pgoff_t index = start;
-	int     result = 0;
+	int result = 0;
+
 	ENTRY;
 
 again:
@@ -3437,11 +3452,9 @@ repeat:
 				 * contain this extent */
 				LASSERTF(ext->oe_start >= a_start &&
 					 ext->oe_end <= a_end,
-					 "ext [%lu, %lu] reg [%lu, %lu] "
-					 "orig [%lu %lu] align %lu bits "
-					 "%d\n", ext->oe_start, ext->oe_end,
-					 a_start, a_end, start, end,
-					 align_by, pcc_bits);
+					 "ext [%lu, %lu] reg [%lu, %lu] orig [%lu %lu] align %lu bits %d\n",
+					 ext->oe_start, ext->oe_end, a_start,
+					 a_end, start, end, align_by, pcc_bits);
 				osc_extent_state_set(ext, OES_LOCKING);
 				ext->oe_owner = current;
 				list_move_tail(&ext->oe_link,
@@ -3510,6 +3523,7 @@ repeat:
 
 	if (hp || discard) {
 		int rc;
+
 		rc = osc_cache_wait_range(env, obj, start, end);
 		if (result >= 0 && rc < 0)
 			result = rc;

@@ -1157,10 +1157,10 @@ static inline int can_merge_pages(struct brw_page *p1, struct brw_page *p2)
 	f1 = p1->bp_flag & ~(OBD_BRW_SOFT_SYNC | OBD_BRW_ASYNC);
 	f2 = p2->bp_flag & ~(OBD_BRW_SOFT_SYNC | OBD_BRW_ASYNC);
 	if (f1 != f2) {
-		unsigned mask = ~(OBD_BRW_FROM_GRANT | OBD_BRW_NOCACHE |
-				  OBD_BRW_SYNC       | OBD_BRW_ASYNC   |
-				  OBD_BRW_NOQUOTA    | OBD_BRW_SOFT_SYNC |
-				  OBD_BRW_SYS_RESOURCE);
+		unsigned int mask = ~(OBD_BRW_FROM_GRANT | OBD_BRW_NOCACHE |
+				      OBD_BRW_SYNC       | OBD_BRW_ASYNC   |
+				      OBD_BRW_NOQUOTA    | OBD_BRW_SOFT_SYNC |
+				      OBD_BRW_SYS_RESOURCE);
 
 		/* warn if combine flags that we don't know to be safe */
 		if (unlikely((p1->bp_flag & mask) != (p2->bp_flag & mask))) {

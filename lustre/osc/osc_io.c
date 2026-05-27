@@ -421,6 +421,7 @@ int osc_io_commit_async(const struct lu_env *env,
 	struct osc_page *opg;
 	struct cl_page_batch *cl_batch = &osc_env_info(env)->oti_cl_batch;
 	int result = 0;
+
 	ENTRY;
 
 	LASSERT(qin->pl_nr > 0);
@@ -584,6 +585,7 @@ int osc_io_fault_start(const struct lu_env *env, const struct cl_io_slice *ios)
 {
 	struct cl_io       *io;
 	struct cl_fault_io *fio;
+
 	ENTRY;
 
 	io  = ios->cis_io;
@@ -607,9 +609,9 @@ static int osc_async_upcall(void *a, int rc)
 {
 	struct osc_async_cbargs *args = a;
 
-        args->opc_rc = rc;
+	args->opc_rc = rc;
 	complete(&args->opc_sync);
-        return 0;
+	return 0;
 }
 
 /**
@@ -706,7 +708,7 @@ static inline void osc_set_projid_info(const struct lu_env *env,
 }
 
 static int osc_io_setattr_start(const struct lu_env *env,
-                                const struct cl_io_slice *slice)
+				const struct cl_io_slice *slice)
 {
 	struct cl_io *io = slice->cis_io;
 	struct osc_io *oio = cl2osc_io(env, slice);
@@ -1036,6 +1038,7 @@ int osc_io_read_start(const struct lu_env *env,
 	struct cl_object *obj  = slice->cis_obj;
 	struct cl_attr	 *attr = &osc_env_info(env)->oti_attr;
 	int rc = 0;
+
 	ENTRY;
 
 	if (!slice->cis_io->ci_noatime) {
@@ -1055,6 +1058,7 @@ int osc_io_write_start(const struct lu_env *env,
 	struct cl_object *obj   = slice->cis_obj;
 	struct cl_attr   *attr  = &osc_env_info(env)->oti_attr;
 	int rc = 0;
+
 	ENTRY;
 
 	CFS_FAIL_TIMEOUT(OBD_FAIL_OSC_DELAY_SETTIME, 1);
@@ -1075,6 +1079,7 @@ int osc_fsync_ost(const struct lu_env *env, struct osc_object *obj,
 	struct lov_oinfo *loi   = obj->oo_oinfo;
 	struct osc_async_cbargs *cbargs = &oio->oi_cbarg;
 	int rc = 0;
+
 	ENTRY;
 
 	memset(oa, 0, sizeof(*oa));
@@ -1203,18 +1208,19 @@ EXPORT_SYMBOL(osc_io_fsync_end);
 static int osc_io_ladvise_start(const struct lu_env *env,
 				const struct cl_io_slice *slice)
 {
-	int			 result = 0;
-	struct cl_io		*io = slice->cis_io;
-	struct osc_io		*oio = cl2osc_io(env, slice);
-	struct cl_object	*obj = slice->cis_obj;
-	struct lov_oinfo	*loi = cl2osc(obj)->oo_oinfo;
-	struct cl_ladvise_io	*lio = &io->u.ci_ladvise;
-	struct obdo		*oa = &oio->oi_oa;
-	struct osc_async_cbargs	*cbargs = &oio->oi_cbarg;
-	struct lu_ladvise	*ladvise;
-	struct ladvise_hdr	*ladvise_hdr;
-	int			 buf_size;
-	int			 num_advise = 1;
+	int result = 0;
+	struct cl_io *io = slice->cis_io;
+	struct osc_io *oio = cl2osc_io(env, slice);
+	struct cl_object *obj = slice->cis_obj;
+	struct lov_oinfo *loi = cl2osc(obj)->oo_oinfo;
+	struct cl_ladvise_io *lio = &io->u.ci_ladvise;
+	struct obdo *oa = &oio->oi_oa;
+	struct osc_async_cbargs *cbargs = &oio->oi_cbarg;
+	struct lu_ladvise *ladvise;
+	struct ladvise_hdr *ladvise_hdr;
+	int buf_size;
+	int num_advise = 1;
+
 	ENTRY;
 
 	/* TODO: add multiple ladvise support in CLIO */
@@ -1501,7 +1507,7 @@ static const struct cl_io_operations osc_io_ops = {
 /* Transfer operations. */
 
 int osc_io_init(const struct lu_env *env,
-                struct cl_object *obj, struct cl_io *io)
+		struct cl_object *obj, struct cl_io *io)
 {
 	struct osc_io *oio = osc_env_io(env);
 	struct osc_object *osc = cl2osc(obj);

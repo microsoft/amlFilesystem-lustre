@@ -74,7 +74,7 @@ int osc_quota_setdq(struct client_obd *cli, u64 xid, const unsigned int qid[],
 	int type;
 	int rc = 0;
 
-        ENTRY;
+	ENTRY;
 	if ((valid & (OBD_MD_FLALLQUOTA)) == 0)
 		RETURN(0);
 
@@ -163,7 +163,7 @@ void osc_quota_cleanup(struct obd_device *obd)
 }
 
 int osc_quotactl(struct obd_device *unused, struct obd_export *exp,
-                 struct obd_quotactl *oqctl)
+		 struct obd_quotactl *oqctl)
 {
 	struct ptlrpc_request	*req;
 	struct obd_quotactl	*oqc;
@@ -184,16 +184,17 @@ int osc_quotactl(struct obd_device *unused, struct obd_export *exp,
 		req_capsule_set_size(&req->rq_pill, &RMF_OBD_QUOTA_ITER,
 				     RCL_SERVER, 0);
 
-        oqc = req_capsule_client_get(&req->rq_pill, &RMF_OBD_QUOTACTL);
-        *oqc = *oqctl;
+	oqc = req_capsule_client_get(&req->rq_pill, &RMF_OBD_QUOTACTL);
+	*oqc = *oqctl;
 
-        ptlrpc_request_set_replen(req);
-        ptlrpc_at_set_req_timeout(req);
-        req->rq_no_resend = 1;
+	ptlrpc_request_set_replen(req);
+	ptlrpc_at_set_req_timeout(req);
+	req->rq_no_resend = 1;
 
-        rc = ptlrpc_queue_wait(req);
-        if (rc)
-                CERROR("ptlrpc_queue_wait failed, rc: %d\n", rc);
+	rc = ptlrpc_queue_wait(req);
+	if (rc)
+		CERROR("%s: quotactl request failed: rc = %d\n",
+		       exp->exp_obd->obd_name, rc);
 
 	if (rc == 0 && req->rq_repmsg) {
 		struct list_head *lst =
