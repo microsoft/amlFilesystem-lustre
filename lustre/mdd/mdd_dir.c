@@ -2094,18 +2094,24 @@ static int mdd_create_sanity_check(const struct lu_env *env,
 	    unlikely(spec != NULL && spec->sp_cr_flags & MDS_OPEN_HAS_EA) &&
 	    spec->u.sp_ea.eadata != NULL && spec->u.sp_ea.eadatalen > 0) {
 		const struct lmv_user_md *lum = spec->u.sp_ea.eadata;
+		s32 stripe_count;
 
 		if (!lmv_user_magic_supported(le32_to_cpu(lum->lum_magic)) &&
 		    le32_to_cpu(lum->lum_magic) != LMV_USER_MAGIC_V0) {
 			rc = -EINVAL;
-			CERROR("%s: invalid lmv_user_md: magic = %x, "
-			       "stripe_offset = %d, stripe_count = %u: "
-			       "rc = %d\n", mdd2obd_dev(m)->obd_name,
-				le32_to_cpu(lum->lum_magic),
+out_err:
+			CERROR("%s: invalid lmv_user_md: magic=%x hash=%x stripe_offset=%d stripe_count=%d: rc = %d\n",
+			       mdd2obd_dev(m)->obd_name,
+			       le32_to_cpu(lum->lum_magic),
+			       le32_to_cpu(lum->lum_hash_type),
 			       (int)le32_to_cpu(lum->lum_stripe_offset),
-			       le32_to_cpu(lum->lum_stripe_count), rc);
+			       (int)le32_to_cpu(lum->lum_stripe_count), rc);
 			return rc;
 		}
+		stripe_count = le32_to_cpu(lum->lum_stripe_count);
+		if (stripe_count > LMV_MAX_STRIPE_COUNT ||
+		    stripe_count < -1)
+			GOTO(out_err, rc = -EOVERFLOW);
 	}
 
 	rc = mdd_may_create(env, obj, pattr, NULL, check_perm);
@@ -4209,7 +4215,7 @@ static int mdd_migrate_cmd_check(struct mdd_device *mdd,
 				 const struct lmv_user_md_v1 *lum,
 				 const struct lu_name *lname)
 {
-	__u32 lum_stripe_count = lum->lum_stripe_count;
+	__s32 lum_stripe_count = lum->lum_stripe_count;
 	__u32 lum_hash_type = lum->lum_hash_type &
 			      cpu_to_le32(LMV_HASH_TYPE_MASK);
 	__u32 lmv_hash_type = lmv->lmv_hash_type &
@@ -4218,7 +4224,10 @@ static int mdd_migrate_cmd_check(struct mdd_device *mdd,
 	if (!lmv_is_sane(lmv))
 		return -EBADF;
 
-	/* if stripe_count unspecified, set to 1 */
+	if (lum_stripe_count > LMV_MAX_STRIPE_COUNT)
+		RETURN(-EOVERFLOW);
+
+	/* If stripe_count unspecified, set to 1 */
 	if (!lum_stripe_count)
 		lum_stripe_count = cpu_to_le32(1);
 

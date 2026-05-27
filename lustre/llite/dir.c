@@ -484,10 +484,14 @@ static int ll_dir_setdirstripe(struct dentry *dparent, struct lmv_user_md *lump,
 
 	if (lump->lum_stripe_count > 1 &&
 	    !(exp_connect_flags(sbi->ll_md_exp) & OBD_CONNECT_DIR_STRIPE))
-		RETURN(-EINVAL);
+		RETURN(-EOPNOTSUPP);
+
+	if (lump->lum_stripe_count > LMV_MAX_STRIPE_COUNT ||
+	    lump->lum_stripe_count < -1)
+		RETURN(-EOVERFLOW);
 
 	if (IS_DEADDIR(parent) &&
-	    !OBD_FAIL_CHECK(OBD_FAIL_LLITE_NO_CHECK_DEAD))
+	    !CFS_FAIL_CHECK(OBD_FAIL_LLITE_NO_CHECK_DEAD))
 		RETURN(-ENOENT);
 
 	/* MDS < 2.14 doesn't support 'crush' hash type, and cannot handle
@@ -1457,13 +1461,19 @@ static long ll_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		char *filename;
 
 		rc = obd_ioctl_getdata(&data, &len, (void __user *)arg);
-		if (rc != 0)
+		if (rc)
 			RETURN(rc);
+		if (!data->ioc_inlbuf1 || data->ioc_inllen1 < 1)
+			GOTO(out_free, rc = -EINVAL);
+		/* NAME_MAX is the *actual* usable name length, +1 for NUL */
+		if (data->ioc_inllen1 > NAME_MAX + 1)
+			GOTO(out_free, rc = -ENAMETOOLONG);
 
 		filename = data->ioc_inlbuf1;
-		namelen = strlen(filename);
-		if (namelen < 1) {
-			CDEBUG(D_INFO, "IOC_MDC_LOOKUP missing filename\n");
+		namelen = strnlen(filename, data->ioc_inllen1);
+		if (namelen != data->ioc_inllen1 - 1) {
+			CDEBUG(D_INFO, "IOC_MDC_LOOKUP bad namelen %u != %u\n",
+			       namelen, data->ioc_inllen1 - 1);
 			GOTO(out_free, rc = -EINVAL);
 		}
 
@@ -1490,16 +1500,21 @@ out_free:
 		rc = obd_ioctl_getdata(&data, &len, (void __user *)arg);
 		if (rc)
 			RETURN(rc);
-
-		if (data->ioc_inlbuf1 == NULL || data->ioc_inlbuf2 == NULL ||
-		    data->ioc_inllen1 == 0 || data->ioc_inllen2 == 0)
+		if (!data->ioc_inlbuf1 || !data->ioc_inlbuf2 ||
+		    data->ioc_inllen1 < 1 || data->ioc_inllen2 == 0)
 			GOTO(lmv_out_free, rc = -EINVAL);
+		/* NAME_MAX is the *actual* usable name length, +1 for NUL */
+		if (data->ioc_inllen1 > NAME_MAX + 1)
+			GOTO(lmv_out_free, rc = -ENAMETOOLONG);
+		if (data->ioc_inllen2 > XATTR_SIZE_MAX)
+			GOTO(lmv_out_free, rc = -EOVERFLOW);
 
 		filename = data->ioc_inlbuf1;
-		namelen = data->ioc_inllen1;
-
-		if (namelen < 1) {
-			CDEBUG(D_INFO, "IOC_MDC_LOOKUP missing filename\n");
+		namelen = strnlen(filename, data->ioc_inllen1) + 1;
+		if (namelen != data->ioc_inllen1) {
+			CDEBUG(D_INFO,
+			       "LL_IOC_MDC_SETSTRIPE bad namelen %u != %u\n",
+			       namelen, data->ioc_inllen1);
 			GOTO(lmv_out_free, rc = -EINVAL);
 		}
 		lum = (struct lmv_user_md *)data->ioc_inlbuf2;
@@ -1772,9 +1787,9 @@ finish_req:
 		RETURN(0);
 
 	case LL_IOC_REMOVE_ENTRY: {
-		char		*filename = NULL;
-		int		 namelen = 0;
-		int		 rc;
+		char *filename = NULL;
+		int namelen;
+		int rc;
 
 		/* Here is a little hack to avoid sending REINT_RMENTRY to
 		 * unsupported server, which might crash the server(LU-2730),
@@ -2076,22 +2091,15 @@ out_quotactl:
 		RETURN(index);
 	}
 	case LL_IOC_HSM_REQUEST: {
-		struct hsm_user_request	*hur;
-		ssize_t			 totalsize;
-
-		OBD_ALLOC_PTR(hur);
-		if (hur == NULL)
-			RETURN(-ENOMEM);
+		struct hsm_user_request hdr, *hur;
+		ssize_t totalsize;
 
 		/* We don't know the true size yet; copy the fixed-size part */
-		if (copy_from_user(hur, (void __user *)arg, sizeof(*hur))) {
-			OBD_FREE_PTR(hur);
+		if (copy_from_user(&hdr, (void __user *)arg, sizeof(hdr)))
 			RETURN(-EFAULT);
-		}
 
 		/* Compute the whole struct size */
-		totalsize = hur_len(hur);
-		OBD_FREE_PTR(hur);
+		totalsize = hur_len(&hdr);
 		if (totalsize < 0)
 			RETURN(-E2BIG);
 
@@ -2100,12 +2108,16 @@ out_quotactl:
 			RETURN(-E2BIG);
 
 		OBD_ALLOC_LARGE(hur, totalsize);
-		if (hur == NULL)
+		if (!hur)
 			RETURN(-ENOMEM);
 
-		/* Copy the whole struct */
-		if (copy_from_user(hur, (void __user *)arg, totalsize))
+		/* Copy the rest of the struct if needed */
+		if (totalsize > sizeof(*hur) &&
+		    copy_from_user(hur->hur_user_item,
+				   (void __user *)arg + sizeof(*hur),
+				   totalsize - sizeof(*hur)))
 			GOTO(out_hur, rc = -EFAULT);
+		memcpy(hur, &hdr, sizeof(*hur));
 
 		if (hur->hur_request.hr_action == HUA_RELEASE) {
 			const struct lu_fid *fid;
@@ -2205,24 +2217,29 @@ out_hur:
 		struct lmv_user_md *lum;
 		int len;
 		char *filename;
-		int namelen = 0;
+		int namelen;
 		__u32 flags;
 		int rc;
 
 		rc = obd_ioctl_getdata(&data, &len, (void __user *)arg);
 		if (rc)
 			RETURN(rc);
-
 		if (data->ioc_inlbuf1 == NULL || data->ioc_inlbuf2 == NULL ||
-		    data->ioc_inllen1 == 0 || data->ioc_inllen2 == 0)
+		    data->ioc_inllen1 < 1 || data->ioc_inllen2 < sizeof(*lum))
 			GOTO(migrate_free, rc = -EINVAL);
+		/* NAME_MAX is the *actual* usable name length, +1 for NUL */
+		if (data->ioc_inllen1 > NAME_MAX + 1)
+			GOTO(migrate_free, rc = -ENAMETOOLONG);
+		if (data->ioc_inllen2 > XATTR_SIZE_MAX)
+			GOTO(migrate_free, rc = -EOVERFLOW);
 
 		filename = data->ioc_inlbuf1;
-		namelen = data->ioc_inllen1;
+		namelen = strnlen(filename, data->ioc_inllen1) + 1;
 		flags = data->ioc_type;
-
-		if (namelen < 1 || namelen != strlen(filename) + 1) {
-			CDEBUG(D_INFO, "IOC_MDC_LOOKUP missing filename\n");
+		if (namelen != data->ioc_inllen1) {
+			CDEBUG(D_INFO,
+			       "IOC_MDC_MIGRATE bad filename len %u != %u\n",
+			       namelen, data->ioc_inllen1);
 			GOTO(migrate_free, rc = -EINVAL);
 		}
 

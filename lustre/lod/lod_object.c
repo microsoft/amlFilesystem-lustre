@@ -5761,10 +5761,7 @@ static void lod_ah_init(const struct lu_env *env,
 				lc->ldo_dir_stripe_count = 0;
 		}
 
-		/* shrink the stripe count to max_mdt_stripecount if it is -1
-		 * and max_mdt_stripecount is not 0
-		 */
-		if (lc->ldo_dir_stripe_count == (__u16)(-1) &&
+		if (lc->ldo_dir_stripe_count <= -1 &&
 		    d->lod_max_mdt_stripecount)
 			lc->ldo_dir_stripe_count = d->lod_max_mdt_stripecount;
 
