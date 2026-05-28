@@ -129,6 +129,7 @@ struct fld_seq_param {
 	struct lu_env		fsp_env;
 	struct dt_it		*fsp_it;
 	struct lu_server_fld	*fsp_fld;
+	struct dt_object	*fsp_obj;
 	unsigned int		fsp_stop:1;
 };
 
@@ -252,7 +253,7 @@ static int fldb_seq_open(struct inode *inode, struct file *file)
 {
 	struct seq_file		*seq;
 	struct lu_server_fld    *fld = inode->i_private;
-	struct dt_object	*obj;
+	struct dt_object	*obj = NULL;
 	const struct dt_it_ops  *iops;
 	struct fld_seq_param    *param = NULL;
 	int			env_init = 0;
@@ -268,6 +269,7 @@ static int fldb_seq_open(struct inode *inode, struct file *file)
 		seq->private = NULL;
 		return 0;
 	}
+	lu_object_get(&obj->do_lu);
 
 	OBD_ALLOC_PTR(param);
 	if (param == NULL)
@@ -280,6 +282,7 @@ static int fldb_seq_open(struct inode *inode, struct file *file)
 	env_init = 1;
 	iops = &obj->do_index_ops->dio_it;
 	param->fsp_it = iops->init(&param->fsp_env, obj, 0);
+	param->fsp_obj = obj;
 	if (IS_ERR(param->fsp_it))
 		GOTO(out, rc = PTR_ERR(param->fsp_it));
 
@@ -290,6 +293,8 @@ static int fldb_seq_open(struct inode *inode, struct file *file)
 	seq->private = param;
 out:
 	if (rc != 0) {
+		if (obj)
+			lu_object_put(&param->fsp_env, &obj->do_lu);
 		if (env_init == 1)
 			lu_env_fini(&param->fsp_env);
 		OBD_FREE_PTR(param);
@@ -312,13 +317,14 @@ static int fldb_seq_release(struct inode *inode, struct file *file)
 	}
 
 	fld = param->fsp_fld;
-	obj = fld->lsf_obj;
+	obj = param->fsp_obj;
 	LASSERT(obj != NULL);
 	iops = &obj->do_index_ops->dio_it;
 
 	LASSERT(iops != NULL);
 	LASSERT(param->fsp_it != NULL);
 	iops->fini(&param->fsp_env, param->fsp_it);
+	lu_object_put(&param->fsp_env, &obj->do_lu);
 	lu_env_fini(&param->fsp_env);
 	OBD_FREE_PTR(param);
 	seq_release(inode, file);
