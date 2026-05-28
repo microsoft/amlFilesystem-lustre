@@ -468,7 +468,7 @@ out:
 EXPORT_SYMBOL(dt_find_or_create);
 
 /* dt class init function. */
-int dt_global_init(void)
+int __init dt_global_init(void)
 {
 	int result;
 

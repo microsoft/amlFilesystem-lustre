@@ -2641,7 +2641,7 @@ static inline int dt_layout_check(const struct lu_env *env,
 	return o->do_ops->do_layout_check(env, o, mlc);
 }
 
-int dt_global_init(void);
+int __init dt_global_init(void);
 void dt_global_fini(void);
 int dt_tunables_init(struct dt_device *dt, struct obd_type *type,
 		     const char *name, struct ldebugfs_vars *list);

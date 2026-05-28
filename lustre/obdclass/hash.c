@@ -96,7 +96,7 @@ MODULE_PARM_DESC(warn_on_depth, "warning when hash depth is high.");
 
 static struct workqueue_struct *cfs_rehash_wq;
 
-int cfs_hash_init(void)
+int __init cfs_hash_init(void)
 {
 	int rc = 0;
 

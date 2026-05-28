@@ -771,7 +771,7 @@ void obd_cleanup_caches(void)
 	EXIT;
 }
 
-int obd_init_caches(void)
+int __init obd_init_caches(void)
 {
 	int rc;
 
@@ -1970,7 +1970,7 @@ void obd_stale_export_adjust(struct obd_export *exp)
 EXPORT_SYMBOL(obd_stale_export_adjust);
 
 /* start destroy zombie import/export thread */
-int obd_zombie_impexp_init(void)
+int __init obd_zombie_impexp_init(void)
 {
 	zombie_wq = cfs_cpt_bind_workqueue("obd_zombid", cfs_cpt_tab,
 					   0, CFS_CPT_ANY,

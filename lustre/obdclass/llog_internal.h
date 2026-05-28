@@ -59,7 +59,7 @@ static inline struct llog_thread_info *llog_info(const struct lu_env *env)
 	return lgi;
 }
 
-int llog_info_init(void);
+int __init llog_info_init(void);
 void llog_info_fini(void);
 
 struct llog_handle *llog_handle_get(struct llog_handle *loghandle);

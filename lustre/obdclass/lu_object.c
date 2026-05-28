@@ -2235,7 +2235,7 @@ static unsigned long lu_cache_shrink_scan(struct shrinker *sk,
 static struct shrinker *lu_site_shrinker;
 
 /* Initialization of global lu_* data. */
-int lu_global_init(void)
+int __init lu_global_init(void)
 {
 	char path[MAX_OBD_NAME];
 	int result;

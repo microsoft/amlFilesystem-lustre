@@ -220,7 +220,7 @@ LU_KEY_INIT_FINI(llog, struct llog_thread_info);
 LU_CONTEXT_KEY_DEFINE(llog, LCT_MD_THREAD | LCT_MG_THREAD | LCT_LOCAL);
 LU_KEY_INIT_GENERIC(llog);
 
-int llog_info_init(void)
+int __init llog_info_init(void)
 {
 	llog_key_init_generic(&llog_thread_key, NULL);
 	lu_context_key_register(&llog_thread_key);

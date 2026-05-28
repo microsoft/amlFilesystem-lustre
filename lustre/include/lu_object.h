@@ -1473,7 +1473,7 @@ struct lu_rdbuf {
  */
 
 /* Initialization of global lu_* data. */
-int lu_global_init(void);
+int __init lu_global_init(void);
 
 /* Dual to lu_global_init(). */
 void lu_global_fini(void);

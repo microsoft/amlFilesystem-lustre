@@ -143,7 +143,7 @@ int obd_export_evict_by_uuid(struct obd_device *obd, const char *uuid);
 int obd_connect_flags2str(char *page, int count, __u64 flags, __u64 flags2,
 			  const char *sep);
 
-int obd_zombie_impexp_init(void);
+int __init obd_zombie_impexp_init(void);
 void obd_zombie_impexp_stop(void);
 void obd_zombie_impexp_cull(void);
 void obd_zombie_barrier(void);
@@ -176,7 +176,7 @@ int obd_pool_get_free_objects(unsigned int order);
 int pool_is_at_full_capacity(int order);
 
 /* cfs_hash.c */
-int cfs_hash_init(void);
+int __init cfs_hash_init(void);
 void cfs_hash_fini(void);
 
 int encrypt_page_pools_seq_show(struct seq_file *m, void *v);
@@ -2007,7 +2007,7 @@ static inline int md_dirpage_add(struct obd_export *exp,
 
 /* OBD Metadata Support */
 
-extern int obd_init_caches(void);
+extern int __init obd_init_caches(void);
 extern void obd_cleanup_caches(void);
 
 typedef int (*register_lwp_cb)(void *data);
@@ -2101,7 +2101,7 @@ int server_name2index(const char *svname, __u32 *idx, const char **endptr);
 /* linux-module.c */
 struct obd_ioctl_data;
 int obd_ioctl_getdata(struct obd_ioctl_data **data, int *len, void __user *arg);
-int class_procfs_init(void);
+int __init class_procfs_init(void);
 int class_procfs_clean(void);
 
 extern void obd_heat_add(struct obd_heat_instance *instance,
