@@ -43,6 +43,7 @@
 #include <linux/stacktrace.h>
 #include <linux/utsname.h>
 #include <linux/kallsyms.h>
+#include <linux/delay.h>
 #ifdef HAVE_PANIC_NOTIFIER_H
 #include <linux/panic_notifier.h>
 #endif
@@ -455,7 +456,11 @@ void libcfs_debug_dumplog(void)
 EXPORT_SYMBOL(libcfs_debug_dumplog);
 
 /* coverity[+kill] */
-void __noreturn lbug_with_loc(struct libcfs_debug_msg_data *msgdata)
+void
+#ifdef HAVE_LBUG_WITH_LOC_IN_OBJTOOL
+__noreturn
+#endif
+lbug_with_loc(struct libcfs_debug_msg_data *msgdata)
 {
 	libcfs_catastrophe = 1;
 	libcfs_debug_msg(msgdata, "LBUG\n");
@@ -473,6 +478,10 @@ void __noreturn lbug_with_loc(struct libcfs_debug_msg_data *msgdata)
 	set_current_state(TASK_UNINTERRUPTIBLE);
 	while (1)
 		schedule();
+#ifndef HAVE_LBUG_WITH_LOC_IN_OBJTOOL
+	/* not reached */
+	panic("LBUG after schedule.");
+#endif
 }
 EXPORT_SYMBOL(lbug_with_loc);
 
