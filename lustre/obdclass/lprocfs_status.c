@@ -498,7 +498,9 @@ int lprocfs_stats_lock(struct lprocfs_stats *stats,
 	case LPROCFS_GET_NUM_CPU:
 		return stats->ls_biggest_alloc_num;
 	default:
+		LASSERTF(0, "opc = %u\n", opc);
 		LBUG();
+		return -EINVAL;
 	}
 }
 
