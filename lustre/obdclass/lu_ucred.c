@@ -80,7 +80,7 @@ struct lu_ucred *lu_ucred_assert(const struct lu_env *env)
 }
 EXPORT_SYMBOL(lu_ucred_assert);
 
-int lu_ucred_global_init(void)
+int __init lu_ucred_global_init(void)
 {
 	LU_CONTEXT_KEY_INIT(&lu_ucred_key);
 	return lu_context_key_register(&lu_ucred_key);

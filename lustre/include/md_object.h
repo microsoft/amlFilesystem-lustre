@@ -700,7 +700,7 @@ struct lu_ucred *lu_ucred_check(const struct lu_env *env);
 
 struct lu_ucred *lu_ucred_assert(const struct lu_env *env);
 
-int lu_ucred_global_init(void);
+int __init lu_ucred_global_init(void);
 
 void lu_ucred_global_fini(void);
 

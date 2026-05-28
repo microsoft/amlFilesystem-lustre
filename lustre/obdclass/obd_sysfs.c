@@ -863,7 +863,7 @@ ssize_t class_set_global(const char *param)
 	return count;
 }
 
-int class_procfs_init(void)
+int __init class_procfs_init(void)
 {
 	struct proc_dir_entry *entry;
 	int rc = -ENOMEM;

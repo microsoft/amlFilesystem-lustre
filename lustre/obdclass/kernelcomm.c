@@ -1163,7 +1163,7 @@ static inline bool libcfs_kkuc_group_is_valid(int group)
 	return 0 <= group && group < ARRAY_SIZE(kkuc_groups);
 }
 
-int libcfs_kkuc_init(void)
+int __init libcfs_kkuc_init(void)
 {
 	int group;
 

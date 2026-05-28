@@ -156,7 +156,7 @@ void *class_handle2object(u64 cookie, const char *owner)
 }
 EXPORT_SYMBOL(class_handle2object);
 
-int class_handle_init(void)
+int __init class_handle_init(void)
 {
 	struct handle_bucket *bucket;
 

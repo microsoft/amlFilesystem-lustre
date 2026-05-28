@@ -210,7 +210,7 @@ enum lustre_target_prop_attrs {
 typedef int (*libcfs_kkuc_cb_t)(void *data, void *cb_arg);
 
 /* Kernel methods */
-int libcfs_kkuc_init(void);
+int __init libcfs_kkuc_init(void);
 void libcfs_kkuc_fini(void);
 int libcfs_kkuc_msg_put(struct file *fp, void *payload);
 int libcfs_kkuc_group_put(const struct obd_uuid *uuid, int group, void *data);

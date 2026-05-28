@@ -48,7 +48,7 @@ struct portals_handle {
 void class_handle_hash(struct portals_handle *, const char *h_owner);
 void class_handle_unhash(struct portals_handle *);
 void *class_handle2object(u64 cookie, const char *h_owner);
-int class_handle_init(void);
+int __init class_handle_init(void);
 void class_handle_cleanup(void);
 
 /** @} handles */

@@ -1147,7 +1147,7 @@ static struct lu_kmem_descr cl_object_caches[] = {
  *
  * see cl_global_fini()
  */
-int cl_global_init(void)
+int __init cl_global_init(void)
 {
 	int result;
 
