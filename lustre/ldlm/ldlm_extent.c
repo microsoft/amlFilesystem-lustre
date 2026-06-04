@@ -127,7 +127,7 @@ static inline void extent_replace(struct ldlm_lock *in_tree,
 #if IS_ENABLED(CONFIG_LUSTRE_FS_SERVER)
 # define LDLM_MAX_GROWN_EXTENT (32 * 1024 * 1024 - 1)
 
-/**
+/*
  * Fix up the ldlm_extent after expanding it.
  *
  * After expansion has been done, we might still want to do certain adjusting
@@ -181,6 +181,13 @@ static void ldlm_extent_internal_policy_fixup(struct ldlm_lock *req,
 }
 
 /**
+ * ldlm_extent_internal_policy_granted() - Expand a lock extent as far as the
+ * conflicting granted locks allow
+ * @req: LDLM lock [in/out]
+ * @new_ex: extent to expand, in/out. The caller must seed it with the widest
+ * acceptable range (ldlm_extent_policy() uses [0, OBD_OBJECT_EOF]); this
+ * function only ever narrows it.
+ *
  * Return the maximum extent that:
  * - contains the requested extent
  * - does not overlap existing conflicting extents outside the requested one
@@ -462,16 +469,21 @@ static bool ldlm_extent_compat_cb(struct ldlm_lock *lock, void *data)
 }
 
 /**
- * Determine if the lock is compatible with all locks on the queue.
+ * ldlm_extent_compat_queue() - Determine if the lock is compatible with all
+ *                              locks on the queue.
+ * @queue: lock queue
+ * @req: LDLM lock
+ * @flags: Flags related to lock operation
+ * @work_list: conflicting lock queue
  *
- * If \a work_list is provided, conflicting locks are linked there.
- * If \a work_list is not provided, we exit this function on first conflict.
+ * If @work_list is provided, conflicting locks are linked there.
+ * If @work_list is not provided, we exit this function on first conflict.
  *
- * \retval 0 if the lock is not compatible
- * \retval 1 if the lock is compatible
- * \retval 2 if \a req is a group lock and it is compatible and requires
- *           no further checking
- * \retval negative error, such as EAGAIN for group locks
+ * Return:
+ * * %0 if the lock is not compatible
+ * * %1 if the lock is compatible
+ * * %2 if @req is destroyed on that path so a reader knows not to touch it
+ * * %negative error code, such as -EAGAIN for group locks
  */
 static int
 ldlm_extent_compat_queue(struct list_head *queue, struct ldlm_lock *req,
@@ -668,12 +680,9 @@ ldlm_extent_compat_queue(struct list_head *queue, struct ldlm_lock *req,
 				compat = 0;
 				if (lock->l_req_mode != LCK_GROUP) {
 					/* Ok, we hit non-GROUP lock,
-					 * there
-					 * should be no more GROUP
-					 * locks later
-					 * on, queue in
-					 * front of first
-					 * non-GROUP lock
+					 * there should be no more GROUP
+					 * locks later on, queue in
+					 * front of first non-GROUP lock
 					 */
 					ldlm_resource_insert_lock_before(lock,
 									 req);
@@ -759,10 +768,9 @@ destroylock:
 }
 
 /**
- * This function refresh eviction timer for cancelled lock.
- * \param[in] lock		ldlm lock for refresh
- * \param[in] arg		ldlm prolong arguments, timeout, export, extent
- *				and counter are used
+ * ldlm_lock_prolong_one() - Refresh eviction timer for cancelled lock.
+ * @lock: ldlm lock for refresh
+ * @arg: ldlm prolong arguments (containing the calculated timeout)
  */
 void ldlm_lock_prolong_one(struct ldlm_lock *lock,
 			   struct ldlm_prolong_args *arg)
@@ -804,9 +812,9 @@ static bool ldlm_resource_prolong_cb(struct ldlm_lock *lock, void *data)
 }
 
 /**
- * Walk through granted tree and prolong locks if they overlaps extent.
- *
- * \param[in] arg		prolong args
+ * ldlm_resource_prolong() - Walk through granted tree and prolong locks if they
+ *                           overlap the extent.
+ * @arg: prolong operation args
  */
 void ldlm_resource_prolong(struct ldlm_prolong_args *arg)
 {
@@ -850,12 +858,27 @@ void ldlm_resource_prolong(struct ldlm_prolong_args *arg)
 EXPORT_SYMBOL(ldlm_resource_prolong);
 
 /**
- * Process a granting attempt for extent lock.
- * Must be called with ns lock held.
+ * ldlm_process_extent_lock() - Process a granting attempt for extent lock.
+ * @lock: LDLM lock
+ * @flags: Lock flags, in/out. LDLM_FL_LOCK_CHANGED and LDLM_FL_NO_TIMEOUT
+ * may be set on return
+ * @intention: Intention mode (RESCAN/ENQUEUE/RECOVERY)
+ * @err: LDLM error state [out]
+ * @work_list: list collecting AST work items: blocking ASTs for conflicting
+ * locks, plus the completion AST for @lock when @intention is not
+ * LDLM_PROCESS_ENQUEUE
  *
- * This function looks for any conflicts for \a lock in the granted or
+ * This function looks for any conflicts for @lock in the granted or
  * waiting queues. The lock is granted if no conflicts are found in
  * either queue.
+ *
+ * Context: Called with the resource lock held (see check_res_locked()).
+ *
+ * Return:
+ * * %LDLM_ITER_CONTINUE if the lock was granted or left queued
+ * * %LDLM_ITER_STOP if a LDLM_PROCESS_RESCAN attempt still conflicts
+ * * %negative error code from ldlm_extent_compat_queue(), also returned
+ *   to the caller in @err
  */
 int ldlm_process_extent_lock(struct ldlm_lock *lock, __u64 *flags,
 		enum ldlm_process_intention intention,
@@ -1046,7 +1069,12 @@ static inline int ldlm_mode_to_index(enum ldlm_mode mode)
 	return index;
 }
 
-/** Add newly granted lock into interval tree for the resource. */
+/**
+ * ldlm_extent_add_lock() - Add newly granted lock into the resource
+ * interval tree.
+ * @res: resource owning the interval trees
+ * @lock: newly granted lock to insert
+ */
 void ldlm_extent_add_lock(struct ldlm_resource *res,
 			  struct ldlm_lock *lock)
 {
@@ -1095,7 +1123,11 @@ void ldlm_extent_add_lock(struct ldlm_resource *res,
 	}
 }
 
-/** Remove cancelled lock from resource interval tree. */
+/**
+ * ldlm_extent_unlink_lock() - Remove cancelled lock from the resource
+ * interval tree.
+ * @lock: lock to remove
+ */
 void ldlm_extent_unlink_lock(struct ldlm_lock *lock)
 {
 	struct ldlm_resource *res = lock->l_resource;
