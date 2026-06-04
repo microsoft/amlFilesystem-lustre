@@ -159,10 +159,10 @@ ldlm_flock_destroy(struct ldlm_lock *lock, enum ldlm_mode mode, __u64 flags)
 }
 
 #if IS_ENABLED(CONFIG_LUSTRE_FS_SERVER)
-/**
+/*
  * POSIX locks deadlock detection code.
  *
- * Given a new lock \a req and an existing lock \a bl_lock it conflicts
+ * Given a new lock @req and an existing lock @bl_lock it conflicts
  * with, we need to iterate through all blocked POSIX locks for this
  * export and see if there is a deadlock condition arising. (i.e. when
  * one client holds a lock on something and want a lock on something
@@ -318,12 +318,27 @@ ldlm_flock_range_update(struct ldlm_lock *lock, u64 start, u64 end)
 }
 
 /**
- * Process a granting attempt for flock lock.
- * Must be called under ns lock held.
+ * ldlm_process_flock_lock() - Process a granting attempt for flock lock.
+ * @req: the flock request being processed
+ * @flags: Flags related to lock operation [in, out]
+ * @intention: %LDLM_PROCESS_RESCAN, %LDLM_PROCESS_ENQUEUE or
+ * %LDLM_PROCESS_RECOVERY
+ * @err: outcome of the attempt: ELDLM_OK, -EAGAIN, -EDEADLK or PTR_ERR() [out]
+ * @work_list: list collecting completion AST work items for @req
  *
- * This function looks for any conflicts for \a lock in the granted or
- * waiting queues. The lock is granted if no conflicts are found in
- * either queue.
+ * This function looks for conflicts for @req among the locks already
+ * granted on the resource, and merges or splits the requesting owner's
+ * own flocks as needed. Depending on the conflict found and on @flags,
+ * @req may be granted, merged into an existing lock of the same owner,
+ * queued on lr_waiting, or destroyed; the outcome is reported through
+ * @err and @flags. The resource lock may be dropped and retaken
+ * internally, so it is not held for the whole call.
+ *
+ * Context: Called with the resource lock held (see check_res_locked()).
+ *
+ * Return:
+ * * %LDLM_ITER_CONTINUE - caller should keep scanning the waiting queue
+ * * %LDLM_ITER_STOP - caller should stop scanning the waiting queue
  */
 int
 ldlm_process_flock_lock(struct ldlm_lock *req, __u64 *flags,
@@ -697,7 +712,7 @@ restart:
 
 	/* In case we're reprocessing the requested lock we can't destroy
 	 * it until after calling ldlm_add_ast_work_item() above so that laawi()
-	 * can bump the reference count on \a req. Otherwise \a req
+	 * can bump the reference count on @req. Otherwise @req
 	 * could be freed before the completion AST can be sent.
 	 */
 	if (added)
@@ -778,16 +793,13 @@ static int ldlm_flock_completion_common(struct ldlm_lock *lock)
 }
 
 /**
- * Flock completion callback function.
+ * ldlm_flock_completion_ast() - Flock completion callback function.
+ * @lock: A lock to be handled [in, out]
+ * @flags: LDLM operation flags
+ * @data: struct ldlm_cb_set_arg when invoked from ldlm_work_cp_ast_lock(),
+ * NULL on the direct calls from the enqueue and cleanup paths
  *
- * \param lock [in,out]: A lock to be handled
- * \param flags    [in]: flags
- * \param *data    [in]: ldlm_work_cp_ast_lock() will use ldlm_cb_set_arg
- *
- * \retval 0    : success
- * \retval <0   : failure
- *
- * This funclion is called from:
+ * This function is called from:
  * 1. ldlm_cli_enqueue_fini()
  *	a) grant a new lock or UNLOCK(l_granted_mode == LCK_NL) lock
  *	b) TEST lock, l_flags & LDLM_FL_TEST_LOCK; if can be granted
@@ -805,6 +817,10 @@ static int ldlm_flock_completion_common(struct ldlm_lock *lock)
  * 4. races between the 3 above
  *	a) cleanup vs. reply or CP AST
  *	b) F_CANCELLK vs. CP AST granting a new lock
+ *
+ * Return:
+ * * %0 on success
+ * * negative errno on failure
  */
 int
 ldlm_flock_completion_ast(struct ldlm_lock *lock, __u64 flags, void *data)
