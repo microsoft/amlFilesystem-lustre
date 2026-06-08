@@ -475,9 +475,13 @@ binary-$(DKMS_PKG): patch-stamp
 	# Clean it up
 	$(MAKE) -C debian/$(DKMS_PKG)/usr/src/lustre-client-modules-$(UPVERSION) -f debian/rules clean
 
-	$(MAKE) install -C lustre/include DESTDIR=$(CURDIR)/debian/$(DKMS_PKG)
-	$(MAKE) install -C lnet/include DESTDIR=$(CURDIR)/debian/$(DKMS_PKG)
-	rm -rf $(CURDIR)/debian/$(DKMS_PKG)/usr/include/lustre
+	# AMLFS-local: upstream LU-18632 chunk reverted (PBI #38334876).
+	# Upstream added these 3 lines to copy UAPI headers into the DKMS deb, but
+	# AMLFS already ships those same headers in lustre-client-utils. Shipping in
+	# both causes a dpkg file collision (/usr/include/linux/{lnet,lustre}/*.h)
+	# on every Ubuntu install. We keep the headers in utils only (where they have
+	# always been) and let the DKMS metapackage's Depends on utils make them
+	# available to DKMS users. Do NOT re-add without first solving the collision.
 
 	# Put the DKMS configuration file in place
 	sed -e 's/[@]UPVERSION[@]/$(UPVERSION)/' debian/dkms.conf.in > debian/$(DKMS_PKG)/usr/src/lustre-client-modules-$(UPVERSION)/dkms.conf
