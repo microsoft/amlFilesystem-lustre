@@ -1399,12 +1399,15 @@ static inline bool lu_name_in_white_list(const char *name, int nlen)
 	/* Check for specific filenames */
 	if (strncmp(name, "mountdata", nlen) == 0 ||
 	    strncmp(name, "nodemap", nlen) == 0 ||
-	    strncmp(name, "params", nlen) == 0 ||
-	    strncmp(name, "sptlrpc", nlen) == 0)
+	    strncmp(name, "params", nlen) == 0)
 		return 1;
 
 	/* names like lustre-client */
 	if (nlen > 7 && strncmp(name + nlen - 7, "-client", 7) == 0)
+		return 1;
+
+	/* the sptlrpc rule log is named "<fsname>-sptlrpc" */
+	if (nlen > 8 && strncmp(name + nlen - 8, "-sptlrpc", 8) == 0)
 		return 1;
 
 	/* Check if the string is long enough to match the pattern */

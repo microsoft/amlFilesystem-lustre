@@ -5372,7 +5372,9 @@ int mgs_list_logs(const struct lu_env *env, struct mgs_device *mgs,
 	list_for_each_entry_safe(dirent, n, &log_list, mde_list) {
 		list_del_init(&dirent->mde_list);
 		suffix = strrchr(dirent->mde_name, '-');
-		if (suffix != NULL) {
+		/* also list "params" */
+		if (suffix != NULL ||
+		    strcmp(dirent->mde_name, PARAMS_FILENAME) == 0) {
 			len = prefix_len + dirent->mde_len + 1;
 			if (remains - len < 0) {
 				/* No enough space for this record */

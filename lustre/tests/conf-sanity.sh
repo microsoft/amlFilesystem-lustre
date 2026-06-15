@@ -11130,6 +11130,45 @@ test_123aj() { #LU-17920
 }
 run_test 123aj "check permanent TBF rules"
 
+test_123ak() { #LU-20377
+	remote_mgs_nodsh && skip "remote MGS with nodsh"
+	(( $MGS_VERSION >= $(version_code 2.17.54) )) ||
+		skip "need MGS >= 2.17.54 to list sptlrpc/params in catlist"
+
+	[[ -d $MOUNT/.lustre ]] || setup
+
+	# the "params" log: set a permanent param, removed on exit
+	local pp="osc.$FSNAME-*.max_rpcs_in_flight"
+	stack_trap "do_facet mgs $LCTL set_param -P -d $pp || true"
+	do_facet mgs $LCTL set_param -P $pp=16 || error "set_param -P failed"
+
+	# the "<fsname>-sptlrpc" log: created by a null rule, removed on exit
+	local sr="$FSNAME.srpc.flavor.default.cli2mdt"
+	stack_trap "do_facet mgs $LCTL conf_param -d $sr || true"
+	set_rule $FSNAME any cli2mdt null
+
+	local clist=$(do_facet mgs $LCTL --device MGS llog_catlist |
+		      awk '{ print $2 }')
+	echo "llog_catlist: $clist"
+
+	# dropped by the CONFIGS whitelist
+	echo "$clist" | grep -qx "$FSNAME-sptlrpc" ||
+		error "llog_catlist does not list $FSNAME-sptlrpc"
+
+	# dropped by the '-' filter in mgs_list_logs
+	echo "$clist" | grep -qx "params" ||
+		error "llog_catlist does not list params"
+
+	# nodemap/mountdata: not llogs
+	echo "$clist" | grep -qx "nodemap" &&
+		error "llog_catlist should not list nodemap"
+	echo "$clist" | grep -qx "mountdata" &&
+		error "llog_catlist should not list mountdata"
+
+	return 0
+}
+run_test 123ak "llog_catlist lists the sptlrpc and params config logs"
+
 test_123_prep() {
 	remote_mgs_nodsh && skip "remote MGS with nodsh"
 
