@@ -14147,17 +14147,39 @@ run_test 201 "per-network sptlrpc flavor rule overrides default"
 
 test_300() {
 	local principal="mock_iam_test"
-	local mount_opts=$(csa_add "$MOUNT_OPTS" "" "user_principal=$principal")
+	local clean_opts=$(echo "$MOUNT_OPTS" |
+			   sed -E -e 's/disable_rootsquash//g' \
+				  -e 's/,,+/,/g' -e 's/^,//' -e 's/,$//')
+	local mount_opts=$(csa_add "$clean_opts" "" "user_principal=$principal")
 	local client1=${clients_arr[0]}
+	local opts
 
 	log "Mount with user_principal=$principal"
 	zconf_umount_clients $client1 $MOUNT || true
 	zconf_mount_clients $client1 $MOUNT "$mount_opts" ||
 		error "mount failed"
 
-	do_node $client1 "mount | grep ' $MOUNT ' |
-		grep -q 'user_principal=$principal'" ||
-		error "user_principal=$principal not in opts on $client"
+	opts=$(do_node $client1 "mount | grep ' $MOUNT '")
+	echo "$opts" | grep -q "user_principal=$principal" ||
+		error "user_principal=$principal not in opts on $client1"
+
+	echo "$opts" | grep -q "disable_rootsquash" &&
+		error "disable_rootsquash should not be in opts $client1"
+
+	echo "$opts" | grep -wq "rootsquash" &&
+		error "rootsquash should not be in opts on $client1 by default"
+
+	zconf_umount_clients $client1 $MOUNT || error "umount failed"
+
+	log "Mount with user_principal=$principal,disable_rootsquash"
+	mount_opts=$(csa_add "$MOUNT_OPTS" "" \
+		     "user_principal=$principal,disable_rootsquash")
+	zconf_mount_clients $client1 $MOUNT "$mount_opts" ||
+		error "mount failed"
+
+	opts=$(do_node $client1 "mount | grep ' $MOUNT '")
+	echo "$opts" | grep -q "disable_rootsquash" ||
+		error "disable_rootsquash not in opts on $client1"
 
 	zconf_umount_clients $client1 $MOUNT || error "umount failed"
 
@@ -14169,8 +14191,10 @@ test_300() {
 	else
 		log "Mount failed as expected with only -o user_principal"
 	fi
+
+	zconf_mount_clients $client1 $MOUNT || error "mount failed"
 }
-run_test 300 "test user_principal mount option parsing"
+run_test 300 "test user_principal and disable_rootsquash mount options"
 
 log "cleanup: ======================================================"
 

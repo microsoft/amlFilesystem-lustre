@@ -331,8 +331,26 @@ static int ll_upcall_notify_gssiam(struct obd_device *watched,
 			    strlen(sbi->ll_user_principal) + 1 : 0;
 	int rc = 0;
 
-	if (cli->cl_import->imp_sec->ps_gssiam)
+	if (cli->cl_import->imp_sec->ps_gssiam) {
+		__u32 opts = 0;
+
+		/* For the remount case, we update 'lgmi_options' in place
+		 * so any new security contexts negotiated after the remount
+		 * will carry the refreshed policy (e.g., read-only/read-write).
+		 * Note: disable_rootsquash is preserved from original mount
+		 * flags.
+		 */
+		gssiam = cli->cl_import->imp_sec->ps_gssiam;
+		if (test_bit(LMD_FLG_DEV_RDONLY, lmd->lmd_flags) ||
+		    sb->s_flags & SB_RDONLY)
+			opts |= GSSIAM_OPT_RDONLY;
+
+		if (test_bit(LL_SBI_USER_DISABLE_ROOT_SQUASH, sbi->ll_flags))
+			opts |= GSSIAM_OPT_DISABLE_ROOT_SQUASH;
+
+		gssiam->lgmi_options = opts;
 		return 0;
+	}
 
 	OBD_ALLOC_PTR(gssiam);
 	if (!gssiam)
@@ -355,7 +373,15 @@ static int ll_upcall_notify_gssiam(struct obd_device *watched,
 
 	if (test_bit(LMD_FLG_DEV_RDONLY, lmd->lmd_flags) ||
 	    sb->s_flags & SB_RDONLY)
-		gssiam->lgmi_options |= OBD_CONNECT_RDONLY;
+		gssiam->lgmi_options |= GSSIAM_OPT_RDONLY;
+
+	/*
+	 * If the GSSIAM-specific static mount option 'disable_rootsquash' has
+	 * been supplied, pass this explicit preference to GSSIAM downcalls and
+	 * the server-side upcall to bypass GSSIAM-enforced root squashing.
+	 */
+	if (test_bit(LL_SBI_USER_DISABLE_ROOT_SQUASH, sbi->ll_flags))
+		gssiam->lgmi_options |= GSSIAM_OPT_DISABLE_ROOT_SQUASH;
 
 	CDEBUG(D_SUPER, "copy IAM subdir:%s options:%u login:%u principal:%s\n",
 	       gssiam->lgmi_subdir, gssiam->lgmi_options, gssiam->lgmi_loginuid,
@@ -1391,6 +1417,7 @@ static const match_table_t ll_sbi_flags_name = {
 	{LL_SBI_SYNC_ON_CLOSE,		"nosync_on_close"},
 	{LL_SBI_TEST_DUMMY_ENCRYPTION,	"test_dummy_encryption=%s"},
 	{LL_SBI_TEST_DUMMY_ENCRYPTION,	"test_dummy_encryption"},
+	{LL_SBI_USER_DISABLE_ROOT_SQUASH,	"disable_rootsquash"},
 	{LL_SBI_USER_FID2PATH,		"user_fid2path"},
 	{LL_SBI_USER_FID2PATH,		"nouser_fid2path"},
 	{LL_SBI_USER_PRINCIPAL,		"user_principal=%s"},
@@ -1500,6 +1527,7 @@ static int ll_options(char *options, struct super_block *sb)
 		case LL_SBI_64BIT_HASH:
 		case LL_SBI_ALWAYS_PING:
 		case LL_SBI_NOLCK:
+		case LL_SBI_USER_DISABLE_ROOT_SQUASH:
 			set_bit(token, sbi->ll_flags);
 			break;
 

@@ -840,6 +840,17 @@ enum ll_sbi_flags {
 	LL_SBI_STATFS_PROJECT,		/* statfs returns project quota */
 	LL_SBI_SYNC_ON_CLOSE,		/* files sync data on close */
 	LL_SBI_TEST_DUMMY_ENCRYPTION,	/* test dummy encryption */
+	/*
+	 * LL_SBI_USER_DISABLE_ROOT_SQUASH: A dedicated, static client
+	 * mount-time option ("disable_rootsquash") mainly for GSSIAM. It allows
+	 * the user to explicitly disable root squashing for this mount.
+	 *
+	 * Distinction from LL_SBI_NOROOTSQUASH:
+	 * LL_SBI_NOROOTSQUASH is standard Lustre's dynamic peer-squash flag
+	 * (computed at runtime based on whether local client NIDs match the
+	 * server's "nosquash_nids" configured via the MGS).
+	 */
+	LL_SBI_USER_DISABLE_ROOT_SQUASH,
 	LL_SBI_USER_FID2PATH,		/* fid2path by unprivileged users */
 	LL_SBI_USER_PRINCIPAL,		/* user principal for IAM */
 	LL_SBI_USER_XATTR,		/* support user xattr */

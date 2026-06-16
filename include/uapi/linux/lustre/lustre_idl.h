@@ -4227,6 +4227,7 @@ enum gssiam_auth_type {
 	GSSIAM_AUTH_RO			= 0x00000001,
 	GSSIAM_AUTH_RW			= 0x00000002,
 	GSSIAM_AUTH_EXPIRED		= 0x00000004,
+	GSSIAM_AUTH_DISABLE_ROOT_SQUASH	= 0x00000008,
 };
 
 struct gssiam_auth_rep {
@@ -4236,6 +4237,13 @@ struct gssiam_auth_rep {
 	__u32 gar_options;
 	__u32 gar_padding;
 	char  gar_principal[];
+};
+
+enum gssiam_mount_option_flags {
+	GSSIAM_OPT_RDONLY		= 0x00000001,
+	GSSIAM_OPT_DISABLE_ROOT_SQUASH	= 0x00000002,
+	GSSIAM_OPT_ALL			= GSSIAM_OPT_RDONLY |
+					  GSSIAM_OPT_DISABLE_ROOT_SQUASH,
 };
 
 #if defined(__cplusplus)

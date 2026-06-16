@@ -8608,6 +8608,7 @@ static int mdt_get_info_gssiam_authenticate(struct tgt_session_info *tsi)
 	__u32 *p;
 	__u32 token_len;
 	int val_size;
+	__u32 options;
 	int rc = 0;
 
 	if (IS_ERR_OR_NULL(mdt) || mdt_seq_site(mdt)->ss_node_id != 0)
@@ -8624,17 +8625,33 @@ static int mdt_get_info_gssiam_authenticate(struct tgt_session_info *tsi)
 	val_size = req_capsule_get_size(tsi->tsi_pill, &RMF_GETINFO_VAL,
 					RCL_CLIENT);
 	p = req_capsule_client_get(tsi->tsi_pill, &RMF_GETINFO_VAL);
-	if (!p || val_size < sizeof(__u32)) {
+	if (!p || val_size < sizeof(__u32) * 2) {
 		rc = -EPROTO;
 		CERROR("%s: invalid token buffer size=%d: rc = %d\n",
 		       tsi->tsi_tgt->lut_obd->obd_name, val_size, rc);
 		return err_serious(rc);
 	}
 
-	token_len = le32_to_cpu(*p);
-	token = (char *)(p + 1);
+	/* The GSSIAM authentication request is packed by the remote target
+	 * (e.g., OST or MDT1) in tgt_gssiam_rpc_authenticate().
+	 * The RMF_GETINFO_VAL buffer payload is dynamically sized and packed
+	 * as:
+	 * - __le32 token_len
+	 * - __le32 options
+	 * - char   token[token_len]
+	 * - char   subdir[subdir_len] (null-terminated string)
+	 */
+	token_len = le32_to_cpu(*p++);
+	options = le32_to_cpu(*p++);
+	if (options & ~GSSIAM_OPT_ALL) {
+		rc = -EPROTO;
+		CERROR("%s: invalid GSSIAM options 0x%x: rc = %d\n",
+		       tsi->tsi_tgt->lut_obd->obd_name, options, rc);
+		return err_serious(rc);
+	}
+	token = (char *)p;
 
-	if (val_size < sizeof(__u32) + token_len) {
+	if (val_size < sizeof(__u32) * 2 + token_len) {
 		rc = -EPROTO;
 		CERROR("%s: invalid token_len=%u size=%d: rc = %d\n",
 		       tsi->tsi_tgt->lut_obd->obd_name, token_len, val_size,
@@ -8643,8 +8660,8 @@ static int mdt_get_info_gssiam_authenticate(struct tgt_session_info *tsi)
 	}
 
 	subdir = token + token_len;
-	if (strnlen(subdir, val_size - sizeof(__u32) - token_len) ==
-	    val_size - sizeof(__u32) - token_len) {
+	if (strnlen(subdir, val_size - sizeof(__u32) * 2 - token_len) ==
+	    val_size - sizeof(__u32) * 2 - token_len) {
 		rc = -EPROTO;
 		CERROR("%s: invalid subdir: token %u size %d rc = %d\n",
 		       tsi->tsi_tgt->lut_obd->obd_name, token_len,
@@ -8652,13 +8669,14 @@ static int mdt_get_info_gssiam_authenticate(struct tgt_session_info *tsi)
 		return err_serious(rc);
 	}
 
-	CDEBUG(D_SEC, "%s: GSSIAM auth RPC: token_len=%u subdir='%s'\n",
-	       tsi->tsi_tgt->lut_obd->obd_name, token_len, subdir);
+	CDEBUG(D_SEC,
+	       "%s: GSSIAM auth RPC: token_len=%u options=%u subdir='%s'\n",
+	       tsi->tsi_tgt->lut_obd->obd_name, token_len, options, subdir);
 
 	lid.lid_token = token;
 	lid.lid_token_len = token_len;
 	lid.lid_subdir = subdir;
-	lid.lid_options = 0;
+	lid.lid_options = options;
 
 	/* tgt_gssiam_get_entry() is the single source of truth for auth.
 	 * On a cache miss, it automatically triggers the upcall chain:
@@ -8722,7 +8740,7 @@ static int mdt_get_info_gssiam_authenticate(struct tgt_session_info *tsi)
 		rep->gar_expire = (entry->ue_expire > now) ?
 			cpu_to_le64(entry->ue_expire - now) : cpu_to_le64(0);
 		rep->gar_projid = cpu_to_le32(entry->u.gssiam.gd_auth_projid);
-		rep->gar_options = 0;
+		rep->gar_options = cpu_to_le32(entry->u.gssiam.gd_options);
 		rep->gar_padding = 0;
 		strscpy(rep->gar_principal, entry->u.gssiam.gd_principal,
 			val_size - sizeof(*rep));

@@ -100,6 +100,8 @@ static struct lu_nodemap *gssiam_get_nodemap(struct obd_device *target,
 	char nm_name[LUSTRE_NODEMAP_NAME_LENGTH + 1];
 	char add_name[LUSTRE_NODEMAP_NAME_LENGTH + 16];
 	const char *subdir = gssiam_info->lii_desc.lid_subdir;
+	__u32 perm = gssiam_info->lii_auth_permission;
+	bool allow_root = perm & GSSIAM_AUTH_DISABLE_ROOT_SQUASH;
 	struct lu_nodemap *nodemap;
 	int rc;
 
@@ -187,10 +189,16 @@ static struct lu_nodemap *gssiam_get_nodemap(struct obd_device *target,
 	 */
 	rc = nodemap_gssiam_attrs_update(nm_name,
 					 gssiam_info->lii_desc.lid_projid,
-					 (gssiam_info->lii_auth_permission &
-					  GSSIAM_AUTH_RO) != 0, false);
+					 perm & GSSIAM_AUTH_RO, allow_root);
 	if (rc) {
 		CERROR("%s: failed to update gssiam on nodemap %s: rc = %d\n",
+		       target->obd_name, nm_name, rc);
+		GOTO(out_put, rc);
+	}
+
+	rc = nodemap_set_deny_unknown(nm_name, false);
+	if (rc) {
+		CERROR("%s: failed to set deny_unknown on nodemap %s: rc = %d\n",
 		       target->obd_name, nm_name, rc);
 		GOTO(out_put, rc);
 	}
@@ -462,6 +470,14 @@ int gssiam_handle_init(struct ptlrpc_request *req, struct gss_svc_reqctx *grctx,
 		GOTO(out, rc = -ENOMEM);
 
 	lid->lid_options = le32_to_cpu(*(__le32 *)options_obj.data);
+	if (lid->lid_options & ~GSSIAM_OPT_ALL) {
+		rc = -EINVAL;
+		major = GSS_S_DEFECTIVE_TOKEN;
+		CDEBUG(D_SEC, "%s: invalid client options 0x%x: rc = %d\n",
+		       target->obd_name, lid->lid_options, rc);
+		GOTO(out, rc);
+	}
+
 	lid->lid_token_len = in_token->len;
 	if (lid->lid_token_len > 0) {
 		OBD_ALLOC(lid->lid_token, lid->lid_token_len);

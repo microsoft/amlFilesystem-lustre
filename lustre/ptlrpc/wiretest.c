@@ -7785,6 +7785,8 @@ void lustre_assert_wire_constants(void)
 		 (unsigned int)GSSIAM_AUTH_RW);
 	LASSERTF(GSSIAM_AUTH_EXPIRED == 0x00000004UL, "found 0x%.8xUL\n",
 		 (unsigned int)GSSIAM_AUTH_EXPIRED);
+	LASSERTF(GSSIAM_AUTH_DISABLE_ROOT_SQUASH == 0x00000008UL, "found 0x%.8xUL\n",
+		 (unsigned int)GSSIAM_AUTH_DISABLE_ROOT_SQUASH);
 
 	/* Checks for struct gssiam_auth_rep */
 	LASSERTF((int)sizeof(struct gssiam_auth_rep) == 24, "found %lld\n",
@@ -7814,4 +7816,12 @@ void lustre_assert_wire_constants(void)
 	LASSERTF((int)sizeof(*((struct gssiam_auth_rep *)0)->gar_principal) == 1, "found %lld\n",
 		 (long long)(int)sizeof(*((struct gssiam_auth_rep *)0)->gar_principal));
 	BUILD_BUG_ON(offsetof(struct gssiam_auth_rep, gar_principal) != sizeof(struct gssiam_auth_rep));
+
+	/* Checks for enum gssiam_mount_option_flags */
+	LASSERTF(GSSIAM_OPT_RDONLY == 0x00000001UL, "found 0x%.8xUL\n",
+		 (unsigned int)GSSIAM_OPT_RDONLY);
+	LASSERTF(GSSIAM_OPT_DISABLE_ROOT_SQUASH == 0x00000002UL, "found 0x%.8xUL\n",
+		 (unsigned int)GSSIAM_OPT_DISABLE_ROOT_SQUASH);
+	LASSERTF(GSSIAM_OPT_ALL == 0x00000003UL, "found 0x%.8xUL\n",
+		 (unsigned int)GSSIAM_OPT_ALL);
 }

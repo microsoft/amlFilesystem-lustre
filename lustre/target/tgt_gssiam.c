@@ -109,6 +109,9 @@ static int tgt_gssiam_upcall_compare(struct upcall_cache *cache,
 	if (strcmp(s1, s2) != 0)
 		return -1;
 
+	if (gssiam->gd_options != (arg_gssiam ? arg_gssiam->lid_options : 0))
+		return -1;
+
 	return 0;
 }
 
@@ -375,9 +378,10 @@ static int tgt_gssiam_parse_downcall(struct upcall_cache *cache,
 	char *expire_str;
 	char *principal_str = NULL;
 	time64_t expire;
+	char *options_str = NULL;
 	__u32 perm = GSSIAM_AUTH_DENY;
 
-	/* Format: mount_option:expire:principal */
+	/* Format: mount_option:expire:options:principal */
 	option = buf;
 	expire_str = strchr(buf, ':');
 	if (!expire_str) {
@@ -393,10 +397,16 @@ static int tgt_gssiam_parse_downcall(struct upcall_cache *cache,
 	*expire_str = '\0';
 	expire_str++;
 
-	principal_str = strchr(expire_str, ':');
-	if (principal_str) {
-		*principal_str = '\0';
-		principal_str++;
+	options_str = strchr(expire_str, ':');
+	if (options_str) {
+		*options_str = '\0';
+		options_str++;
+
+		principal_str = strchr(options_str, ':');
+		if (principal_str) {
+			*principal_str = '\0';
+			principal_str++;
+		}
 	}
 
 	if (kstrtoll(expire_str, 10, &expire)) {
@@ -425,6 +435,25 @@ static int tgt_gssiam_parse_downcall(struct upcall_cache *cache,
 		return -EINVAL;
 	}
 
+	if ((perm & (GSSIAM_AUTH_RO | GSSIAM_AUTH_RW)) &&
+	    options_str && *options_str) {
+		unsigned int val;
+
+		if (kstrtouint(options_str, 10, &val) == 0) {
+			/* The helper may report every right the principal
+			 * holds, so grant only what this mount asked for.
+			 */
+			if (val & gssiam->gd_options &
+			    GSSIAM_OPT_DISABLE_ROOT_SQUASH)
+				perm |= GSSIAM_AUTH_DISABLE_ROOT_SQUASH;
+		} else {
+			CERROR("%s: Malformed options field %s: rc = %d\n",
+			       cache->uc_name, options_str, -EINVAL);
+			return -EINVAL;
+		}
+	}
+
+	gssiam->gd_auth_permission = perm;
 	entry->ue_expire = ktime_get_seconds() + expire;
 
 	if ((perm & (GSSIAM_AUTH_RO | GSSIAM_AUTH_RW)) &&
@@ -444,12 +473,12 @@ static int tgt_gssiam_parse_downcall(struct upcall_cache *cache,
 			return -ENOMEM;
 	}
 
-	gssiam->gd_auth_permission = perm;
-
-	CDEBUG(D_INFO, "permission=0x%x expire=%lld projid=%u principal=%s\n",
+	CDEBUG(D_INFO,
+	       "permission=0x%x expire=%lld projid=%u principal=%s req_options=0x%x\n",
 	       gssiam->gd_auth_permission, (long long)expire,
 	       gssiam->gd_auth_projid,
-	       gssiam->gd_principal ? gssiam->gd_principal : "none");
+	       gssiam->gd_principal ? gssiam->gd_principal : "none",
+	       gssiam->gd_options);
 
 	return 0;
 }
@@ -478,7 +507,7 @@ int tgt_gssiam_downcall(const char *buffer, size_t count)
 
 	ENTRY;
 
-	/* Expect: <key> <mount_option>:<expire>:<principal> */
+	/* Expect: <key> <mount_option>:<expire>:<options>:<principal> */
 	OBD_ALLOC(buf, count + 1);
 	if (!buf)
 		RETURN(-ENOMEM);
@@ -562,6 +591,7 @@ static int tgt_gssiam_rpc_auth_callback(const struct lu_env *env,
 	int rep_size;
 	int princ_len = 0;
 	int str_len = 0;
+	unsigned int approved_opts = 0;
 	int needed;
 
 	if (rc != 0 || !ptlrpc_client_replied(req)) {
@@ -577,6 +607,7 @@ static int tgt_gssiam_rpc_auth_callback(const struct lu_env *env,
 		GOTO(out_downcall, rc = -EPROTO);
 
 	entry->u.gssiam.gd_auth_projid = le32_to_cpu(rep->gar_projid);
+	entry->u.gssiam.gd_options = le32_to_cpu(rep->gar_options);
 
 	if (rep_size > sizeof(*rep)) {
 		princ_len = rep_size - sizeof(*rep);
@@ -591,6 +622,9 @@ static int tgt_gssiam_rpc_auth_callback(const struct lu_env *env,
 	else if (le32_to_cpu(rep->gar_permission) & GSSIAM_AUTH_RO)
 		perm_str = "ro";
 
+	if (le32_to_cpu(rep->gar_permission) & GSSIAM_AUTH_DISABLE_ROOT_SQUASH)
+		approved_opts |= GSSIAM_OPT_DISABLE_ROOT_SQUASH;
+
 	/**
 	 * 128 bytes should be enough to hold the following downcall_str
 	 * before principal
@@ -600,8 +634,9 @@ static int tgt_gssiam_rpc_auth_callback(const struct lu_env *env,
 	if (!downcall_str)
 		GOTO(out_downcall, rc = -ENOMEM);
 
-	needed = snprintf(downcall_str, str_len, "%s:%llu:%s", perm_str,
+	needed = snprintf(downcall_str, str_len, "%s:%llu:%u:%s", perm_str,
 			  (unsigned long long)le64_to_cpu(rep->gar_expire),
+			  approved_opts,
 			  princ_len > 0 ? rep->gar_principal : "");
 
 	if (needed >= str_len || needed < 0)
@@ -653,7 +688,7 @@ int tgt_gssiam_rpc_authenticate(struct obd_export *exp,
 	req_capsule_set_size(&req->rq_pill, &RMF_GETINFO_KEY, RCL_CLIENT,
 			     sizeof(KEY_GSSIAM_AUTHENTICATE));
 	req_capsule_set_size(&req->rq_pill, &RMF_GETINFO_VAL, RCL_CLIENT,
-			     sizeof(__u32) + token_len + subdir_len);
+			     sizeof(__u32) * 2 + token_len + subdir_len);
 	req_capsule_set_size(&req->rq_pill, &RMF_GETINFO_VAL, RCL_SERVER,
 			     sizeof(struct gssiam_auth_rep) + 1024);
 
@@ -668,6 +703,8 @@ int tgt_gssiam_rpc_authenticate(struct obd_export *exp,
 
 	tmp = req_capsule_client_get(&req->rq_pill, &RMF_GETINFO_VAL);
 	*(__u32 *)tmp = cpu_to_le32(token_len);
+	tmp += sizeof(__u32);
+	*(__u32 *)tmp = cpu_to_le32(gssiam->gd_options);
 	tmp += sizeof(__u32);
 	if (token_len > 0)
 		memcpy(tmp, token, token_len);
@@ -728,13 +765,13 @@ static int tgt_gssiam_info_alloc(struct lustre_gssiam_info **gssiam_info_ptr,
 	/*
 	 * lid->lid_options is extracted from the incoming GSS security context
 	 * RPC (secdata) sent by the client. If the client indicates it has
-	 * mounted the filesystem as read-only (OBD_CONNECT_RDONLY), we demote
+	 * mounted the filesystem as read-only (GSSIAM_OPT_RDONLY), we demote
 	 * any granted RW permissions to GSSIAM_AUTH_RO while preserving other
 	 * states (such as DENY or EXPIRED). Otherwise, we adopt the permissions
 	 * returned by the GSSIAM upcall cache entry.
 	 */
 	perm = entry->u.gssiam.gd_auth_permission;
-	if ((lid->lid_options & OBD_CONNECT_RDONLY) &&
+	if ((lid->lid_options & GSSIAM_OPT_RDONLY) &&
 	    (perm & GSSIAM_AUTH_RW)) {
 		perm &= ~GSSIAM_AUTH_RW;
 		perm |= GSSIAM_AUTH_RO;

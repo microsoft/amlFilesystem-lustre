@@ -3602,6 +3602,16 @@ static void check_gssiam_auth_type(void)
 	CHECK_VALUE_X(GSSIAM_AUTH_RO);
 	CHECK_VALUE_X(GSSIAM_AUTH_RW);
 	CHECK_VALUE_X(GSSIAM_AUTH_EXPIRED);
+	CHECK_VALUE_X(GSSIAM_AUTH_DISABLE_ROOT_SQUASH);
+}
+
+static void check_gssiam_mount_option_flags(void)
+{
+	BLANK_LINE();
+	COMMENT("Checks for enum gssiam_mount_option_flags");
+	CHECK_VALUE_X(GSSIAM_OPT_RDONLY);
+	CHECK_VALUE_X(GSSIAM_OPT_DISABLE_ROOT_SQUASH);
+	CHECK_VALUE_X(GSSIAM_OPT_ALL);
 }
 
 static void
@@ -4099,6 +4109,7 @@ main(int argc, char **argv)
 
 	check_gssiam_auth_type();
 	check_gssiam_auth_rep();
+	check_gssiam_mount_option_flags();
 
 	printf("}\n");
 

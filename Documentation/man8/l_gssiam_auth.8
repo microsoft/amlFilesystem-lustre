@@ -64,6 +64,57 @@ sptlrpc/<upcall_name>/gssiam_auth_downcall path.
 .TP
 .B \fIOPTIONS\fR
 The options bitmask provided by the client's mount command (e.g., client read-only flag).
+This is a bitwise OR of one or more of the following mount option flags:
+.RS
+.TP
+.B 0x01 (GSSIAM_OPT_RDONLY)
+The client mounted the filesystem as read-only (e.g., via
+.BR "\-o ro" ).
+.TP
+.B 0x02 (GSSIAM_OPT_DISABLE_ROOT_SQUASH)
+The client mounted the filesystem with root squashing disabled (e.g., via
+.BR "\-o disable_rootsquash" ).
+.RE
+.SH DOWNCALL FORMAT
+The helper must write the authentication result back to the target's
+.B gssiam_auth_downcall
+lprocfs/sysfs file using the following format:
+.RS
+.EX
+.B <key> <mount_option>:<expire>:<approved_options>:<principal>
+.EE
+.RE
+.PP
+Where:
+.TP
+.B \fIkey\fR
+The opaque request key passed as the first argument to the upcall.
+.TP
+.B \fImount_option\fR
+The security permission granted by the authentication service:
+.B rw
+for read-write access,
+.B ro
+for read-only access,
+.B deny
+to deny access, or
+.B expired
+for an expired token.
+.TP
+.B \fIexpire\fR
+The duration (in seconds) that this authentication token remains valid.
+.TP
+.B \fIapproved_options\fR
+A decimal integer bitmask of approved mount options. Currently,
+.BR 2 " (" GSSIAM_OPT_DISABLE_ROOT_SQUASH ")"
+is supported to allow disabling root squash. The kernel ignores this bit
+unless the client also requested it with
+.BR "\-o disable_rootsquash" .
+.TP
+.B \fIprincipal\fR
+The authenticated principal string of the client. This field is mandatory
+when \fImount_option\fR is \fBrw\fR or \fBro\fR, and is optional (may be empty)
+when \fImount_option\fR is \fBdeny\fR or \fBexpired\fR.
 .SH EXAMPLES
 Configure the server authentication upcall path:
 .RS

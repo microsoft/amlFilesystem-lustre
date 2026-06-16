@@ -290,6 +290,10 @@ Enable FID to path translation by regular users via
 Disable FID to path translation by regular users. Root and process with
 CAP_DAC_READ_SEARCH can still perform FID to path translation.
 .TP
+.B disable_rootsquash
+Request disabling root squash for GSS IAM mounts, subject to server-side
+IAM authorization.
+.TP
 .BI network= NET
 Limit connections from the client to be on the network NID specified by 'net'.
 \'net\' designates a single network NID, like 'o2ib2' or 'tcp1'.

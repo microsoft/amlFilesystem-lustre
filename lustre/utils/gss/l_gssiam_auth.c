@@ -10,7 +10,7 @@
  * writing the result back to
  * /sys/fs/lustre/sptlrpc/<upcall_name>/gssiam_auth_downcall
  *
- * Result format: <key> <mount_option>:<expire>:<principal>
+ * Result format: <key> <mount_option>:<expire>:<approved_options>:<principal>
  */
 
 #include <stdio.h>
@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
 	unsigned int options = 0;
 	const char *mode = "rw";
 	const char *principal = "mock_gssiam_user";
+	unsigned int approved_options = 0;
 	int opt;
 	glob_t path;
 	int rc;
@@ -73,10 +74,11 @@ int main(int argc, char *argv[])
 	uc_name = argv[optind + 3];
 
 	/*
-	 * options holds the client-side mount options bitmask.
-	 * - If the client mounted read-only (-o ro), options will contain the
-	 *   OBD_CONNECT_RDONLY flag (0x1).
-	 * - If the client mounted read-write (default), options will be 0.
+	 * Parse client-side mount options bitmask
+	 * (enum gssiam_mount_option_flags):
+	 * - GSSIAM_OPT_RDONLY (0x1): client mounted read-only (-o ro).
+	 * - GSSIAM_OPT_DISABLE_ROOT_SQUASH (0x2): client requested
+	 *   disable_rootsquash.
 	 */
 	options = strtoul(argv[optind + 4], NULL, 10);
 
@@ -122,13 +124,25 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	/* XXX Extract principal from the token */
 
-	/* Write result: key mount_option:expire:principal */
-	snprintf(result, sizeof(result), "%llu %s:%lld:%s\n", key, mode,
-		 (long long)expire, principal);
-	logmsg(LL_INFO, "Trying downcall with key %llu (token_len=%d) to %s\n",
-		key, token_len, path.gl_pathv[0]);
+	if (options & GSSIAM_OPT_DISABLE_ROOT_SQUASH) {
+		/*
+		 * Real implementations would enforce security policies here.
+		 * For this mock upcall, we always approve the request if the
+		 * client specified disable_rootsquash.
+		 */
+		approved_options |= GSSIAM_OPT_DISABLE_ROOT_SQUASH;
+	}
+
+	/* XXX Extract principal from the token */
+	/* Write result: key mount_option:expire:approved_options:principal */
+	snprintf(result, sizeof(result), "%llu %s:%lld:%u:%s\n", key, mode,
+		 (long long)expire, approved_options, principal);
+
+	logmsg(LL_INFO,
+	       "Trying downcall with key %llu (token_len=%d) to %s %.*s\n",
+	       key, token_len, path.gl_pathv[0],
+	       (int)strlen(result) > 0 ? (int)strlen(result) - 1 : 0, result);
 
 	if (write(fd, result, strlen(result)) < 0) {
 		logmsg(LL_ERR, "write: %s\n", strerror(errno));
