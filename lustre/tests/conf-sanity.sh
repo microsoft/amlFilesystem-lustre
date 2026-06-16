@@ -8103,6 +8103,41 @@ test_89() { # LU-7131
 }
 run_test 89 "check tunefs --param and --erase-param{s} options"
 
+test_89a() { # LU-3682
+	(( "$MDS1_VERSION" >= $(version_code 2.17.54))) ||
+		skip "Need MDT version at least 2.17.54"
+
+	local mdsdev=$(mdsdevname 1)
+	local devlink=$TMP/$tfile
+
+	# Make sure mdt1 is running
+	do_facet mds1 "$LCTL dl | grep $FSNAME-MDT0000_UUID" || start_mdt 1 ||
+		error "start mdt1 failed"
+
+	# Create a symlink to the mounted device for ldiskfs
+	if [[ "$mds1_FSTYPE" != "zfs" ]]; then
+		do_facet mds1 "rm -f $devlink; ln -s $mdsdev $devlink" ||
+			error "failed to create symlink $devlink -> $mdsdev"
+		stack_trap "do_facet mds1 \"rm -f $devlink\""
+	fi
+
+	# Run tunefs.lustre
+	echo "Run tunefs.lustre on the mounted device"
+	do_facet mds1 "$TUNEFS --erase-params $mdsdev 2>&1 |
+		grep 'is currently mounted'" ||
+		error "$TUNEFS should fail to run on the mounted $mdsdev"
+	if [[ "$mds1_FSTYPE" != "zfs" ]]; then
+		echo "Run tunefs.lustre on the symbol link"
+		do_facet mds1 "$TUNEFS --erase-params $devlink 2>&1 |
+			grep 'is currently mounted'" ||
+			error "$TUNEFS should fail to run on $devlink"
+	fi
+
+	# Cleanup
+	reformat
+}
+run_test 89a "prevent tunefs.lustre from running on a mounted device"
+
 # $1 test directory
 # $2 (optional) value of max_mod_rpcs_in_flight to set
 check_max_mod_rpcs_in_flight() {

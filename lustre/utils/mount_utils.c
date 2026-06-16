@@ -27,12 +27,14 @@
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <linux/loop.h>
+#include <linux/magic.h>
 #include <sys/types.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <linux/lustre/lustre_cfg.h>
 #include <dirent.h>
 #include <sys/types.h>
+#include <sys/vfs.h>
 #include <sys/xattr.h>
 #include <libmount/libmount.h>
 #include <libcfs/util/string.h>
@@ -193,10 +195,34 @@ static bool compare_lustre_sources(const char *src1, const char *src2)
 	return strcmp(src1, src2) == 0;
 }
 
+/*
+ * Check if a device exists in /etc/mtab
+ * - For ZFS, spec1/spec2 are typically pool/dataset names.
+ * - For ldiskfs, spec1 could be a device path.
+ * - For Lustre client mounts, spec1/spec2 are the source strings (nid:/fsname).
+ */
 int check_mtab_entry(char *spec1, char *spec2, char *mtpt, char *type)
 {
-	FILE *fp;
+	struct stat st_dev;
 	struct mntent *mnt;
+	FILE *fp;
+	int fd;
+
+	if (spec1 == NULL) {
+		fprintf(stderr, "error: spec1 is NULL\n");
+		return 0;
+	}
+
+	/* Check block device in use by O_EXCL */
+	if (stat(spec1, &st_dev) == 0 && S_ISBLK(st_dev.st_mode)) {
+		fd = open(spec1, O_RDONLY | O_EXCL | O_NONBLOCK);
+		if (fd < 0 && errno == EBUSY)
+			return EEXIST;
+		if (fd >= 0) {
+			close(fd);
+			return 0;
+		}
+	}
 
 	fp = setmntent(MOUNTED, "r");
 	if (!fp)
@@ -217,9 +243,6 @@ int check_mtab_entry(char *spec1, char *spec2, char *mtpt, char *type)
 
 	return 0;
 }
-
-#include <sys/vfs.h>
-#include <linux/magic.h>
 
 static int mtab_is_proc(const char *mtab)
 {
