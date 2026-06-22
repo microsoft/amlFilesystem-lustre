@@ -405,7 +405,6 @@ AC_DEFUN([LB_CONFIG_FILES], [
 	AC_CONFIG_FILES(
 		[config/Makefile.exports]
 		autoMakefile
-		config/Makefile
 		AC_PACKAGE_TARNAME[.spec]
 		AC_PACKAGE_TARNAME[-dkms.spec]
 		ldiskfs/Makefile

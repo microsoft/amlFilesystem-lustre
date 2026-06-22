@@ -7,13 +7,13 @@
 .DEFAULT_GOAL := __default
 
 #
-# The top-level autoMakefile is only used for 'make install' and 'make dist'.
-# For the remaining make targets (often run interactively), we want to avoid
-# warnings about redefining make targets. Hence, we conditionally include
-# the autoMakefile.
+# The top-level autoMakefile is only used for 'make install'. For the remaining
+# make targets (often run interactively), we want to avoid warnings about
+# redefining make targets. Hence, we conditionally include the autoMakefile.
+# 'dist' is handled by config/Makefile.dist, so keep it out of autoMakefile.
 #
 
-ALWAYS_TARGETS := help checkpatch utils modules \
+ALWAYS_TARGETS := help checkpatch utils modules dist \
 	TAGS tags etags ctags cscope mkid \
 	checkstack checkstack-update checkstack-clean
 
@@ -30,6 +30,7 @@ endif
 # make targets.
 #
 
+-include config/Makefile.dist
 -include config/Makefile.exports
 -include config/Makefile.codetags
 -include config/Makefile.pkg-rpm
