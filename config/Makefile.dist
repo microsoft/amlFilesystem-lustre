@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# Creates the source distribution tarball using git archive.
+#
+
+VERSION  := $(shell ./LUSTRE-VERSION-GEN)
+PACKAGE  := lustre
+TARNAME  := $(PACKAGE)-$(VERSION)
+TAR_DEST := $(TARNAME).tar.gz
+
+#
+# Resolve the git dir explicitly so that 'make dist' works even when invoked
+# from an untracked subdirectory of the checkout.
+#
+
+GIT_DIR  := $(shell git rev-parse --git-dir 2>/dev/null)
+
+.PHONY: no-lustre.spec
+no-lustre.spec: lustre.spec.in LUSTRE-VERSION-FILE
+	sed \
+		-e 's|@VERSION@|$(VERSION)|g' \
+		-e 's|@LINUXRELEASE@|$(shell uname -r)|g' \
+		-e 's|@RELEASE_ID@|1|g' \
+		-e 's|@PACKAGE@|$(PACKAGE)|g' \
+		$< > $@
+	@echo "  SPEC    $@"
+
+.PHONY: no-lustre-dkms.spec
+no-lustre-dkms.spec: lustre-dkms.spec.in LUSTRE-VERSION-FILE
+	sed \
+		-e 's|@VERSION@|$(LVF)|g' \
+		$< > $@
+	@echo "  SPEC    $@"
+
+.PHONY: no-LUSTRE-VERSION-FILE
+no-LUSTRE-VERSION-FILE:
+	@./LUSTRE-VERSION-GEN > /dev/null
+
+DIST_FILES := \
+	aclocal.m4 \
+	configure \
+	config/compile \
+	config/config.guess \
+	config/config.sub \
+	config/depcomp \
+	config/install-sh \
+	config/missing \
+	config/libtool.m4 \
+	config/ltmain.sh \
+	config/ltoptions.m4 \
+	config/ltsugar.m4 \
+	config/ltversion.m4 \
+	config/lt~obsolete.m4
+
+DIST_FILES += $(shell find . -name '*.in' -not -path './.git/*' -not -path './BUILD/*' -printf '%P\n' | \
+	while read f; do \
+		git ls-files --error-unmatch "$$f" >/dev/null 2>&1 || echo "$$f"; \
+	done)
+
+DIST_FILES += $(patsubst %.target.in,%.target,\
+	$(wildcard lustre/kernel_patches/targets/*.target.in))
+
+ADD_FILES := $(foreach f,$(wildcard $(DIST_FILES)),--prefix=$(TARNAME)/$(patsubst ./%,%,$(dir $(f))) --add-file=$(f))
+
+.PHONY: dist
+dist:
+	git --git-dir=$(GIT_DIR) archive \
+		--format=tar.gz \
+		--prefix=$(TARNAME)/ \
+		--add-file=LUSTRE-VERSION-FILE \
+		--add-file=lustre.spec \
+		$(ADD_FILES) \
+		--prefix=$(TARNAME)/ \
+		HEAD \
+		-- ':(exclude)contrib' > $(TAR_DEST)
+	@echo "  DIST    $(TAR_DEST)"
+
+LUSTRE-VERSION-FILE: FORCE
+	@./LUSTRE-VERSION-GEN > /dev/null
+
+FORCE:
+
+.PHONY: dist FORCE

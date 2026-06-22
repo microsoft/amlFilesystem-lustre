@@ -19,17 +19,6 @@ SUBDIRS += . \
 	lustre/scripts \
 	lustre/conf
 
-DIST_SUBDIRS := ldiskfs \
-	lustre-iokit \
-	Documentation \
-	lib \
-	lnet/utils \
-	lustre/utils \
-	lustre/tests \
-	lustre/scripts \
-	lustre/conf \
-	config
-
 AUTOMAKE_OPTIONS = foreign
 
 UAPI_LUSTRE_EXCLUDE =
@@ -81,40 +70,3 @@ uninstall-hook:
 endif # !EXTERNAL_KO2IBLND
 endif # BUILT_IN_KO2IBLND
 endif # MODULES
-
-dist-hook:
-	rm -f $(distdir)/contrib/contrib-kernel-coverage.spec
-	find include/ -type f \( -name "*.h" \) \
-		-exec cp --parents {} $(distdir) \;
-	find lustre/include/ -type f \( -name "*.h" \) \
-		-exec cp --parents {} $(distdir) \;
-	find lustre_compat/ -type f \( -name "*.c" -o -name "*.h" -o -iname "Makefile" \) \
-		-exec cp --parents {} $(distdir) \;
-	find lustre/ -type f \( -name "*.c" -o -name "*.h" -o -iname "Makefile" \) \
-		-exec cp --parents {} $(distdir) \;
-	find lnet/ -type f \( -name "*.c" -o -name "*.h" -o -iname "Makefile" \) \
-		-exec cp --parents {} $(distdir) \;
-	find $(distdir) -name .deps -o \
-			-name CVS -o \
-			-name .svn -o \
-			-name .git -o \
-			-name .#* -exec rm -rf {} \;
-
-EXTRA_DIST = @PACKAGE_TARNAME@.spec	\
-	Makefile			\
-	Kbuild				\
-	config.h.in			\
-	lustre-dkms_pre-build.sh	\
-	lustre-dkms_post-build.sh	\
-	lustre-dkms_post-remove.sh	\
-	LUSTRE-VERSION-GEN		\
-	LUSTRE-VERSION-FILE		\
-	autogen.sh			\
-	modules.order			\
-	config/lustre-version.m4 \
-	contrib \
-	lustre/kernel_patches \
-	lustre/ChangeLog \
-	lnet/ChangeLog \
-	debian \
-	rpm
