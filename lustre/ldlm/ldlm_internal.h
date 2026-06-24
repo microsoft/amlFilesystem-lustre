@@ -415,3 +415,11 @@ static inline bool ldlm_res_eq(const struct ldlm_res_id *res0,
 /* ldlm_cache_policy.c */
 extern struct ldlm_lock_cache_ops ldlm_lru_cache_ops;
 extern struct ldlm_lock_cache_ops ldlm_lfru_cache_ops;
+
+static inline unsigned int
+ldlm_lfru_sample_window_size(struct ldlm_namespace *ns)
+{
+	return clamp_t(unsigned int, ns->ns_nr_unused / 10,
+		       LDLM_LFRU_SAMPLE_WINDOW_SIZE_MIN,
+		       LDLM_LFRU_SAMPLE_WINDOW_SIZE_MAX);
+}

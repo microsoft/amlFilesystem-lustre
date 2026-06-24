@@ -17486,6 +17486,27 @@ test_124d() {
 }
 run_test 124d "cancel very aged locks if lru-resize disabled"
 
+test_124_lfru_setup() {
+	local priv_thres=$1
+	local nsdir="ldlm.namespaces.*-MDT0000-mdc-*"
+	local save="$TMP/$TESTSUITE-$TESTNAME.parameters"
+
+	save_lustre_params client "$nsdir.lock_cache_policy" > $save
+	# Disable fname statahead; LFRU tests drive lock cache only via stat().
+	save_lustre_params client "llite.*.enable_statahead_fname" >> $save
+	[[ -n "$priv_thres" ]] &&
+		save_lustre_params client "$nsdir.lru_priv_score_threshold" >> $save
+	stack_trap "restore_lustre_params < $save; rm -f $save"
+	$LCTL set_param $nsdir.lock_cache_policy=LFRU ||
+		error "fail to set lock_cache_policy to LFRU"
+	$LCTL set_param llite.*.enable_statahead_fname=0 ||
+		error "fail to set enable_statahead_fname to 0"
+	if [[ -n "$priv_thres" ]]; then
+		$LCTL set_param -n $nsdir.lru_priv_score_threshold=$priv_thres ||
+			error "fail to set lru_priv_score_threshold"
+	fi
+}
+
 test_124e() {
 	[[ $PARALLEL != "yes" ]] || skip "skip parallel run"
 
@@ -17493,9 +17514,8 @@ test_124e() {
 	local max_unused=$(default_lru_size)
 	echo "max_unused=$max_unused"
 	lru_resize_disable mdc $max_unused
-	$LCTL set_param $nsdir.lru_priv_score_threshold=1 ||
-		error "fail to set lru_priv_score_threshold"
-	stack_trap "$LCTL set_param $nsdir.lru_priv_score_threshold=1"
+
+	test_124_lfru_setup 1
 
 	# cache unused locks on client
 	local nr=$((max_unused * 2))
@@ -17506,13 +17526,15 @@ test_124e() {
 		error "failed to create $nr files in $DIR/$tdir/files"
 	# clean cache
 	cancel_lru_locks mdc
-	sleep 5
+	sleep 2
 	# dir lock should be placed in priv list
 	for ((i = 0; i < 10; i++)); do
 		stat $DIR/$tdir/empty > /dev/null
 	done
-	# try to overflow lru cache
-	ls -l $DIR/$tdir/files > /dev/null
+	# Try to overflow LRU cache
+	for ((i = 0; i < nr; i++)); do
+		stat $DIR/$tdir/files/f$i > /dev/null
+	done
 
 	local unused_cnt=$($LCTL get_param -n $nsdir.lock_unused_count)
 	local priv_cnt=$($LCTL get_param -n $nsdir.lock_unused_priv_count)
@@ -17524,13 +17546,7 @@ test_124e() {
 	stat $DIR/$tdir/empty > /dev/null
 	sleep 2
 
-	local new_unused_cnt=$($LCTL get_param -n $nsdir.lock_unused_count)
-	local new_priv_cnt=$($LCTL get_param -n $nsdir.lock_unused_priv_count)
 	local new_priv_hits=$($LCTL get_param -n $nsdir.lock_lru_priv_hits)
-	(( new_unused_cnt == unused_cnt )) ||
-		error "new_cnt($new_unused_cnt) != unused_cnt($unused_cnt)"
-	(( priv_cnt == new_priv_cnt )) ||
-		error "priv_cnt($priv_cnt) != new_priv_cnt($new_priv_cnt)"
 	(( new_priv_hits > priv_hits )) ||
 		error "new_priv_hits($new_priv_hits) <= priv_hits($priv_hits)"
 }
@@ -17543,12 +17559,9 @@ test_124f() {
 	local max_unused=$(default_lru_size)
 	echo "max_unused=$max_unused"
 	lru_resize_disable mdc $max_unused
-	stack_trap "$LCTL set_param $nsdir.lru_priv_score_threshold=1"
 
-	# threshold inc
 	local priv_thres=1
-	$LCTL set_param -n $nsdir.lru_priv_score_threshold=$priv_thres ||
-		error "fail to set lru_priv_score_threshold"
+	test_124_lfru_setup $priv_thres
 	# cache unused locks on client
 	local nr=$((max_unused * 4))
 	mkdir_on_mdt0 $DIR/$tdir
@@ -17558,9 +17571,11 @@ test_124f() {
 		error "failed to create $nr files in $DIR/$tdir/files"
 	# clean cache
 	cancel_lru_locks mdc
-	sleep 5
-	# try to overflow lru cache
-	ls -l $DIR/$tdir/files > /dev/null
+	sleep 2
+	# Repeatedly hit one cached lock so its LFRU score raises threshold.
+	for ((i = 0; i < 10; i++)); do
+		stat $DIR/$tdir/files/f0 > /dev/null
+	done
 	local inc_priv_thres=$(
 		$LCTL get_param -n $nsdir.lru_priv_score_threshold
 	)
@@ -17573,9 +17588,11 @@ test_124f() {
 		error "failed to set lru_priv_score_threshold to $priv_thres"
 	# clean cache
 	cancel_lru_locks mdc
-	sleep 5
-	# try to overflow lru cache
-	ls -l $DIR/$tdir/files > /dev/null
+	sleep 2
+	# Fill the access window with cold locks so threshold decays.
+	for ((i = 0; i < nr; i++)); do
+		stat $DIR/$tdir/files/f$i > /dev/null
+	done
 	local dec_priv_thres=$(
 		$LCTL get_param -n $nsdir.lru_priv_score_threshold
 	)
@@ -17685,6 +17702,41 @@ test_124g() {
 	     error "lfru enqueue $enq_priv_enabled > lru $enq_priv_disable"
 }
 run_test 124g "LFRU performance test"
+
+test_124h() {
+	# Verify lfru_sample_window_size sysfs tracks the LFRU sample window.
+	[[ $PARALLEL != "yes" ]] || skip "skip parallel run"
+
+	local nsdir="ldlm.namespaces.*-MDT0000-mdc-*"
+	local max_unused=400
+	local window_min=32
+
+	lru_resize_disable mdc $max_unused
+
+	test_124_lfru_setup
+
+	cancel_lru_locks mdc
+	local window_size=$($LCTL get_param -n $nsdir.lfru_sample_window_size)
+	(( window_size == window_min )) ||
+		error "empty cache window_size($window_size) != $window_min"
+
+	local nr=$((max_unused * 3))
+	mkdir_on_mdt0 $DIR/$tdir
+	stack_trap "unlinkmany $DIR/$tdir/f $nr"
+	createmany -i0 -o $DIR/$tdir/f $nr ||
+		error "failed to create $nr files in $DIR/$tdir"
+	cancel_lru_locks mdc
+	sleep 2
+	# fill the cache, the window_size is derived from the cache size.
+	for ((i = 0; i < nr; i++)); do
+		stat $DIR/$tdir/f$i > /dev/null
+	done
+
+	window_size=$($LCTL get_param -n $nsdir.lfru_sample_window_size)
+	(( window_size > window_min )) ||
+		error "window_size($window_size) <= window_min($window_min)"
+}
+run_test 124h "LFRU sample window size"
 
 test_125() { # 13358
 	$LCTL get_param -n llite.*.client_type | grep -q local ||

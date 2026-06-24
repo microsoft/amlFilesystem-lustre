@@ -62,9 +62,14 @@ extern struct kset *ldlm_svc_kset;
 #define LDLM_LFRU_MIN_PRIV_THRESH (1)
 #define LDLM_LFRU_PRIV_LIST_RATIO_LIMIT (30)
 #define LDLM_LFRU_PRIV_PER_ROUND_LIMIT (10)
-#define LDLM_LFRU_UPDATE_WINDOW_DIV (10)
+#define LDLM_LFRU_SAMPLE_WINDOW_SIZE_MIN (32)
+#define LDLM_LFRU_SAMPLE_WINDOW_SIZE_MAX (160)
 /* An arbitrary cap for the LFRU score to prevent integer overflow. */
 #define LDLM_LFRU_PRIV_THRESH_CAP (254)
+/* Min priv count before batch demotion; avoids oscillation while the cache
+ * is still filling and lock membership is fluctuating.
+ */
+#define LDLM_LFRU_PRIV_DEMOTE_THRESH (64)
 
 /**
  * LDLM non-error return states
@@ -520,12 +525,12 @@ struct ldlm_namespace {
 	 */
 	unsigned int		ns_max_unused;
 	/**
-	 * Tracks the number of accesses in the current window. When it reaches
-	 * `ns_lfru_check_window_size`, we update the privilege threshold
-	 * based on the maximum access frequency observed in this window.
+	 * Tracks how many locks have been sampled in the current window.
+	 * When it reaches `ns_lfru_sample_window_size`, the privilege
+	 * threshold is updated from the maximum score observed in the window.
 	 */
-	unsigned int		ns_lfru_access_window_cnt;
-	unsigned int		ns_lfru_check_window_size;
+	unsigned int		ns_lfru_sample_window_cnt;
+	unsigned int		ns_lfru_sample_window_size;
 	/**
 	 * The threshold for promoting locks into the privileged list.
 	 */
