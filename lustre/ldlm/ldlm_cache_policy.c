@@ -66,7 +66,7 @@ struct ldlm_lock_cache_ops ldlm_lru_cache_ops = {
 /*
  * The privileged threshold is updated under two conditions:
  * - A lock with a strictly higher score is encountered.
- * - The access count reaches the window size, using the maximum
+ * - The sample count reaches the window size, using the maximum
  *   frequency (max_freq) within the window as a basis.
  *
  * About `max_freq`:
@@ -86,26 +86,29 @@ static void ldlm_check_and_adjust_lfru_thresh(struct ldlm_namespace *ns,
 	    score == LDLM_LFRU_PRIV_THRESH_CAP) {
 		ns->ns_lfru_priv_score_threshold = score;
 		ns->ns_lfru_max_freq = LDLM_LFRU_MIN_PRIV_THRESH;
-		ns->ns_lfru_access_window_cnt = 0;
+		ns->ns_lfru_sample_window_cnt = 0;
 		return;
 	}
 
 	if (score > ns->ns_lfru_max_freq)
 		ns->ns_lfru_max_freq = score;
-	ns->ns_lfru_access_window_cnt++;
+	ns->ns_lfru_sample_window_cnt++;
 	/* Update priv thres based on max_freq */
-	if (ns->ns_lfru_access_window_cnt == ns->ns_lfru_check_window_size) {
+	if (ns->ns_lfru_sample_window_cnt >= ns->ns_lfru_sample_window_size) {
 		ns->ns_lfru_priv_score_threshold = ns->ns_lfru_max_freq;
 		ns->ns_lfru_max_freq = LDLM_LFRU_MIN_PRIV_THRESH;
-		ns->ns_lfru_access_window_cnt = 0;
-	} else if (ns->ns_lfru_access_window_cnt ==
-		   ns->ns_lfru_check_window_size / 2) {
+		ns->ns_lfru_sample_window_cnt = 0;
+		ns->ns_lfru_sample_window_size =
+			ldlm_lfru_sample_window_size(ns);
+	} else if (ns->ns_lfru_sample_window_cnt ==
+		   ns->ns_lfru_sample_window_size / 2) {
 		/*
 		 * Decay scores by a factor of 0.75 (arbitrary chosen) after
 		 * a half-window to reduce the influence of older access
 		 * patterns when calculating the new threshold.
 		 */
-		ns->ns_lfru_max_freq = ns->ns_lfru_max_freq * 3 / 4;
+		ns->ns_lfru_max_freq = max_t(int, ns->ns_lfru_max_freq * 3 / 4,
+					     LDLM_LFRU_MIN_PRIV_THRESH);
 	}
 }
 
@@ -165,20 +168,28 @@ static void ldlm_lfru_demote_lock(struct ldlm_namespace *ns,
 	ns->ns_nr_unused++;
 	list_add_tail(&lock->l_lru, &ns->ns_unused_normal_list);
 	lock->l_lru_type = LRU_NORMAL_LIST;
-	lock->l_lru_score >>= 2;
+	/*
+	 * Decay the historical frequency score by a factor of 4 (min score of
+	 * 1). Since a high score drives up the gating threshold, this decay
+	 * prevents a single, isolated re-access from falsely amplifying past
+	 * heat, which would spiked the threshold and disrupt the current
+	 * active workflow.
+	 */
+	lock->l_lru_score = max_t(int, lock->l_lru_score >> 2, 1);
 }
 
 /**
- * ldlm_lfru_priv_too_many: determine if priv lock count is too large
+ * ldlm_lfru_priv_too_many() - check whether the priv list is over capacity
  *
- * TOO MANY criteria:
- * - priv count exceeds 1/8 of the default LRU size, and
- * - priv count exceeds `priv_ratio_limit` (defaults to 1/3)
- *   of the current cache size
+ * Both conditions must hold:
+ * - at least @LDLM_LFRU_PRIV_DEMOTE_THRESH priv locks, so batch demotion
+ *   does not fire while the cache is still warming up and priv membership
+ *   would otherwise oscillate, and
+ * - priv locks reach lru_priv_ratio_limit of the current unused cache.
  */
 static inline bool ldlm_lfru_priv_too_many(struct ldlm_namespace *ns)
 {
-	return (ns->ns_nr_priv >= (LDLM_DEFAULT_LRU_SIZE >> 3)) &&
+	return (ns->ns_nr_priv >= LDLM_LFRU_PRIV_DEMOTE_THRESH) &&
 	       (ns->ns_nr_priv >=
 		(u64)ns->ns_nr_unused * ns->ns_lfru_priv_ratio_limit_256 >> 8);
 }

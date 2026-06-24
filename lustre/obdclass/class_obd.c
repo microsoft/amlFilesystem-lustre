@@ -1218,7 +1218,7 @@ bool obd_counter_add_test(struct obd_counter_instance *instance,
 	} else {
 		overlap = winsz - (time % winsz);
 		val = instance->oci_hist[0] +
-		      instance->oci_hist[1] * overlap / winsz;
+		      (u64)instance->oci_hist[1] * overlap / winsz;
 	}
 
 	threshold_exceeded = val > max;
