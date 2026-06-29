@@ -154,7 +154,12 @@ int_mofed=no
 [[ -f ${kernel_source_dir}/include/rdma/ib_verbs.h ]] &&
    can_o2ib_in_kernel=yes
 # Now check if ext_o2ib is explicit, or will be auto-detected:
-o2ib=$(echo ${OPTS} | tr ' ' '\n' | grep -- '--with-o2ib=' | cut -c 13-)
+# Take the LAST --with-o2ib= value: when /usr/src/ofa_kernel/default exists we
+# auto-add a --with-o2ib=<path> above, and the user may also pass an explicit
+# --with-o2ib=no via LUSTRE_DKMS_CONFIGURE_EXTRA. ./configure honors the last
+# flag, so match that here (tail -1) -- otherwise the ko2iblnd module would be
+# declared even though configure built without it, breaking DKMS install.
+o2ib=$(echo ${OPTS} | tr ' ' '\n' | grep -- '--with-o2ib=' | tail -1 | cut -c 13-)
 if [[ "x$o2ib" = "xno" ]] ; then
    can_o2ib_in_kernel=no
 elif [[ -d $o2ib ]] ; then
