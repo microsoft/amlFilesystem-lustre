@@ -8039,12 +8039,13 @@ static int lfs_find(int argc, char **argv)
 			regex_t reg;
 			regmatch_t pmatch[3];
 
-			param->fp_exclude_obd = !!neg_opt;
 			if (c == 'm') {
+				param->fp_exclude_mdt = !!neg_opt;
 				p_num = &param->fp_num_mdts;
 				p_alloc = &param->fp_num_alloc_mdts;
 				pp_uuid = &param->fp_mdt_uuid;
 			} else {
+				param->fp_exclude_obd = !!neg_opt;
 				p_num = &param->fp_num_obds;
 				p_alloc = &param->fp_num_alloc_obds;
 				pp_uuid = &param->fp_obd_uuid;
