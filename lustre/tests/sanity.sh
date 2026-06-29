@@ -8540,6 +8540,39 @@ test_56v() {
 }
 run_test 56v "check 'lfs find -m match with lfs getstripe -m'"
 
+test_56vb() {
+	(( $MDSCOUNT >= 2 )) || skip_env "needs >= 2 MDTs"
+
+	local dir=$DIR/$tdir
+	local d0=$dir/dir_on_mdt0
+	local d1=$dir/dir_on_mdt1
+	local found
+
+	test_mkdir $dir
+	$LFS mkdir -i 0 $d0 || error "mkdir $d0 on MDT0 failed"
+	$LFS mkdir -i 1 $d1 || error "mkdir $d1 on MDT1 failed"
+	touch $d0/f0 $d1/f1 || error "touch failed"
+
+	# '! -m 0' must return the files NOT on MDT0 (i.e. those on MDT1),
+	# never the same set as '-m 0' (LU-20433 regression).
+	found=$($LFS find ! -m 0 $dir)
+	echo "lfs find ! -m 0: $found"
+	echo "$found" | grep -qw $d1 ||
+		error "'! -m 0' should list $d1 (not on MDT0)"
+	echo "$found" | grep -qw $d0 &&
+		error "'! -m 0' wrongly lists $d0 (on MDT0)"
+
+	found=$($LFS find ! -m 1 $dir)
+	echo "lfs find ! -m 1: $found"
+	echo "$found" | grep -qw $d0 ||
+		error "'! -m 1' should list $d0 (not on MDT1)"
+	echo "$found" | grep -qw $d1 &&
+		error "'! -m 1' wrongly lists $d1 (on MDT1)"
+
+	return 0
+}
+run_test 56vb "check 'lfs find ! -m <idx>' negation"
+
 test_56wa() {
 	(( $OSTCOUNT >= 2 )) || skip "needs >= 2 OSTs"
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
