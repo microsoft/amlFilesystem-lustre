@@ -14,6 +14,27 @@ set -e
 
 package="lustre-client-modules"
 version="@UPVERSION@"
+kver="$(uname -r)"
 
-dkms add -m "${package}" -v "${version}"
-dkms build -m "${package}" -v "${version}" && dkms install -m "${package}" -v "${version}" --force || true
+# dkms add is idempotent; tolerate "module already added".
+dkms add -m "${package}" -v "${version}" || true
+
+# Without a kernel build tree for the running kernel, DKMS cannot build now.
+# This is a legitimate deferral (e.g. headers not yet installed): leave the
+# module registered so dkms autoinstall builds it later, and do not fail the
+# package install.
+if [ ! -d "/lib/modules/${kver}/build" ]; then
+    echo "${package}-dkms: no kernel build tree for ${kver}; deferring DKMS build to autoinstall." >&2
+    exit 0
+fi
+
+# Headers are present, so a build/install failure is a real error and must
+# surface -- do not mask it. set -e propagates the failure to dpkg.
+dkms build -m "${package}" -v "${version}"
+dkms install --force -m "${package}" -v "${version}"
+
+# Sanity: confirm the module actually installed for the running kernel.
+if ! dkms status -m "${package}" -v "${version}" | grep -q "${kver}.*installed"; then
+    echo "${package}-dkms: module failed to install for ${kver}." >&2
+    exit 1
+fi

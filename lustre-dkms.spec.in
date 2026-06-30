@@ -199,8 +199,15 @@ for POSTINST in /usr/lib/dkms/common.postinst; do
     fi
 done
 dkms add -m %{module} -v %{version} %{!?not_rpm:--rpm_safe_upgrade} ||:
-dkms build -m %{module} -v %{version} || :
-dkms install --force -m %{module} -v %{version}
+# Only build when a kernel build tree for the running kernel is present;
+# otherwise defer (do not mask). A build failure with headers present must
+# surface rather than being swallowed.
+if [ -d "/lib/modules/$(uname -r)/build" ]; then
+    dkms build -m %{module} -v %{version}
+    dkms install --force -m %{module} -v %{version}
+else
+    echo "%{module}: no kernel build tree for $(uname -r); deferring DKMS build." >&2
+fi
 
 %preun
 dkms remove -m %{module} -v %{lustre_ver} --all --rpm_safe_upgrade
