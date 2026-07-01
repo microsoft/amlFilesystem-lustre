@@ -405,7 +405,13 @@ Suggests: bash-completion
 BuildRequires: redhat-rpm-config
 %endif
 %if "%{_vendor}" == "azl" || 0%{?azurelinux}
+# azurelinux-rpm-macros is a standalone package on AL3 (it also defines
+# %azurelinux). On AL4 those macros moved into azurelinux-release-common
+# (preinstalled) and the standalone package was removed, so only require it
+# on AL3 and earlier.
+%if 0%{?azurelinux} < 4
 BuildRequires: azurelinux-rpm-macros
+%endif
 BuildRequires: pkgconfig
 %endif
 #
