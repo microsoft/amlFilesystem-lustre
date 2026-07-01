@@ -90,10 +90,7 @@ do {									\
 # define LINVRNT(exp) ((void)sizeof!!(exp))
 #endif
 
-void
-#ifdef HAVE_LBUG_WITH_LOC_IN_OBJTOOL
-__noreturn
-#endif
+void __noreturn
 lbug_with_loc(struct libcfs_debug_msg_data *msg);
 
 #define LBUG()                                                          \
