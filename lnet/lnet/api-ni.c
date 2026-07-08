@@ -1043,6 +1043,7 @@ lnet_counters_get(struct lnet_counters *counters)
 {
 	struct lnet_counters *ctr;
 	struct lnet_counters_health *health = &counters->lct_health;
+	struct lnet_counters_p2pdma *p2pdma = &counters->lct_p2pdma;
 	int i, rc = 0;
 
 	memset(counters, 0, sizeof(*counters));
@@ -1084,6 +1085,12 @@ lnet_counters_get(struct lnet_counters *counters)
 		health->lch_successful_resends +=
 				ctr->lct_health.lch_successful_resends;
 	}
+
+	cfs_percpt_for_each(ctr, i, the_lnet.ln_counters) {
+		p2pdma->lcp_p2pdma_send += ctr->lct_p2pdma.lcp_p2pdma_send;
+		p2pdma->lcp_p2pdma_recv += ctr->lct_p2pdma.lcp_p2pdma_recv;
+	}
+
 out_unlock:
 	lnet_net_unlock(LNET_LOCK_EX);
 	return rc;

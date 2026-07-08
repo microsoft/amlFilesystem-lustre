@@ -172,6 +172,7 @@ struct lnet_msg {
 	unsigned int          msg_peerrtrcredit:1; /* taken a peer router credit */
 	unsigned int          msg_onactivelist:1; /* on the activelist */
 	unsigned int	      msg_rdma_get:1;
+	unsigned int	      msg_p2pdma:1;	  /* P2PDMA / GPU device memory */
 
 	struct lnet_peer_ni  *msg_txpeer;         /* peer I'm sending to */
 	struct lnet_peer_ni  *msg_rxpeer;         /* peer I received from */

@@ -240,6 +240,7 @@ static void
 lnet_msg_decommit_tx(struct lnet_msg *msg, int status)
 {
 	struct lnet_counters_common *common;
+	struct lnet_counters_p2pdma *p2pdma;
 	struct lnet_event *ev = &msg->msg_ev;
 
 	LASSERT(msg->msg_tx_committed);
@@ -247,6 +248,8 @@ lnet_msg_decommit_tx(struct lnet_msg *msg, int status)
 		goto out;
 
 	common = &(the_lnet.ln_counters[msg->msg_tx_cpt]->lct_common);
+	p2pdma = &(the_lnet.ln_counters[msg->msg_tx_cpt]->lct_p2pdma);
+
 	switch (ev->type) {
 	default: /* routed message */
 		LASSERT(msg->msg_routing);
@@ -282,6 +285,9 @@ lnet_msg_decommit_tx(struct lnet_msg *msg, int status)
 
 	common->lcc_send_count++;
 
+	if (msg->msg_p2pdma)
+		p2pdma->lcp_p2pdma_send++;
+
 incr_stats:
 	if (msg->msg_txpeer)
 		lnet_incr_stats(&msg->msg_txpeer->lpni_stats,
@@ -314,6 +320,7 @@ static void
 lnet_msg_decommit_rx(struct lnet_msg *msg, int status)
 {
 	struct lnet_counters_common *common;
+	struct lnet_counters_p2pdma *p2pdma;
 	struct lnet_event *ev = &msg->msg_ev;
 
 	LASSERT(!msg->msg_tx_committed); /* decommitted or never committed */
@@ -323,6 +330,8 @@ lnet_msg_decommit_rx(struct lnet_msg *msg, int status)
 		goto out;
 
 	common = &(the_lnet.ln_counters[msg->msg_rx_cpt]->lct_common);
+	p2pdma = &(the_lnet.ln_counters[msg->msg_rx_cpt]->lct_p2pdma);
+
 	switch (ev->type) {
 	default:
 		LASSERT(ev->type == 0);
@@ -356,6 +365,9 @@ lnet_msg_decommit_rx(struct lnet_msg *msg, int status)
 	}
 
 	common->lcc_recv_count++;
+
+	if (msg->msg_p2pdma)
+		p2pdma->lcp_p2pdma_recv++;
 
 incr_stats:
 	if (msg->msg_rxpeer)
@@ -420,6 +432,7 @@ lnet_msg_attach_md(struct lnet_msg *msg, struct lnet_libmd *md,
 	LASSERT(!msg->msg_routing);
 
 	msg->msg_md = md;
+	msg->msg_p2pdma = lnet_md_is_p2p(md);
 	if (msg->msg_receiving) { /* committed for receiving */
 		msg->msg_offset = offset;
 		msg->msg_wanted = mlen;
