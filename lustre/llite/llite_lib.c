@@ -206,16 +206,7 @@ static struct ll_sb_info *ll_init_sbi(struct lustre_sb_info *lsi)
 	set_bit(LL_SBI_PARALLEL_DIO, sbi->ll_flags);
 	set_bit(LL_SBI_UNALIGNED_DIO, sbi->ll_flags);
 	set_bit(LL_SBI_STATFS_PROJECT, sbi->ll_flags);
-	/*
-	 * AMLFS: hybrid IO is disabled by default. It switches large buffered
-	 * writes to unaligned direct IO, which AMLFS managed OSTs (Lustre
-	 * 2.15.x) do not support -- OBD_CONNECT2_UNALIGNED_DIO was added in
-	 * 2.16.x. The switched-to-DIO write then hits the direct-write fallback
-	 * and hangs. The upstream mount-time auto-disable guard reads
-	 * lov_ocd, which is not reliably populated with the negotiated per-OST
-	 * flags2 at mount time, so it fails to turn hybrid IO off.
-	 */
-	/* set_bit(LL_SBI_HYBRID_IO, sbi->ll_flags); */
+	set_bit(LL_SBI_HYBRID_IO, sbi->ll_flags);
 	ll_sbi_set_encrypt(sbi, true);
 	ll_sbi_set_name_encrypt(sbi, true);
 
