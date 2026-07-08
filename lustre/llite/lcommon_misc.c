@@ -80,6 +80,7 @@ int cl_ocd_update(struct obd_device *host, struct obd_device *watched,
 	struct lustre_client_ocd *lco;
 	struct client_obd *cli;
 	u64 flags;
+	u64 flags2;
 	int result;
 
 	ENTRY;
@@ -90,10 +91,12 @@ int cl_ocd_update(struct obd_device *host, struct obd_device *watched,
 		cli = &watched->u.cli;
 		lco = owner;
 		flags = cli->cl_import->imp_connect_data.ocd_connect_flags;
+		flags2 = cli->cl_import->imp_connect_data.ocd_connect_flags2;
 		CDEBUG(D_SUPER, "Changing connect_flags: %#llx -> %#llx\n",
 		       lco->lco_flags, flags);
 		mutex_lock(&lco->lco_lock);
 		lco->lco_flags &= flags;
+		lco->lco_flags2 &= flags2;
 		/* for each osc event update ea size */
 		if (lco->lco_dt_exp)
 			cl_init_ea_size(lco->lco_md_exp, lco->lco_dt_exp);

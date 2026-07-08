@@ -2691,6 +2691,8 @@ static const struct llite_file_opcode {
 		"hybrid_writesize_switch" },
 	{ LPROC_LL_HYBRID_READSIZE_SWITCH, LPROCFS_TYPE_REQS,
 		"hybrid_readsize_switch" },
+	{ LPROC_LL_HYBRID_NO_UNALIGNED, LPROCFS_TYPE_REQS,
+		"hybrid_no_unaligned" },
 };
 
 void ll_stats_ops_tally(struct ll_sb_info *sbi, int op, long count)

@@ -709,18 +709,21 @@ retry_connect:
 		LCONSOLE_WARN("Test dummy encryption mode enabled\n");
 	}
 
-	/* If unaligned DIO is not supported, hybrid IO will result in EINVAL,
-	 * so turn hybrid IO off by default.  If the user turns it back on, they
-	 * will get EINVAL, but should be able to figure out the cause.
-	 */
-	if (test_bit(LL_SBI_HYBRID_IO, sbi->ll_flags) &&
-	    !obd_connect_has_unaligned_dio(&sbi->ll_dt_obd->u.lov.lov_ocd))
-		clear_bit(LL_SBI_HYBRID_IO, sbi->ll_flags);
-
 	sbi->ll_dt_exp->exp_connect_data = *data;
 
 	mutex_lock(&sbi->ll_lco.lco_lock);
 	sbi->ll_lco.lco_flags = data->ocd_connect_flags;
+	/* Seeded permissive: this is the client's *requested* flags2 (with
+	 * OBD_CONNECT2_UNALIGNED_DIO set), not the negotiated value -- OSC
+	 * connects are async, so lov_ocd/data are pinned to requested here.
+	 * cl_ocd_update() narrows lco_flags2 to the negotiated per-OST
+	 * conjunction as connect replies arrive. NOTE: because the conjunction
+	 * can only AND *down* (a 0-seed would latch off forever), the hybrid-IO
+	 * gate is fail-open in the brief window between mount and the first
+	 * cl_ocd_update() reply; the AMLFS release keeps hybrid IO off by
+	 * default as the belt-and-suspenders net for that window.
+	 */
+	sbi->ll_lco.lco_flags2 = data->ocd_connect_flags2;
 	sbi->ll_lco.lco_md_exp = sbi->ll_md_exp;
 	sbi->ll_lco.lco_dt_exp = sbi->ll_dt_exp;
 	mutex_unlock(&sbi->ll_lco.lco_lock);

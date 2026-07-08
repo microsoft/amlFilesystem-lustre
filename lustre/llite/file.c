@@ -1941,12 +1941,29 @@ ll_hybrid_bio_dio_switch_check(struct file *file, struct kiocb *iocb,
 	 */
 	if (iot == CIT_WRITE &&
 	    count >= sbi->ll_hybrid_io_write_threshold_bytes) {
+		/* Switching to unaligned DIO requires every connected OST to
+		 * support it; otherwise the unaligned DIO fails/hangs on the
+		 * OST that doesn't. Use the negotiated flags2 conjunction (not
+		 * the requested-pinned lov_ocd) to decide.
+		 */
+		if (!lco_connect_has_unaligned_dio(&sbi->ll_lco)) {
+			CDEBUG(D_CACHE,
+			       "%s: not switching write to DIO: lco_flags2=%#llx lacks unaligned DIO\n",
+			       sbi->ll_fsname, sbi->ll_lco.lco_flags2);
+			GOTO(out, op = LPROC_LL_HYBRID_NO_UNALIGNED);
+		}
 		op = LPROC_LL_HYBRID_WRITESIZE_SWITCH;
 		GOTO(out, dio_switch = true);
 	}
 
 	if (iot == CIT_READ &&
 	    count >= sbi->ll_hybrid_io_read_threshold_bytes) {
+		if (!lco_connect_has_unaligned_dio(&sbi->ll_lco)) {
+			CDEBUG(D_CACHE,
+			       "%s: not switching read to DIO: lco_flags2=%#llx lacks unaligned DIO\n",
+			       sbi->ll_fsname, sbi->ll_lco.lco_flags2);
+			GOTO(out, op = LPROC_LL_HYBRID_NO_UNALIGNED);
+		}
 		op = LPROC_LL_HYBRID_READSIZE_SWITCH;
 		GOTO(out, dio_switch = true);
 	}

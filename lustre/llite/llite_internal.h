@@ -590,11 +590,6 @@ __u32 ll_secctx_name_get(struct ll_sb_info *sbi, const char **secctx_name);
 int ll_security_secctx_name_filter(struct ll_sb_info *sbi, int xattr_type,
 				   const char *suffix);
 
-static inline bool obd_connect_has_unaligned_dio(struct obd_connect_data *data)
-{
-	return data->ocd_connect_flags & OBD_CONNECT_FLAGS2 &&
-		data->ocd_connect_flags2 & OBD_CONNECT2_UNALIGNED_DIO;
-}
 
 static inline bool obd_connect_has_enc(struct obd_connect_data *data)
 {
@@ -845,10 +840,30 @@ struct lustre_client_ocd {
 	 * cl_ocd_update() under ->lco_lock.
 	 */
 	__u64			 lco_flags;
+	/* Conjunction of connect_flags2 across all data (OSC) imports, updated
+	 * by cl_ocd_update() under ->lco_lock. Unlike lov_ocd, this reflects
+	 * the negotiated (post-reply) per-OST flags2, so it is the reliable
+	 * source for flags2 capabilities such as OBD_CONNECT2_UNALIGNED_DIO.
+	 */
+	__u64			 lco_flags2;
 	struct mutex		 lco_lock;
 	struct obd_export	*lco_md_exp;
 	struct obd_export	*lco_dt_exp;
 };
+
+/* Whether every connected data (OSC) import supports unaligned DIO, using the
+ * negotiated flags2 conjunction maintained by cl_ocd_update(). This is the
+ * reliable source: the mount-time lov_ocd is pinned to the client's requested
+ * flags (OSC connects are async, so the negotiated reply is not written back).
+ * Read lock-free (cl_ocd_update() writes under ->lco_lock); clearing is
+ * monotonic and both bits are required, so a stale read can only suppress a
+ * switch, never wrongly allow one against a converged fleet.
+ */
+static inline bool lco_connect_has_unaligned_dio(struct lustre_client_ocd *lco)
+{
+	return READ_ONCE(lco->lco_flags) & OBD_CONNECT_FLAGS2 &&
+		READ_ONCE(lco->lco_flags2) & OBD_CONNECT2_UNALIGNED_DIO;
+}
 
 struct ll_sb_info {
 	/* this protects pglist and ra_info.  It isn't safe to
@@ -1275,6 +1290,7 @@ enum {
 	LPROC_LL_HYBRID_NOSWITCH,
 	LPROC_LL_HYBRID_WRITESIZE_SWITCH,
 	LPROC_LL_HYBRID_READSIZE_SWITCH,
+	LPROC_LL_HYBRID_NO_UNALIGNED,
 	LPROC_LL_FILE_OPCODES
 };
 
