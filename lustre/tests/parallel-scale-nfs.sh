@@ -227,5 +227,98 @@ test_racer_on_nfs() {
 }
 run_test racer_on_nfs "racer on NFS client"
 
+test_stale_after_remote_write() {
+	# LU-20055: when Lustre is re-exported over NFS, a write done by
+	# another Lustre client must become visible on the NFS client. The
+	# re-exporting node only learns of the remote write through DLM lock
+	# cancellation, which must bump i_version so the NFS client's
+	# change_attr revalidation invalidates its cache.
+	#
+	# This only works over NFSv4, which has a real change attribute. NFSv3
+	# has none and revalidates on ctime/mtime, which in Lustre are only
+	# second-granular, so a same-second remote overwrite stays invisible.
+	[[ "$NFSVERSION" == "4" ]] ||
+		skip "needs NFSv4 change attribute (NFSv3 revalidates on ctime)"
+
+	local ver
+
+	ver=$(version_code $(lustre_build_version_node $LUSTRE_CLIENT_NFSSRV))
+	(( $ver >= $(version_code 2.17.57) )) ||
+		skip "Need nfs server client >= 2.17.57 for i_version bump"
+
+	local nfsfile=$TESTDIR/$tfile
+	# fs-relative path of the test file (NFS_CLIMNTPT is the fs root)
+	local relpath=${TESTDIR#$NFS_CLIMNTPT}/$tfile
+	local srv=$LUSTRE_CLIENT_NFSSRV
+	local wfile=$MOUNT2$relpath
+	local tries=10
+	local skipmsg=""
+	local msg=""
+	local -a ctime
+	local wcmd
+	local got
+	local i
+
+	# A second, independent Lustre client is needed to generate a
+	# conflicting write: writing through the NFS server's own client
+	# would not trigger a cross-client lock cancellation.
+	zconf_mount $srv $MOUNT2 $MOUNT_OPTS ||
+		error "mount 2nd lustre client on $srv failed"
+
+	# NB: everything from here to the umount below records its verdict in
+	# $msg instead of calling error(), and no stack_trap is used either.
+	# error() exits and run_one runs the subtest in a subshell, so an
+	# assertion would skip the umount and leave the writer client mounted
+	# on $srv - which is the MDS host by default, where cleanup() knows
+	# nothing about it. stack_trap is no good here because this suite
+	# installs a raw "trap cleanup_exit EXIT" (full NFS teardown) that
+	# stack_trap would re-arm inside the per-iteration subshell, tearing
+	# the NFS setup down after the first iteration of a repeated run.
+	for ((i = 0; i < tries; i++)); do
+		# Populate via NFS, then read it back so the NFS client caches
+		# the data and the file's attributes/change_attr.
+		echo old >$nfsfile || { msg="write via NFS failed"; break; }
+		got=$(cat $nfsfile)
+		[[ "$got" == "old" ]] ||
+			{ msg="NFS read got '$got', want 'old'"; break; }
+
+		# Overwrite from the independent client. This cancels the NFS
+		# server's read lock; without the i_version bump on
+		# cancellation the change_attr does not move and the NFS
+		# client keeps serving the stale page. The ctime is read on
+		# either side of the write in the same do_node so the ssh
+		# round trip stays out of the window the two writes share.
+		wcmd="stat -c %Z $wfile && echo new >$wfile"
+		ctime=($(do_node $srv "$wcmd && stat -c %Z $wfile"))
+		(( ${#ctime[@]} == 2 )) ||
+			{ msg="write from 2nd lustre client failed"; break; }
+
+		# nfsd adds ctime to the change attribute, so an overwrite in
+		# a later second moves change_attr on its own and would pass
+		# without the i_version bump. Lustre ctime is second-granular,
+		# so retry until both writes land in the same second.
+		(( ctime[0] == ctime[1] )) || continue
+
+		# Close-to-open revalidation on reopen must expose the new
+		# data.
+		got=$(cat $nfsfile)
+		[[ "$got" == "new" ]] ||
+			msg="NFS served stale data, got '$got'"
+		break
+	done
+	(( i < tries )) ||
+		skipmsg="no same-second overwrite in $tries tries"
+
+	rm -f $nfsfile
+	zconf_umount $srv $MOUNT2 force ||
+		msg=${msg:-"umount 2nd lustre client on $srv failed"}
+	do_node $srv "rmdir $MOUNT2"
+
+	[[ -z "$msg" ]] || error "$msg"
+	[[ -z "$skipmsg" ]] || skip "$skipmsg"
+}
+run_test stale_after_remote_write \
+	"NFS client sees fresh data after a remote Lustre write"
+
 complete_test $SECONDS
 exit_status
