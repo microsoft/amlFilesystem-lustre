@@ -380,13 +380,21 @@ static int lov_attr_get_dom(const struct lu_env *env, struct lov_object *lov,
 			    struct cl_attr **lov_attr)
 {
 	struct lov_layout_dom *dom = &lle->lle_dom;
-	struct lov_oinfo *loi = dom->lo_loi;
+	struct lov_oinfo *loi = NULL;
 	struct cl_attr *attr = &dom->lo_dom_r0.lo_attr;
 
 	if (dom->lo_dom_r0.lo_attr_valid) {
 		*lov_attr = attr;
 		return 0;
 	}
+
+	/* lo_loi may be NULL if lov_init_dom() has not yet completed.
+	 * smp_load_acquire() pairs with smp_store_release() in lov_init_dom()
+	 * to ensure all lo_dom_r0 stores are visible after a non-NULL load.
+	 */
+	loi = smp_load_acquire(&dom->lo_loi);
+	if (loi == NULL)
+		return -ENODATA;
 
 	if (OST_LVB_IS_ERR(loi->loi_lvb.lvb_blocks))
 		return OST_LVB_GET_ERR(loi->loi_lvb.lvb_blocks);
@@ -537,8 +545,13 @@ again:
 	spin_lock_init(&lle->lle_dom.lo_dom_r0.lo_sub_lock);
 	lle->lle_dom.lo_dom_r0.lo_nr = 1;
 	lle->lle_dom.lo_dom_r0.lo_sub = &lle->lle_dom.lo_dom;
-	lle->lle_dom.lo_loi = loi;
 	lle->lle_dom.lo_mdt_idx = idx;
+
+	/* Publish lo_loi only after all lo_dom_r0 stores are complete.
+	 * smp_store_release() pairs with smp_load_acquire() in
+	 * lov_attr_get_dom() to guarantee ordering on all architectures.
+	 */
+	smp_store_release(&lle->lle_dom.lo_loi, loi);
 
 	rc = lov_page_slice_fixup(lov, clo);
 	RETURN(rc);
@@ -606,6 +619,13 @@ static int lov_init_composite(const struct lu_env *env, struct lov_device *dev,
 	comp->lo_mirror_count = lsm->lsm_mirror_count + 1;
 	comp->lo_entry_count = lsm->lsm_entry_count;
 	comp->lo_preferred_mirror = -1;
+
+	/* For non-FLR files mirror 0 is always preferred. Set it early so
+	 * concurrent lov_io_mirror_init() can safely read lo_preferred_mirror
+	 * before the mirror selection loop at the end of this function.
+	 */
+	if (flr_state == LCM_FL_NONE)
+		comp->lo_preferred_mirror = 0;
 
 	if (equi(flr_state == LCM_FL_NONE, comp->lo_mirror_count > 1))
 		RETURN(-EINVAL);
@@ -1876,7 +1896,7 @@ static int fiemap_for_stripe(const struct lu_env *env, struct cl_object *obj,
 		const struct lov_layout_dom *dom = &lle->lle_dom;
 
 		subobj = lovsub2cl(dom->lo_dom);
-		if (lov_oinfo_is_dummy(dom->lo_loi))
+		if (dom->lo_loi == NULL || lov_oinfo_is_dummy(dom->lo_loi))
 			RETURN(-EIO);
 		devnr = dom->lo_mdt_idx | 0x10000ULL;
 		break;
