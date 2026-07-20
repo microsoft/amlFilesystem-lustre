@@ -2450,8 +2450,7 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 
 	/* POSIX: check before ATTR_*TIME_SET set (from inode_change_ok) */
 	if (attr->ia_valid & TIMES_SET_FLAGS) {
-		if ((!uid_eq(current_fsuid(), inode->i_uid)) &&
-		    !capable(CAP_FOWNER))
+		if (!inode_owner_or_capable(&nop_mnt_idmap, inode))
 			GOTO(clear, rc = -EPERM);
 	}
 
