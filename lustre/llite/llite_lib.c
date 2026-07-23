@@ -1618,7 +1618,16 @@ int ll_fill_super(struct super_block *sb)
 	sb->s_bdi->ra_pages = 0;
 	sb->s_bdi->io_pages = 0;
 	sb->s_bdi->capabilities |= BDI_CAP_CGROUP_WRITEBACK;
-	sb->s_iflags |= SB_I_CGROUPWB;
+	/* Each cgroup writeback structure holds a reference on the bdi, and
+	 * those references are dropped when the cgwb is killed, which at
+	 * umount only happens from bdi_unregister().  Only ask for cgroup
+	 * writeback when the bdi device is unregistered at unmount, either
+	 * by the VFS (SB_I_PERSB_BDI) or by removing the bdi sysfs device in
+	 * ll_bdi_device_unregister().
+	 * Otherwise the bdi outlives the superblock address its sysfs name
+	 * is derived from.
+	 */
+	sb->s_iflags |= LL_SB_I_CGROUPWB;
 
 	/* Call ll_debugfs_register_super() before lustre_process_log()
 	 * so that "llite.*.*" params can be processed correctly.
@@ -1696,13 +1705,17 @@ out_free_cfg:
 
 static void ll_bdi_device_unregister(struct backing_dev_info *bdi)
 {
-#if !defined(HAVE_BDI_DEBUG_STATS) && !defined(SB_I_PERSB_BDI)
-	if (bdi->dev == NULL)
-		return;
+#if defined(HAVE_BDI_DEV_NAME_FIELD) && !defined(SB_I_PERSB_BDI)
+	struct device *dev = bdi->dev;
 
-	debugfs_remove_recursive(bdi->debug_dir);
-	device_unregister(bdi->dev);
+	if (!dev)
+		return;
+	/* clear bdi->dev first so nothing sees a freed device */
 	bdi->dev = NULL;
+#ifdef CONFIG_DEBUG_FS
+	debugfs_remove_recursive(bdi->debug_dir);
+#endif
+	device_unregister(dev);
 #endif
 }
 

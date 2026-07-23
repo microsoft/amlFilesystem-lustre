@@ -1008,29 +1008,67 @@ AC_DEFUN([LC_HAVE_ITER_FILE_SPLICE_WRITE], [
 ]) # LC_HAVE_ITER_FILE_SPLICE_WRITE
 
 #
-# LC_HAVE_BDI_DEBUG_STATS
+# LC_HAVE_BDI_DEV_NAME_FIELD
 #
-# Linux kernel v5.10 commit 2d146b924ec3c0873f06308d149684dc1105d9a3
-# backing-dev: no need to check return value of debugfs_create functions
-# backing_dev_info.debug_stats was remove.
+# Linux kernel v5.7-rc1-260-g6bd87eec23cb
+# ("bdi: add a ->dev_name field to struct backing_dev_info")
+# caches a copy of the bdi device name in backing_dev_info.dev_name for
+# the lifetime of the bdi, so the writeback worker no longer dereferences
+# backing_dev_info.dev and it is safe to unregister the bdi device while
+# writeback structures still exist.  bdi_dev_name() alone (v5.6) only
+# returns dev_name(bdi->dev), which is not sufficient.
 #
-AC_DEFUN([LC_SRC_HAVE_BDI_DEBUG_STATS], [
-	LB2_LINUX_TEST_SRC([bdi_has_debug_stats], [
-		#include <linux/backing-dev-defs.h>
+AC_DEFUN([LC_SRC_HAVE_BDI_DEV_NAME_FIELD], [
+	LB2_LINUX_TEST_SRC([bdi_dev_name_field], [
+		#include <linux/backing-dev.h>
 	],[
-		struct backing_dev_info info;
+		struct backing_dev_info *info = NULL;
 
-		info.debug_stats = NULL;
+		(void)info->dev_name;
 	],[-Werror])
 ])
-AC_DEFUN([LC_HAVE_BDI_DEBUG_STATS], [
+AC_DEFUN([LC_HAVE_BDI_DEV_NAME_FIELD], [
 	LB2_MSG_LINUX_TEST_RESULT(
-	[if 'struct backing_dev_info' has 'debug_stats' field],
-	[bdi_has_debug_stats], [
-		AC_DEFINE(HAVE_BDI_DEBUG_STATS, 1,
-			[backing_dev_info has debug_stats])
+	[if 'struct backing_dev_info' has 'dev_name' field],
+	[bdi_dev_name_field], [
+		AC_DEFINE(HAVE_BDI_DEV_NAME_FIELD, 1,
+			[backing_dev_info has dev_name field])
 	])
-]) # LC_HAVE_BDI_DEBUG_STATS
+]) # LC_HAVE_BDI_DEV_NAME_FIELD
+
+#
+# LC_HAVE_BDI_UNREGISTER_AT_UMOUNT
+#
+# Cgroup writeback keeps a reference on the bdi until bdi_unregister(),
+# so it can only be used if the bdi is unregistered at umount, either by
+# the VFS (SB_I_PERSB_BDI, v5.16) or by llite removing its sysfs device,
+# which needs the cached backing_dev_info.dev_name (v5.7).  Otherwise
+# LL_SB_I_CGROUPWB is 0.  The RHEL 8 backport makes dev_name a pointer,
+# not an array, so the tests must not read it from an uninitialized struct.
+#
+AC_DEFUN([LC_SRC_HAVE_BDI_UNREGISTER_AT_UMOUNT], [
+	LB2_LINUX_TEST_SRC([bdi_unregister_at_umount], [
+		#include <linux/fs.h>
+		#include <linux/backing-dev.h>
+	],[
+		#ifndef SB_I_PERSB_BDI
+		struct backing_dev_info *info = NULL;
+
+		(void)info->dev_name;
+		#endif
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BDI_UNREGISTER_AT_UMOUNT], [
+	LB2_MSG_LINUX_TEST_RESULT(
+	[if the bdi can be unregistered at umount],
+	[bdi_unregister_at_umount], [
+		AC_DEFINE(LL_SB_I_CGROUPWB, [SB_I_CGROUPWB],
+			[use cgroup writeback])
+	],[
+		AC_DEFINE(LL_SB_I_CGROUPWB, 0,
+			[bdi cannot be unregistered, no cgroup writeback])
+	])
+]) # LC_HAVE_BDI_UNREGISTER_AT_UMOUNT
 
 #
 # LC_FSCRYPT_IS_NOKEY_NAME
@@ -4050,6 +4088,8 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 5.7
 	LC_SRC_FSCRYPT_DUMMY_CONTEXT_ENABLED
 	LC_SRC_HAVE_CPU_LATENCY_QOS
+	LC_SRC_HAVE_BDI_DEV_NAME_FIELD
+	LC_SRC_HAVE_BDI_UNREGISTER_AT_UMOUNT
 
 	# 5.8
 	LC_SRC_HAVE_PRANDOM_HEADER
@@ -4065,7 +4105,6 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_ITER_FILE_SPLICE_WRITE
 
 	# 5.10
-	LC_SRC_HAVE_BDI_DEBUG_STATS
 	LC_SRC_FSCRYPT_IS_NOKEY_NAME
 	LC_SRC_FSCRYPT_PREPARE_READDIR
 
@@ -4282,6 +4321,8 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	# 5.7
 	LC_FSCRYPT_DUMMY_CONTEXT_ENABLED
 	LC_HAVE_CPU_LATENCY_QOS
+	LC_HAVE_BDI_DEV_NAME_FIELD
+	LC_HAVE_BDI_UNREGISTER_AT_UMOUNT
 
 	# 5.8
 	LC_HAVE_PRANDOM_HEADER
@@ -4300,7 +4341,6 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_FSCRYPT_DUMMY_POLICY
 
 	# 5.10
-	LC_HAVE_BDI_DEBUG_STATS
 	LC_FSCRYPT_IS_NOKEY_NAME
 	LC_FSCRYPT_PREPARE_READDIR
 
