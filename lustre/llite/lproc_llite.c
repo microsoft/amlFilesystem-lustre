@@ -2907,6 +2907,16 @@ void ll_stats_ops_tally(struct ll_sb_info *sbi, int op, long count)
 }
 EXPORT_SYMBOL(ll_stats_ops_tally);
 
+void ll_oc_stats_inc(struct ll_sb_info *sbi, enum oc_stat which)
+{
+	lprocfs_counter_incr(sbi->ll_oc_stats, which);
+}
+
+void ll_oc_stats_add(struct ll_sb_info *sbi, enum oc_stat which, long count)
+{
+	lprocfs_counter_add(sbi->ll_oc_stats, which, count);
+}
+
 static const char *const ra_stat_string[] = {
 	[RA_STAT_HIT]			= "hits",
 	[RA_STAT_MISS]			= "misses",
@@ -2927,6 +2937,52 @@ static const char *const ra_stat_string[] = {
 	[RA_STAT_READAHEAD_PAGES]	= "readahead_pages",
 	[RA_STAT_FORCEREAD_PAGES]	= "forceread_pages"
 };
+
+static const char *const oc_stat_string[] = {
+	[OC_STAT_HIT]		= "hits",
+	[OC_STAT_MISS]		= "misses",
+	[OC_STAT_LOCK_COUNT]	= "threshold_count_locks",
+	[OC_STAT_LOCK_MS]	= "threshold_ms_locks",
+	[OC_STAT_MISS_REOPEN]	= "miss_reopen_time",
+};
+
+/* log2 histogram of the time from last close to a reopen that missed */
+static int ll_oc_reopen_hist_seq_show(struct seq_file *seq, void *v)
+{
+	struct ll_sb_info *sbi = seq->private;
+	struct lprocfs_stats *stats = sbi->ll_oc_stats;
+	struct obd_histogram *hist;
+	unsigned long buckets[OBD_HIST_MAX];
+	unsigned long tot = 0, cum = 0;
+	int i;
+
+	hist = stats->ls_cnt_header[OC_STAT_MISS_REOPEN].lc_hist;
+	if (!hist)
+		return 0;
+
+	spin_lock(&hist->oh_lock);
+	memcpy(buckets, hist->oh_buckets, sizeof(buckets));
+	spin_unlock(&hist->oh_lock);
+
+	for (i = 0; i < OBD_HIST_MAX; i++)
+		tot += buckets[i];
+
+	lprocfs_stats_header(seq, ktime_get_real(), stats->ls_init, 25, ":",
+			     true, "");
+	seq_printf(seq, "%-11s %14s %4s %4s\n",
+		   "reopen_ms", "misses", "%", "cum%");
+
+	/* bucket i counts reopens that took up to 2^i msecs */
+	for (i = 0; i < OBD_HIST_MAX && cum < tot; i++) {
+		cum += buckets[i];
+		seq_printf(seq, "%10lu: %14lu %4u %4u\n", BIT(i),
+			   buckets[i], pct(buckets[i], tot), pct(cum, tot));
+	}
+
+	return 0;
+}
+
+LDEBUGFS_SEQ_FOPS_RO(ll_oc_reopen_hist);
 
 int ll_debugfs_register_super(struct super_block *sb, const char *name)
 {
@@ -3004,7 +3060,33 @@ int ll_debugfs_register_super(struct super_block *sb, const char *name)
 	debugfs_create_file("read_ahead_stats", 0644, sbi->ll_debugfs_entry,
 			    sbi->ll_ra_stats, &ldebugfs_stats_seq_fops);
 
+	sbi->ll_oc_stats = lprocfs_stats_alloc(ARRAY_SIZE(oc_stat_string),
+					       LPROCFS_STATS_FLAG_NONE);
+	if (sbi->ll_oc_stats == NULL)
+		GOTO(out_ra_stats, err = -ENOMEM);
+
+	for (id = 0; id < ARRAY_SIZE(oc_stat_string); id++) {
+		if (id == OC_STAT_MISS_REOPEN)
+			lprocfs_counter_init_units(sbi->ll_oc_stats, id,
+						   LPROCFS_CNTR_AVGMINMAX |
+						   LPROCFS_CNTR_HISTOGRAM,
+						   oc_stat_string[id], "msecs");
+		else
+			lprocfs_counter_init(sbi->ll_oc_stats, id,
+					     LPROCFS_TYPE_REQS,
+					     oc_stat_string[id]);
+	}
+
+	debugfs_create_file("open_cache_stats", 0644, sbi->ll_debugfs_entry,
+			    sbi->ll_oc_stats, &ldebugfs_stats_seq_fops);
+
+	debugfs_create_file("open_cache_reopen_hist", 0444,
+			    sbi->ll_debugfs_entry, sbi,
+			    &ll_oc_reopen_hist_fops);
+
 	RETURN(0);
+out_ra_stats:
+	lprocfs_stats_free(&sbi->ll_ra_stats);
 out_stats:
 	lprocfs_stats_free(&sbi->ll_stats);
 out_debugfs:
@@ -3030,6 +3112,7 @@ void ll_debugfs_unregister_super(struct super_block *sb)
 	kset_unregister(&sbi->ll_kset);
 	wait_for_completion(&sbi->ll_kobj_unregister);
 
+	lprocfs_stats_free(&sbi->ll_oc_stats);
 	lprocfs_stats_free(&sbi->ll_ra_stats);
 	lprocfs_stats_free(&sbi->ll_stats);
 }

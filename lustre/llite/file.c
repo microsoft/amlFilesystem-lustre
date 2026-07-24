@@ -1109,6 +1109,7 @@ int ll_file_open(struct inode *inode, struct file *file)
 	__u64 *och_usecount = NULL;
 	struct ll_file_data *lfd;
 	ktime_t kstart = ktime_get();
+	s64 reopen_ms = -1;
 	int rc = 0;
 
 	ENTRY;
@@ -1146,6 +1147,13 @@ int ll_file_open(struct inode *inode, struct file *file)
 	lfd->lfd_ciphertext = (file->f_flags & O_CIPHERTEXT) == O_CIPHERTEXT;
 	if (S_ISDIR(inode->i_mode))
 		ll_authorize_statahead(inode, lfd);
+
+	/* ll_track_file_opens() may reset lli_close_fd_time, save it first */
+	if (ktime_to_ns(lli->lli_close_fd_time))
+		reopen_ms = clamp_t(s64,
+				    ktime_ms_delta(kstart,
+						   lli->lli_close_fd_time),
+				    0, INT_MAX);
 
 	ll_track_file_opens(inode);
 	if (is_root_inode(inode)) {
@@ -1209,6 +1217,7 @@ restart:
 			/* Well, there's extra open request that we do not need,
 			 * let's close it somehow. This will decref request.
 			 */
+			ll_oc_stats_inc(ll_i2sbi(inode), OC_STAT_MISS);
 			rc = it_open_error(DISP_OPEN_OPEN, it);
 			if (rc) {
 				mutex_unlock(&lli->lli_och_mutex);
@@ -1216,6 +1225,9 @@ restart:
 			}
 
 			ll_release_openhandle(file_dentry(file), it);
+		} else {
+			/* Open was served from the cached open handle */
+			ll_oc_stats_inc(ll_i2sbi(inode), OC_STAT_HIT);
 		}
 		(*och_usecount)++;
 
@@ -1268,14 +1280,17 @@ restart:
 				 */
 			} else if (open_threshold > 0) {
 				/* Take MDS_OPEN_LOCK with many opens */
-				if (lli->lli_open_fd_count >= open_threshold)
+				if (lli->lli_open_fd_count >= open_threshold) {
 					it->it_open_flags |= MDS_OPEN_LOCK;
-
+					ll_oc_stats_inc(sbi,
+							OC_STAT_LOCK_COUNT);
 				/* If this is open after we just closed */
-				else if (ktime_before(ktime_get(),
+				} else if (ktime_before(ktime_get(),
 					    ktime_add_ms(lli->lli_close_fd_time,
-							 sbi->ll_oc_thrsh_ms)))
+						sbi->ll_oc_thrsh_ms))) {
 					it->it_open_flags |= MDS_OPEN_LOCK;
+					ll_oc_stats_inc(sbi, OC_STAT_LOCK_MS);
+				}
 			}
 
 			/*
@@ -1293,6 +1308,13 @@ restart:
 		if (!*och_p)
 			GOTO(out_och_free, rc = -ENOMEM);
 
+		ll_oc_stats_inc(ll_i2sbi(inode), OC_STAT_MISS);
+		/* There was no open handle for this reopen, a larger
+		 * opencache_threshold_ms could have asked for an open lock
+		 */
+		if (reopen_ms >= 0)
+			ll_oc_stats_add(ll_i2sbi(inode), OC_STAT_MISS_REOPEN,
+					reopen_ms);
 		(*och_usecount)++;
 
 		/* md_intent_lock() didn't get a request ref if there was an

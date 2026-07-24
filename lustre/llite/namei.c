@@ -1472,8 +1472,10 @@ static int ll_atomic_open(struct inode *dir, struct dentry *dentry,
 
 	if (open_threshold == 1 &&
 	    exp_connect_flags2(ll_i2mdexp(dir)) &
-	    OBD_CONNECT2_ATOMIC_OPEN_LOCK)
+	    OBD_CONNECT2_ATOMIC_OPEN_LOCK) {
 		it->it_open_flags |= MDS_OPEN_LOCK;
+		ll_oc_stats_inc(ll_i2sbi(dir), OC_STAT_LOCK_COUNT);
+	}
 
 	/* Dentry added to dcache tree in ll_lookup_it */
 	de = ll_lookup_it(dir, dentry, it, &pca, open_flags);

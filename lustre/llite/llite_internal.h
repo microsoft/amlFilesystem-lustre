@@ -720,6 +720,21 @@ enum ra_stat {
 	_NR_RA_STAT,
 };
 
+/* MDS open lock (open cache) statistics */
+enum oc_stat {
+	/* open was served from a cached open handle, no open RPC needed */
+	OC_STAT_HIT = 0,
+	/* open needed an open RPC to the MDS */
+	OC_STAT_MISS,
+	/* MDS_OPEN_LOCK requested due to opencache_threshold_count */
+	OC_STAT_LOCK_COUNT,
+	/* MDS_OPEN_LOCK requested from reopen within opencache_threshold_ms */
+	OC_STAT_LOCK_MS,
+	/* time from the last close to a reopen that needed an open RPC */
+	OC_STAT_MISS_REOPEN,
+	_NR_OC_STAT,
+};
+
 struct ll_ra_info {
 	atomic_t	ra_cur_pages;
 	unsigned long	ra_max_pages;
@@ -908,6 +923,7 @@ struct ll_sb_info {
 	struct cl_client_cache	 *ll_cache;
 
 	struct lprocfs_stats     *ll_ra_stats;
+	struct lprocfs_stats     *ll_oc_stats;
 
 	struct ll_ra_info         ll_ra_info;
 	unsigned int              ll_namelen;
@@ -1270,6 +1286,8 @@ void cl_put_grouplock(struct ll_grouplock *lg);
 int ll_debugfs_register_super(struct super_block *sb, const char *name);
 void ll_debugfs_unregister_super(struct super_block *sb);
 void ll_stats_ops_tally(struct ll_sb_info *sbi, int op, long count);
+void ll_oc_stats_inc(struct ll_sb_info *sbi, enum oc_stat which);
+void ll_oc_stats_add(struct ll_sb_info *sbi, enum oc_stat which, long count);
 void ll_free_rw_stats_info(struct ll_sb_info *sbi);
 
 enum {

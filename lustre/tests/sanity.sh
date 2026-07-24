@@ -38956,6 +38956,79 @@ test_429() { # LU-7915 / LU-10948
 }
 run_test 429 "verify if opencache flag on client side does work"
 
+test_429b() { # LU-20519
+	local oc_stats="llite.$FSNAME-*.open_cache_stats"
+	local oc_thrsh_ms="llite.$FSNAME-*.opencache_threshold_ms"
+	local oc_hist="llite.$FSNAME-*.open_cache_reopen_hist"
+	local testfile=$DIR/$tfile
+	local old_ms
+	local hits
+	local misses
+	local locks
+	local reopens
+	local hist
+
+	$LCTL get_param -n $oc_stats > /dev/null ||
+		skip "client does not have open_cache_stats"
+
+	# request MDS_OPEN_LOCK based on the number of opens
+	set_opencache 1
+	stack_trap "restore_opencache"
+	touch $testfile
+	cancel_lru_locks mdc
+	$LCTL set_param $oc_stats=clear
+
+	$MULTIOP $testfile oc || error "multiop 1 failed"
+	$MULTIOP $testfile oc || error "multiop 2 failed"
+	$MULTIOP $testfile oc || error "multiop 3 failed"
+
+	$LCTL get_param $oc_stats
+	hits=$(calc_stats $oc_stats hits)
+	misses=$(calc_stats $oc_stats misses)
+	locks=$(calc_stats $oc_stats threshold_count_locks)
+
+	(( hits + misses == 3 )) ||
+		error "$hits hits + $misses misses != 3 opens"
+	(( misses >= 1 )) || error "first open did not miss open cache"
+	(( hits >= 1 )) || error "last open did not hit open cache"
+	(( locks >= 1 )) || error "no open lock from threshold_count"
+
+	# request MDS_OPEN_LOCK based on the time since the last close
+	old_ms=$($LCTL get_param -n $oc_thrsh_ms | head -n 1)
+	stack_trap "$LCTL set_param $oc_thrsh_ms=$old_ms"
+	set_opencache 100
+	$LCTL set_param $oc_thrsh_ms=60000
+	cancel_lru_locks mdc
+	$LCTL set_param $oc_stats=clear
+
+	$MULTIOP $testfile oc || error "multiop 4 failed"
+	$MULTIOP $testfile oc || error "multiop 5 failed"
+	$MULTIOP $testfile oc || error "multiop 6 failed"
+
+	$LCTL get_param $oc_stats
+	hits=$(calc_stats $oc_stats hits)
+	misses=$(calc_stats $oc_stats misses)
+	locks=$(calc_stats $oc_stats threshold_ms_locks)
+
+	(( hits + misses == 3 )) ||
+		error "$hits hits + $misses misses != 3 reopens"
+	(( hits >= 1 )) || error "last reopen did not hit open cache"
+	(( locks >= 1 )) || error "no open lock from threshold_ms"
+
+	# the first reopen missed, and is counted by time since the last close
+	$LCTL get_param $oc_hist
+	reopens=$(calc_stats $oc_stats miss_reopen_time)
+	hist=$($LCTL get_param -n $oc_hist |
+	       awk '/^ *[0-9]+:/ { sum += $2 } END { printf("%0.0f", sum) }')
+
+	(( reopens >= 1 )) || error "no reopen time for missed reopen"
+	(( reopens <= misses )) ||
+		error "$reopens reopen times > $misses misses"
+	(( hist == reopens )) ||
+		error "$hist reopens in histogram != $reopens reopen times"
+}
+run_test 429b "verify open_cache_stats counts opens and open locks"
+
 # write data chunks in reverse order to defeat ZFS automatic blocksize
 # growth during appends causing SEEK_HOLE to return unexpected offsets
 dd_reverse() {

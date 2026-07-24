@@ -1,0 +1,86 @@
+.TH LLITE.OPEN_CACHE_REOPEN_HIST 4 2026-10-02 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+llite.open_cache_reopen_hist \- reopen times of open cache misses
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param llite." INSTANCE .open_cache_reopen_hist
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 444 " | " -r--r--r--
+.TP
+.B Scope
+.br
+Per client mountpoint
+.TP
+.B Config
+.br
+Always present on client
+.SH DESCRIPTION
+The
+.BR open_cache_reopen_hist (4)
+parameter shows how long after the last close of a file
+the file was reopened with an open RPC to the MDS,
+because the client had no open handle for the file.
+It is the distribution of the
+.B miss_reopen_time
+counter of
+.BR llite.open_cache_stats (4),
+and can be used to choose a value for
+.BR llite.*.opencache_threshold_ms .
+The first open of a file on the client has no last close and is not included.
+.PP
+The histogram has power-of-two buckets.
+Each line has the upper limit of the bucket in milliseconds,
+the number of missed reopens within that limit and above the previous one,
+the percentage of all missed reopens in the bucket,
+and the cumulative percentage up to and including the bucket.
+Buckets above the longest reopen time are not printed.
+.PP
+The cumulative percentage is the share of the missed reopens
+that are within the given time of the last close, so that setting
+.B opencache_threshold_ms
+to that time would request an open lock for them,
+and later opens of those files could use the cached open handle.
+Reopens within the current
+.B opencache_threshold_ms
+are also in the histogram, since the open that requests the open lock
+still needs an open RPC.
+.PP
+The histogram is reset by writing any value to
+.BR llite.*.open_cache_stats .
+.SH MODULES
+This parameter is in the following modules:
+.EX
+.B llite.*.open_cache_reopen_hist
+.EE
+.SH EXAMPLES
+Show how long after the last close the missed reopens happened.
+Here 90% of the missed reopens were within 16 milliseconds of the last close:
+.EX
+.RB "client# " "lctl get_param llite.*.open_cache_reopen_hist"
+llite.testfs-ffff888150068000.open_cache_reopen_hist=
+snapshot_time:            1790789687.052634017 secs.nsecs
+start_time:               1790789686.511679375 secs.nsecs
+elapsed_time:             0.540954642 secs.nsecs
+reopen_ms           misses    %  cum%
+         1:              2   20   20
+         2:              0    0   20
+         4:              1   10   30
+         8:              2   20   50
+        16:              4   40   90
+        32:              0    0   90
+        64:              1   10  100
+.EE
+.SH AVAILABILITY
+.B llite.*.open_cache_reopen_hist
+is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit v2_17_59
+.SH SEE ALSO
+.BR llite.open_cache_stats (4),
+.BR lctl-get_param (8),
+.BR lctl-set_param (8)
