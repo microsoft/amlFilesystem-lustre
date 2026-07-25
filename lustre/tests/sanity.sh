@@ -19040,14 +19040,12 @@ order_2() {
 	local orig=$value
 	local order=1
 
-	while [ $value -ge 2 ]; do
-		order=$((order*2))
-		value=$((value/2))
+	while (( $value >= 2 )); do
+		order=$((order * 2))
+		value=$((value / 2))
 	done
 
-	if [ $orig -gt $order ]; then
-		order=$((order*2))
-	fi
+	(( $orig <= $order )) || order=$((order * 2))
 	echo $order
 }
 
@@ -19106,28 +19104,26 @@ test_133d() {
 	# check samedir rename size
 	mv ${testdir1}/test0 ${testdir1}/test_0
 
-	local testdir1_size=$(ls -l $DIR/${tdir} |
-		awk '/stats_testdir1/ {print $5}')
-	local testdir2_size=$(ls -l $DIR/${tdir} |
-		awk '/stats_testdir2/ {print $5}')
+	local testdir1_size=$(stat -c %s $DIR/$tdir/stats_testdir1)
+	local testdir2_size=$(stat -c %s $DIR/$tdir/stats_testdir2)
 
-	testdir1_size=$(order_2 $testdir1_size)
-	testdir2_size=$(order_2 $testdir2_size)
+	local testdir1_round=$(order_2 $testdir1_size)
+	local testdir2_round=$(order_2 $testdir2_size)
 
-	testdir1_size=$(size_in_KMGT $testdir1_size)
-	testdir2_size=$(size_in_KMGT $testdir2_size)
+	local testdir1_kgmt=$(size_in_KMGT $testdir1_round)
+	local testdir2_kgmt=$(size_in_KMGT $testdir2_round)
 
-	echo "source rename dir size: ${testdir1_size}"
-	echo "target rename dir size: ${testdir2_size}"
+	echo "source rename same dir size: $testdir1_kgmt ($testdir1_size)"
+	echo "target rename same dir size: $testdir2_kgmt ($testdir2_size)"
 
 	local cmd="do_facet $SINGLEMDS $LCTL "
 	cmd+="get_param mdt.$FSNAME-MDT0000.rename_stats"
 
 	eval $cmd || error "$cmd failed"
 	local samedir=$($cmd | grep 'same_dir')
-	local same_sample=$(get_rename_size $testdir1_size)
-	[ -z "$samedir" ] && error "samedir_rename_size count error"
-	[[ $same_sample -eq 1 ]] ||
+	[[ -n "$samedir" ]] || error "samedir_rename_size count error"
+	local same_sample=$(get_rename_size $testdir1_kgmt)
+	(( $same_sample == 1 )) ||
 		error "samedir_rename_size error $same_sample"
 	echo "Check same dir rename stats success"
 
@@ -19136,29 +19132,28 @@ test_133d() {
 	# check crossdir rename size
 	mv ${testdir1}/test_0 ${testdir2}/test_0
 
-	testdir1_size=$(ls -l $DIR/${tdir} |
-		awk '/stats_testdir1/ {print $5}')
-	testdir2_size=$(ls -l $DIR/${tdir} |
-		awk '/stats_testdir2/ {print $5}')
+	testdir1_size=$(stat -c %s $DIR/$tdir/stats_testdir1)
+	testdir2_size=$(stat -c %s $DIR/$tdir/stats_testdir2)
 
-	testdir1_size=$(order_2 $testdir1_size)
-	testdir2_size=$(order_2 $testdir2_size)
+	testdir1_round=$(order_2 $testdir1_size)
+	testdir2_round=$(order_2 $testdir2_size)
 
-	testdir1_size=$(size_in_KMGT $testdir1_size)
-	testdir2_size=$(size_in_KMGT $testdir2_size)
+	testdir1_kgmt=$(size_in_KMGT $testdir1_round)
+	testdir2_kgmt=$(size_in_KMGT $testdir2_round)
 
-	echo "source rename dir size: ${testdir1_size}"
-	echo "target rename dir size: ${testdir2_size}"
+	echo "source rename cross dir size: $testdir1_kgmt ($testdir1_size)"
+	echo "target rename cross dir size: $testdir2_kgmt ($testdir2_size)"
 
 	eval $cmd || error "$cmd failed"
 	local crossdir=$($cmd | grep 'crossdir')
-	local src_sample=$(get_rename_size $testdir1_size crossdir_src)
-	local tgt_sample=$(get_rename_size $testdir2_size crossdir_tgt)
-	[ -z "$crossdir" ] && error "crossdir_rename_size count error"
-	[[ $src_sample -eq 1 ]] ||
-		error "crossdir_rename_size error $src_sample"
-	[[ $tgt_sample -eq 1 ]] ||
-		error "crossdir_rename_size error $tgt_sample"
+	[[ -n "$crossdir" ]] || error "crossdir_rename_size count error"
+	local src_sample=$(get_rename_size $testdir1_kgmt crossdir_src)
+	local tgt_sample=$(get_rename_size $testdir2_kgmt crossdir_tgt)
+	echo "src=$src_sample tgt=$tgt_sample"
+	(( src_sample == 1 )) ||
+		error "crossdir_rename_size src $src_sample != 1"
+	(( tgt_sample == 1 )) ||
+		error "crossdir_rename_size tgt $tgt_sample != 1"
 	echo "Check cross dir rename stats success"
 	rm -rf $DIR/${tdir}
 }
