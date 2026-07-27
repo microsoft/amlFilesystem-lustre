@@ -42,7 +42,7 @@ lst_TESTS=${lst_TESTS:-"write read ping"}
 if (( MDS1_VERSION >= $(version_code 2.17.54) &&
       OST1_VERSION >= $(version_code 2.17.54) &&
       CLIENT_VERSION >= $(version_code 2.17.54) )); then
-	lst_CHECK=${lst_CHECK:-"full none discard"}
+	lst_CHECK=${lst_CHECK:-"full none discard simple"}
 else
 	lst_CHECK=${lst_CHECK:-"full none"}
 fi
@@ -139,7 +139,7 @@ test_smoke_sub () {
 			for c in $lst_CONCR; do
 				for chk in $lst_CHECK; do
 					case $chk in
-					full|discard)
+					full|discard|simple)
 						check="check=$chk"
 						;;
 					none)

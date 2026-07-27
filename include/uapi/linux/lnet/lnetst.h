@@ -20,9 +20,13 @@
 
 #define LST_FEAT_NONE		(0)
 #define LST_FEAT_BULK_LEN	(1 << 0)	/* enable variable page size */
+#define LST_FEAT_BULK_STRIDE	(1 << 1)	/* page size agnostic simple
+						 * check pattern
+						 */
 
 #define LST_FEATS_EMPTY		(LST_FEAT_NONE)
-#define LST_FEATS_MASK		(LST_FEAT_NONE | LST_FEAT_BULK_LEN)
+#define LST_FEATS_MASK		(LST_FEAT_NONE | LST_FEAT_BULK_LEN | \
+				 LST_FEAT_BULK_STRIDE)
 
 #define LST_NAME_SIZE		32		/* max name buffer length */
 

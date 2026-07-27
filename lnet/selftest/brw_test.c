@@ -28,6 +28,15 @@ MODULE_PARM_DESC(brw_inject_errors, "# data errors to inject randomly, zero by d
 #define BRW_MAGIC	0xeeb0eeb1eeb2eeb3ULL
 #define BRW_MSIZE	sizeof(__u64)
 
+/* Distance between two markers of the LST_BRW_CHECK_SIMPLE pattern when the
+ * session has the LST_FEAT_BULK_STRIDE feature. The two nodes of a test can
+ * have different page sizes. Thus the markers are put at a fixed distance in
+ * the bulk buffer, and not at page boundaries. The distance is the smallest
+ * supported page size, so that each page of each node gets at least one
+ * marker.
+ */
+#define BRW_STRIDE	4096
+
 static void
 brw_client_fini(struct sfw_test_instance *tsi)
 {
@@ -131,10 +140,6 @@ brw_client_init(struct sfw_test_instance *tsi)
 	return 0;
 }
 
-#define BRW_POISON      0xbeefbeefbeefbeefULL
-#define BRW_MAGIC       0xeeb0eeb1eeb2eeb3ULL
-#define BRW_MSIZE       sizeof(__u64)
-
 static int brw_inject_one_error(void)
 {
 	struct timespec64 ts;
@@ -150,8 +155,29 @@ static int brw_inject_one_error(void)
 	return brw_inject_errors--;
 }
 
+/**
+ * brw_fill_page() - Write the check pattern into one page of a bulk buffer.
+ * @pg: Page to fill.
+ * @off: Offset of the data in @pg.
+ * @len: Number of bytes of data in @pg.
+ * @pos: Offset of the data in the bulk buffer.
+ * @bklen: Total number of bytes in the bulk buffer.
+ * @pattern: One of the LST_BRW_CHECK_* patterns.
+ * @magic: Value to write.
+ * @strided: The session has the LST_FEAT_BULK_STRIDE feature.
+ *
+ * For LST_BRW_CHECK_SIMPLE with @strided the markers are put at the start of
+ * each BRW_STRIDE block of the bulk buffer, and at the end of the buffer. The
+ * positions are relative to the buffer and not to the page. Thus the two
+ * nodes of a test agree on them even if their page sizes are different.
+ *
+ * Without @strided the markers are put at the first and at the last __u64 of
+ * the page. The two nodes agree on them only if their page sizes and their
+ * start offsets in the bulk buffer are the same.
+ */
 static void
-brw_fill_page(struct page *pg, int off, int len, int pattern, __u64 magic)
+brw_fill_page(struct page *pg, int off, int len, int pos, int bklen,
+	      int pattern, __u64 magic, bool strided)
 {
 	char *addr = page_address(pg) + off;
 	int i;
@@ -166,11 +192,21 @@ brw_fill_page(struct page *pg, int off, int len, int pattern, __u64 magic)
 		magic += brw_inject_one_error();
 
 	if (pattern == LST_BRW_CHECK_SIMPLE) {
-		memcpy(addr, &magic, BRW_MSIZE);
-		if (len > BRW_MSIZE) {
-			addr += len - BRW_MSIZE;
+		if (!strided) {
 			memcpy(addr, &magic, BRW_MSIZE);
+			if (len > BRW_MSIZE)
+				memcpy(addr + len - BRW_MSIZE, &magic,
+				       BRW_MSIZE);
+			return;
 		}
+
+		for (i = roundup(pos, BRW_STRIDE) - pos; i < len;
+		     i += BRW_STRIDE)
+			memcpy(addr + i, &magic, BRW_MSIZE);
+
+		i = bklen - BRW_MSIZE - pos;
+		if (i >= 0 && i < len)
+			memcpy(addr + i, &magic, BRW_MSIZE);
 		return;
 	}
 
@@ -182,8 +218,24 @@ brw_fill_page(struct page *pg, int off, int len, int pattern, __u64 magic)
 	LBUG();
 }
 
+/**
+ * brw_check_page() - Verify the check pattern in one page of a bulk buffer.
+ * @pg: Page to verify.
+ * @off: Offset of the data in @pg.
+ * @len: Number of bytes of data in @pg.
+ * @pos: Offset of the data in the bulk buffer.
+ * @bklen: Total number of bytes in the bulk buffer.
+ * @pattern: One of the LST_BRW_CHECK_* patterns.
+ * @magic: Value to expect.
+ * @strided: The session has the LST_FEAT_BULK_STRIDE feature.
+ *
+ * The markers are at the positions that brw_fill_page() writes.
+ *
+ * Return: 0 if the data is good, 1 if the data is bad.
+ */
 static int
-brw_check_page(struct page *pg, int off, int len, int pattern, __u64 magic)
+brw_check_page(struct page *pg, int off, int len, int pos, int bklen,
+	       int pattern, __u64 magic, bool strided)
 {
 	char *addr = page_address(pg) + off;
 	__u64 data = 0; /* make compiler happy */
@@ -196,13 +248,31 @@ brw_check_page(struct page *pg, int off, int len, int pattern, __u64 magic)
 		return 0;
 
 	if (pattern == LST_BRW_CHECK_SIMPLE) {
-		data = *((__u64 *) addr);
-		if (data != magic)
-			goto bad_data;
+		if (!strided) {
+			i = 0;
+			data = *(__u64 *)addr;
+			if (data != magic)
+				goto bad_data;
 
-		if (len > BRW_MSIZE) {
-			addr += len - BRW_MSIZE;
-			data = *((__u64 *) addr);
+			if (len > BRW_MSIZE) {
+				i = len - BRW_MSIZE;
+				data = *(__u64 *)(addr + i);
+				if (data != magic)
+					goto bad_data;
+			}
+			return 0;
+		}
+
+		for (i = roundup(pos, BRW_STRIDE) - pos; i < len;
+		     i += BRW_STRIDE) {
+			data = *(__u64 *)(addr + i);
+			if (data != magic)
+				goto bad_data;
+		}
+
+		i = bklen - BRW_MSIZE - pos;
+		if (i >= 0 && i < len) {
+			data = *(__u64 *)(addr + i);
 			if (data != magic)
 				goto bad_data;
 		}
@@ -221,14 +291,16 @@ brw_check_page(struct page *pg, int off, int len, int pattern, __u64 magic)
 	LBUG();
 
 bad_data:
-	CERROR("Bad data in page %p: %#llx, %#llx expected\n", pg, data, magic);
+	CERROR("Bad data in page %p at bulk offset %d: %#llx, %#llx expected\n",
+	       pg, pos + i, data, magic);
 	return 1;
 }
 
 static void
-brw_fill_bulk(struct srpc_bulk *bk, int pattern, __u64 magic)
+brw_fill_bulk(struct srpc_bulk *bk, int pattern, __u64 magic, bool strided)
 {
 	struct page *pg;
+	int pos = 0;
 	int i;
 
 	for (i = 0; i < bk->bk_niov; i++) {
@@ -238,14 +310,17 @@ brw_fill_bulk(struct srpc_bulk *bk, int pattern, __u64 magic)
 		pg = bk->bk_iovs[i].bv_page;
 		off = bk->bk_iovs[i].bv_offset;
 		len = bk->bk_iovs[i].bv_len;
-		brw_fill_page(pg, off, len, pattern, magic);
+		brw_fill_page(pg, off, len, pos, bk->bk_len, pattern, magic,
+			      strided);
+		pos += len;
 	}
 }
 
 static int
-brw_check_bulk(struct srpc_bulk *bk, int pattern, __u64 magic)
+brw_check_bulk(struct srpc_bulk *bk, int pattern, __u64 magic, bool strided)
 {
 	struct page *pg;
+	int pos = 0;
 	int i;
 
 	for (i = 0; i < bk->bk_niov; i++) {
@@ -255,11 +330,13 @@ brw_check_bulk(struct srpc_bulk *bk, int pattern, __u64 magic)
 		pg = bk->bk_iovs[i].bv_page;
 		off = bk->bk_iovs[i].bv_offset;
 		len = bk->bk_iovs[i].bv_len;
-		if (brw_check_page(pg, off, len, pattern, magic) != 0) {
+		if (brw_check_page(pg, off, len, pos, bk->bk_len, pattern,
+				   magic, strided) != 0) {
 			CERROR("Bulk page %p (%d/%d) is corrupted!\n",
 			       pg, i, bk->bk_niov);
 			return 1;
 		}
+		pos += len;
 	}
 
 	return 0;
@@ -274,6 +351,7 @@ brw_client_prep_rpc(struct sfw_test_unit *tsu, struct lnet_processid *dest,
 	struct sfw_session *sn = tsi->tsi_batch->bat_session;
 	struct srpc_client_rpc *rpc;
 	struct srpc_brw_reqst *req;
+	bool strided;
 	int flags;
 	int npg;
 	int len;
@@ -314,10 +392,11 @@ brw_client_prep_rpc(struct sfw_test_unit *tsu, struct lnet_processid *dest,
 	unsafe_memcpy(&rpc->crpc_bulk, bulk,
 		      offsetof(struct srpc_bulk, bk_iovs[npg]),
 		      FLEXIBLE_OBJECT);
+	strided = (sn->sn_features & LST_FEAT_BULK_STRIDE) != 0;
 	if (opc == LST_BRW_WRITE)
-		brw_fill_bulk(&rpc->crpc_bulk, flags, BRW_MAGIC);
+		brw_fill_bulk(&rpc->crpc_bulk, flags, BRW_MAGIC, strided);
 	else
-		brw_fill_bulk(&rpc->crpc_bulk, flags, BRW_POISON);
+		brw_fill_bulk(&rpc->crpc_bulk, flags, BRW_POISON, strided);
 
 	req = &rpc->crpc_reqstmsg.msg_body.brw_reqst;
 	req->brw_flags = flags;
@@ -337,6 +416,7 @@ brw_client_done_rpc(struct sfw_test_unit *tsu, struct srpc_client_rpc *rpc)
 	struct srpc_msg *msg = &rpc->crpc_replymsg;
 	struct srpc_brw_reply *reply = &msg->msg_body.brw_reply;
 	struct srpc_brw_reqst *reqst = &rpc->crpc_reqstmsg.msg_body.brw_reqst;
+	bool strided;
 
 	LASSERT(sn != NULL);
 
@@ -366,7 +446,9 @@ brw_client_done_rpc(struct sfw_test_unit *tsu, struct srpc_client_rpc *rpc)
 	if (reqst->brw_rw == LST_BRW_WRITE)
 		return;
 
-	if (brw_check_bulk(&rpc->crpc_bulk, reqst->brw_flags, magic) != 0) {
+	strided = (sn->sn_features & LST_FEAT_BULK_STRIDE) != 0;
+	if (brw_check_bulk(&rpc->crpc_bulk, reqst->brw_flags, magic,
+			   strided) != 0) {
 		CERROR("Bulk data from %s is corrupted!\n",
 		       libcfs_idstr(&rpc->crpc_dest));
 		atomic_inc(&sn->sn_brw_errors);
@@ -399,6 +481,7 @@ brw_bulk_ready(struct srpc_server_rpc *rpc, int status)
 	struct srpc_brw_reply *reply = &rpc->srpc_replymsg.msg_body.brw_reply;
 	struct srpc_brw_reqst *reqst;
 	struct srpc_msg *reqstmsg;
+	bool strided;
 
 	LASSERT(rpc->srpc_bulk != NULL);
 	LASSERT(rpc->srpc_reqstbuf != NULL);
@@ -419,7 +502,9 @@ brw_bulk_ready(struct srpc_server_rpc *rpc, int status)
 	if (reqstmsg->msg_magic != SRPC_MSG_MAGIC)
 		__swab64s(&magic);
 
-	if (brw_check_bulk(rpc->srpc_bulk, reqst->brw_flags, magic) != 0) {
+	strided = (reqstmsg->msg_ses_feats & LST_FEAT_BULK_STRIDE) != 0;
+	if (brw_check_bulk(rpc->srpc_bulk, reqst->brw_flags, magic,
+			   strided) != 0) {
 		CERROR("Bulk data from %s is corrupted!\n",
 		       libcfs_idstr(&rpc->srpc_peer));
 		reply->brw_status = EBADMSG;
@@ -436,6 +521,7 @@ brw_server_handle(struct srpc_server_rpc *rpc)
 	struct srpc_msg *reqstmsg = &rpc->srpc_reqstbuf->buf_msg;
 	struct srpc_brw_reply *reply = &replymsg->msg_body.brw_reply;
 	struct srpc_brw_reqst *reqst = &reqstmsg->msg_body.brw_reqst;
+	bool strided;
 
 	LASSERT(sv->sv_id == SRPC_SERVICE_BRW);
 
@@ -488,10 +574,13 @@ brw_server_handle(struct srpc_server_rpc *rpc)
 	rpc->srpc_bulk->bk_discard =
 		(reqst->brw_flags == LST_BRW_CHECK_DISCARD);
 
+	strided = (reqstmsg->msg_ses_feats & LST_FEAT_BULK_STRIDE) != 0;
 	if (reqst->brw_rw == LST_BRW_READ)
-		brw_fill_bulk(rpc->srpc_bulk, reqst->brw_flags, BRW_MAGIC);
+		brw_fill_bulk(rpc->srpc_bulk, reqst->brw_flags, BRW_MAGIC,
+			      strided);
 	else
-		brw_fill_bulk(rpc->srpc_bulk, reqst->brw_flags, BRW_POISON);
+		brw_fill_bulk(rpc->srpc_bulk, reqst->brw_flags, BRW_POISON,
+			      strided);
 
 	return 0;
 }

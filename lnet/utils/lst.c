@@ -49,6 +49,13 @@ static unsigned int session_key;
 
 /* All nodes running 2.6.50 or later understand feature LST_FEAT_BULK_LEN */
 static unsigned int session_features = LST_FEATS_MASK;
+
+/* A session creation request sends the features in the version field of the
+ * generic Netlink header, which is 8 bits wide.
+ */
+_Static_assert(LST_FEATS_MASK <= UINT8_MAX,
+	       "LST features do not fit in the Netlink version field");
+
 static struct lstcon_trans_stat	trans_stat;
 
 typedef struct list_string {
@@ -484,6 +491,7 @@ static int lst_yaml_session(const char *label, const char *timeout, int nlflags,
 	bool done = nlflags ? false : true;
 	char nid[LNET_NIDSTR_SIZE];
 	char name[LST_NAME_SIZE];
+	unsigned int version;
 	unsigned int key = 0;
 	yaml_emitter_t request;
 	yaml_parser_t reply;
@@ -516,11 +524,22 @@ static int lst_yaml_session(const char *label, const char *timeout, int nlflags,
 	if (rc == 0)
 		goto parser_error;
 
+	/* The console takes the version of a session creation request as
+	 * the feature mask of the new session. Send the features that the
+	 * user selected. Other requests do not negotiate features, so they
+	 * send the version of the Netlink interface.
+	 *
+	 * The version field is 8 bits wide. See the assertion on
+	 * LST_FEATS_MASK above.
+	 */
+	version = (nlflags & NLM_F_CREATE) ? session_features
+					   : LNET_SELFTEST_GENL_VERSION;
+
 	/* Create Netlink emitter to send request to kernel */
 	yaml_emitter_initialize(&request);
 	rc = yaml_emitter_set_output_netlink(&request, sk,
 					     LNET_SELFTEST_GENL_NAME,
-					     LNET_SELFTEST_GENL_VERSION,
+					     version,
 					     LNET_SELFTEST_CMD_SESSIONS,
 					     nlflags);
 	if (rc == 0)
@@ -712,10 +731,11 @@ emitter_error:
 		yaml_event_delete(&event);
 	}
 
-	if (nlflags & NLM_F_CREATE) {
-		session_features = yaml_parser_get_reader_proto_version(&reply);
+	/* The console accepted the requested features. Keep them. The reply
+	 * carries the version of the Netlink interface, not the features.
+	 */
+	if (nlflags & NLM_F_CREATE)
 		session_key = key;
-	}
 parser_error:
 	if (rc == 0 && errmsg)
 		yaml_parser_log_error(&reply, stderr, errmsg);
