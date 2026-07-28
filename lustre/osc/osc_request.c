@@ -3230,6 +3230,12 @@ int osc_enqueue_base(struct obd_export *exp, struct ldlm_res_id *res_id,
 			RETURN(ELDLM_OK);
 
 		matched = ldlm_handle2lock(&lockh);
+		/* ldlm_lock_match_with_skip() gets a reference on the
+		 * lock unless LDLM_FL_TEST_LOCK is set and that case is
+		 * handled above, so this can never fail get the lock.
+		 */
+		LASSERT(matched != NULL);
+
 		if (speculative) {
 			/* This DLM lock request is speculative, and does not
 			 * have an associated IO request. Therefore if there
