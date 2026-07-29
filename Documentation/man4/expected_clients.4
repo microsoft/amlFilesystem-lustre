@@ -1,6 +1,6 @@
-.TH EXPECTED_CLIENTS 4 2026-02-10 Lustre "Lustre Kernel Interfaces"
+.TH EXPECTED_CLIENTS 4 2026-09-13 Lustre "Lustre Kernel Interfaces"
 .SH NAME
-epected_clients \- approximate total number of clients mountpoints
+expected_clients \- approximate total number of clients mountpoints
 .SH SYNOPSIS
 .SY "lctl set_param expected_clients"
 .YS
@@ -13,7 +13,7 @@ epected_clients \- approximate total number of clients mountpoints
 Global
 .TP
 .B Config
-Always present on the serveR
+Always present on the server
 .TP
 .B Initial default
 .B expected_clients=1
@@ -23,6 +23,22 @@ stores the approximate number of client mounts that a server may have at one tim
 Knowing this value during startup allows services to configure various tables,
 tunable values, etc. appropriately for the system once it is fully started.
 This avoids code having to make inaccurate guesses as to future system size.
+.PP
+On servers,
+.B expected_clients
+is used to derive the global
+.BR at_min (4)
+default for adaptive timeouts.
+When
+.B expected_clients
+increases (either set explicitly or via automatic updates as clients connect),
+the global
+.BR at_min (4)
+may be raised accordingly.
+Per-target
+.BI *. FSNAME *.at_min
+tunables override the global value and are not changed by
+.BR expected_clients .
 .PP
 The
 .B expected_clients
@@ -48,4 +64,5 @@ filesystem package since release 2.18.0.
 .\" commit v2_17_50-225-g671e757102
 .SH SEE ALSO
 .BR at_max (4),
+.BR at_min (4),
 .BR conns_per_peer (4)

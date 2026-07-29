@@ -504,6 +504,81 @@ static long obd_class_ioctl(struct file *filp, unsigned int cmd,
 	RETURN(err);
 }
 
+/* Serializes at_min updates (and at_min_disable_autotune on servers) */
+static DEFINE_SPINLOCK(at_bounds_lock);
+
+#ifdef CONFIG_LUSTRE_FS_SERVER
+static bool at_min_disable_autotune;
+#endif
+
+/* Manually pin at_min to a fixed value. On servers this disables
+ * automatic scaling from expected_clients. Passing val == 0 unpins
+ * at_min: servers restore automatic scaling from expected_clients,
+ * client builds restore the 5s default.
+ */
+void class_at_min_set(unsigned int val)
+{
+	if (val == 0) {
+#ifdef CONFIG_LUSTRE_FS_SERVER
+		spin_lock(&at_bounds_lock);
+		at_min_disable_autotune = false;
+		spin_unlock(&at_bounds_lock);
+		class_update_at_min_from_clients(class_expected_clients_get());
+#else
+		spin_lock(&at_bounds_lock);
+		at_min = 5;
+		spin_unlock(&at_bounds_lock);
+#endif
+		return;
+	}
+
+	spin_lock(&at_bounds_lock);
+	at_min = val;
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	at_min_disable_autotune = true;
+#endif
+	spin_unlock(&at_bounds_lock);
+}
+EXPORT_SYMBOL(class_at_min_set);
+
+#ifdef CONFIG_LUSTRE_FS_SERVER
+static unsigned int class_calc_at_min_from_clients(unsigned int expected)
+{
+	unsigned int calculated_at_min;
+
+	if (expected <= 1)
+		return 5;
+
+	calculated_at_min = (ilog2(expected + 7) - 3) * 5 / 2;
+
+	/* restrict estimated at_min to reasonable number of seconds */
+	return clamp(calculated_at_min, 5U, 60U);
+}
+
+void class_update_at_min_from_clients(unsigned int expected_clients)
+{
+	unsigned int new_at_min;
+
+	spin_lock(&at_bounds_lock);
+	if (at_min_disable_autotune)
+		goto out;
+
+	new_at_min = class_calc_at_min_from_clients(expected_clients);
+
+	if (at_max > 0 && new_at_min > at_max)
+		new_at_min = at_max;
+
+	if (new_at_min != at_min) {
+		at_min = new_at_min;
+		CDEBUG(D_INFO, "expected_clients=%u: at_min set to %u\n",
+		       expected_clients, new_at_min);
+	}
+
+out:
+	spin_unlock(&at_bounds_lock);
+}
+#endif /* CONFIG_LUSTRE_FS_SERVER */
+
 /* declare character device */
 static const struct file_operations obd_psdev_fops = {
 	.owner		= THIS_MODULE,

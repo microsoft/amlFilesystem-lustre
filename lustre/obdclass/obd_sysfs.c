@@ -99,7 +99,29 @@ static struct static_lustre_uintvalue_attr lustre_sattr_##name =	\
 
 LUSTRE_STATIC_UINT_ATTR(debug_peer_on_timeout, &obd_debug_peer_on_timeout);
 LUSTRE_STATIC_UINT_ATTR(dump_on_timeout, &obd_dump_on_timeout);
-LUSTRE_STATIC_UINT_ATTR(at_min, &at_min);
+
+static ssize_t at_min_show(struct kobject *kobj, struct attribute *attr,
+			   char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", at_min);
+}
+
+static ssize_t at_min_store(struct kobject *kobj, struct attribute *attr,
+			    const char *buffer, size_t count)
+{
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 10, &val);
+	if (rc)
+		return rc;
+
+	class_at_min_set(val);
+
+	return count;
+}
+LUSTRE_RW_ATTR(at_min);
+
 LUSTRE_STATIC_UINT_ATTR(at_max, &at_max);
 LUSTRE_STATIC_UINT_ATTR(at_extra, &at_extra);
 LUSTRE_STATIC_UINT_ATTR(at_early_margin, &at_early_margin);
@@ -129,13 +151,9 @@ static ssize_t expected_clients_store(struct kobject *kobj,
 	if (rc)
 		return rc;
 
-	if (val == 0)
-		return -EINVAL;
-
-	if (val > LR_MAX_CLIENTS)
-		return -EINVAL;
-
-	class_expected_clients_set(val);
+	rc = class_expected_clients_update(val, true);
+	if (rc)
+		return rc;
 
 	return count;
 }
@@ -626,7 +644,7 @@ static struct attribute *lustre_attrs[] = {
 	&lustre_sattr_debug_peer_on_timeout.u.attr,
 	&lustre_sattr_dump_on_timeout.u.attr,
 	&lustre_attr_dump_on_eviction.attr,
-	&lustre_sattr_at_min.u.attr,
+	&lustre_attr_at_min.attr,
 	&lustre_sattr_at_max.u.attr,
 	&lustre_sattr_at_extra.u.attr,
 	&lustre_sattr_at_early_margin.u.attr,
