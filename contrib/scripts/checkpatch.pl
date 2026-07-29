@@ -2816,6 +2816,24 @@ sub process {
 
 	my $checklicenseline = 1;
 
+	# Pre-scan the patch for any Documentation/man4/ pages it adds.
+	# A page added by the same patch that adds the LUSTRE_*_ATTR()
+	# using it isn't on disk yet when checkpatch reads a bare patch
+	# (e.g. the stdin-piped mode gerrit_checkpatch.py uses), so the
+	# tree lookup below can't see it.
+	my %added_man4_pages;
+	{
+		my $mf;
+		foreach my $rawline (@rawlines) {
+			if ($rawline =~ /^\+\+\+\s+(\S+)/) {
+				$mf = $1;
+				$mf =~ s@^([^/]*)/@@ if (!$file);
+				$added_man4_pages{$mf} = 1
+				    if ($mf =~ m{^Documentation/man4/.*\.4$});
+			}
+		}
+	}
+
 	sanitise_line_reset();
 	my $line;
 	foreach my $rawline (@rawlines) {
@@ -3639,10 +3657,14 @@ sub process {
 			}
 		}
 
-# Check for various typo / spelling mistakes
+# Check for various typo / spelling mistakes. The spelling dictionaries
+# themselves deliberately consist of "misspellings". Never scan them,
+# otherwise an addition to them trips its own entry.
 		my $myspell = is_userspace($realfile) ? $misspellings_user : $misspellings;
 		my %myfix = is_userspace($realfile) ? %spelling_fix_user : %spelling_fix;
-		if (defined($myspell) && ($in_commit_log || $line =~ /^(?:\+|Subject:)/i)) {
+		if (defined($myspell) &&
+		    $realfile !~ m{scripts/spelling.*\.txt$} &&
+		    ($in_commit_log || $line =~ /^(?:\+|Subject:)/i)) {
 			my $rawline_utf8 = decode("utf8", $rawline);
 			while ($rawline_utf8 =~ /(?:^|[^\w\-'`])($myspell)(?:[^\w\-'`]|$)/g) {
 				my $typo = $1;
@@ -3658,6 +3680,22 @@ sub process {
 							last;
 						}
 					}
+				}
+				# the LUSTRE_{RO,RW,WO}_ATTR, MODULE_PARM_DESC,
+				# and LDEBUGFS_SEQ_FOPS_* entries should not
+				# nag for a man4/ page if it already exists.
+				if ($typo_fix =~ "/man4/* page" &&
+				    $rawline_utf8 =~ /(?:(?:LDEBUGFS|LPROC)_SEQ_FOPS_(?:TYPE\(\s*\w+,\s*|\w*\()|(?:LUSTRE_(?:RO|RW|WO)_ATTR|MODULE_PARM_DESC)\(\s*)(\w+)/) {
+					my $param = $1;
+					# should create/change in this patch
+					next if (grep { m{(?:^|[/\.])\Q$param\E\.4$} }
+						 keys %added_man4_pages);
+					# grep -e: glob's GLOB_NOMAGIC returns a
+					# metacharacter-free pattern verbatim
+					# when nothing matches.
+					my @doc = grep { -e $_ }
+					    glob("$D/../../Documentation/man4/{,*.}$param.4");
+					next if (@doc);
 				}
 				my $msg_level = \&WARN;
 				$msg_level = \&CHK if ($file);
