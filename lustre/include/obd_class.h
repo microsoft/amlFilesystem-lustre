@@ -95,14 +95,12 @@ struct lu_device_type;
 /* genops.c */
 extern struct xarray obd_devs;
 struct obd_export *class_conn2export(struct lustre_handle *);
+void class_at_min_set(unsigned int val);
 #ifdef CONFIG_LUSTRE_FS_SERVER
 struct obd_type *class_add_symlinks(const char *name, bool enable_proc);
-int class_expected_clients_update(unsigned int max_clients);
+int class_expected_clients_update(unsigned int max_clients, bool allow_lower);
 unsigned int class_expected_clients_get(void);
-void class_expected_clients_set(unsigned int new_clients);
-#else
-static inline unsigned int class_expected_clients_get(void) { return 1; }
-static inline void class_expected_clients_set(unsigned int new) { };
+void class_update_at_min_from_clients(unsigned int expected_clients);
 #endif
 int class_register_type(const struct obd_ops *dt_ops,
 			const struct md_ops *md_ops, bool enable_proc,

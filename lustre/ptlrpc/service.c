@@ -31,7 +31,25 @@
 int test_req_buffer_pressure;
 module_param(test_req_buffer_pressure, int, 0444);
 MODULE_PARM_DESC(test_req_buffer_pressure, "set non-zero to put pressure on request buffer pools");
-module_param(at_min, int, 0644);
+static int at_min_param_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int num;
+	int rc;
+
+	rc = kstrtouint(val, 0, &num);
+	if (rc)
+		return rc;
+
+	class_at_min_set(num);
+	return 0;
+}
+
+static const struct kernel_param_ops at_min_param_ops = {
+	.set = at_min_param_set,
+	.get = param_get_uint,
+};
+
+module_param_cb(at_min, &at_min_param_ops, &at_min, 0644);
 MODULE_PARM_DESC(at_min, "Adaptive timeout minimum (sec)");
 module_param(at_max, int, 0644);
 MODULE_PARM_DESC(at_max, "Adaptive timeout maximum (sec)");

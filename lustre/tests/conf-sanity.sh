@@ -12950,6 +12950,115 @@ test_164() {
 }
 run_test 164 "test expected_clients parameter and max client tracking"
 
+test_165() {
+	(( $MDS1_VERSION >= $(version_code 2.17.58.39) )) ||
+		skip "Need MDS version >= 2.17.58.39 for auto at_min tuning"
+
+	local orig_expected_clients
+	local orig_at_min
+	local new_at_min
+
+	setup
+	stack_trap cleanup
+
+	orig_expected_clients=$(do_facet mds1 \
+				"$LCTL get_param -n expected_clients")
+	orig_at_min=$(do_facet mds1 $LCTL get_param -n at_min)
+
+	stack_trap "do_facet mds1 $LCTL set_param at_min=$orig_at_min"
+	stack_trap "do_facet mds1 $LCTL set_param at_min=0"
+	stack_trap "do_facet mds1 \
+		$LCTL set_param expected_clients=$orig_expected_clients"
+
+	echo "Testing automatic AT parameter scaling"
+
+	# at_min should stay within its clamped bounds, and grows monotonically
+	# (never decreases) as the client count increases.
+	local client_counts=(8 16 32 64 256 5000)
+	local prev_at_min=0
+
+	for clients in "${client_counts[@]}"; do
+		do_facet mds1 $LCTL set_param at_min=0
+		do_facet mds1 $LCTL set_param expected_clients=$clients ||
+			error "Failed to set expected_clients=$clients"
+
+		new_at_min=$(do_facet mds1 $LCTL get_param -n at_min)
+
+		(( new_at_min >= 5 && new_at_min <= 60 )) ||
+			error "$clients clients -> at_min=$new_at_min out of [5,60] bounds"
+
+		(( new_at_min >= prev_at_min )) ||
+			error "$clients clients -> at_min=$new_at_min decreased from $prev_at_min"
+
+		echo "$clients clients -> at_min=$new_at_min"
+		prev_at_min=$new_at_min
+	done
+
+	(( prev_at_min > 5 )) ||
+		error "at_min did not increase with growing client count"
+
+	do_facet mds1 $LCTL set_param at_min=0 ||
+		error "Failed to unpin at_min"
+
+	do_facet mds1 $LCTL set_param expected_clients=1 ||
+		error "Failed to set expected_clients=1"
+
+	new_at_min=$(do_facet mds1 $LCTL get_param -n at_min)
+	(( new_at_min >= 5 )) ||
+		error "at_min=$new_at_min below minimum bound"
+
+	echo "Minimum bound respected"
+
+	do_facet mds1 $LCTL set_param expected_clients=1000 ||
+		error "Failed to set expected_clients=1000"
+	local at_min_1k=$(do_facet mds1 $LCTL get_param -n at_min)
+
+	do_facet mds1 $LCTL set_param expected_clients=10000 ||
+		error "Failed to set expected_clients=10000"
+	local at_min_10k=$(do_facet mds1 $LCTL get_param -n at_min)
+
+	local ratio=$(( at_min_10k * 100 / at_min_1k ))
+	(( ratio < 200 )) ||
+		error "Not logarithmic: 1K=${at_min_1k}s, 10K=${at_min_10k}s"
+
+	echo "Logarithmic scaling verified"
+
+	# Verify that auto-computed at_min never exceeds at_max when
+	# at_max is explicitly lowered below the formula result.
+	# Use 5000 clients, which normally computes an at_min above 20s.
+	local orig_at_max=$(do_facet mds1 $LCTL get_param -n at_max)
+	stack_trap "do_facet mds1 $LCTL set_param at_max=$orig_at_max"
+	do_facet mds1 $LCTL set_param at_min=0 ||
+		error "Failed to unpin at_min"
+	do_facet mds1 $LCTL set_param at_max=20 ||
+		error "Failed to lower at_max"
+	do_facet mds1 $LCTL set_param expected_clients=5000 ||
+		error "Failed to set expected_clients=5000"
+	new_at_min=$(do_facet mds1 $LCTL get_param -n at_min)
+	(( new_at_min <= 20 )) ||
+		error "auto at_min=${new_at_min}s exceeds lowered at_max=20s"
+	echo "Invariant at_min <= at_max respected with lowered at_max"
+
+	# Test pinning behavior
+	do_facet mds1 $LCTL set_param at_min=0 ||
+		error "Failed to unpin at_min"
+
+	# Manually set at_min - should auto-pin
+	do_facet mds1 $LCTL set_param at_min=15 ||
+		error "Failed to set at_min=15"
+
+	# Change expected_clients - at_min should NOT change
+	do_facet mds1 $LCTL set_param expected_clients=10000 ||
+		error "Failed to set expected_clients=10000"
+
+	new_at_min=$(do_facet mds1 $LCTL get_param -n at_min)
+	(( new_at_min == 15 )) ||
+		error "Pinned at_min changed from 15 to $new_at_min"
+
+	echo "All automatic at_min scaling tests passed!"
+}
+run_test 165 "automatic at_min scaling based on expected clients"
+
 cleanup_200() {
 	local modopts=$1
 	stopall

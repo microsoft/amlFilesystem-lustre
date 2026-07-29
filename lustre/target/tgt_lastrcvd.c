@@ -46,7 +46,7 @@ static void tgt_update_max_clients(struct lu_target *lut)
 	max_clients = atomic_read(&lut->lut_max_clients);
 
 	if (current_clients > max_clients) {
-		rc = class_expected_clients_update(current_clients);
+		rc = class_expected_clients_update(current_clients, false);
 		if (rc != 0) {
 			CDEBUG(D_INFO,
 			       "%s: error setting expected_clients=%u: rc = %d\n",

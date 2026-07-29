@@ -1,4 +1,4 @@
-.TH AT_MIN 4 2026-03-31 Lustre "Lustre Kernel Interfaces"
+.TH AT_MIN 4 2026-09-13 Lustre "Lustre Kernel Interfaces"
 .SH NAME
 at_min \- minimum seconds for RPC adaptive timeout estimate
 .SH SYNOPSIS
@@ -31,7 +31,7 @@ Always present
 .TP
 .B Valid Range
 .br
-.RB at_min= 1
+.RB at_min= 0
 .br
 .RB at_min= at_max
 .SH DESCRIPTION
@@ -47,6 +47,44 @@ The client will always wait at least
 seconds for an RPC to timeout before it resends it.
 This avoids aggressively resending an RPC when a server is busy and the
 client has not received any RPC replies recently with an updated service time.
+.PP
+On servers, the global
+.B at_min
+default may be automatically adjusted based on the
+.BR expected_clients (4)
+tunable as the number of connected clients grows.
+.PP
+When administrators set
+.BR expected_clients ,
+the server calculates a suitable
+.B at_min
+using the formula
+.IR "(ilog2(expected_clients + 7) - 3) * 5 / 2" .
+If
+.B at_min
+is changed manually to a non-zero value, either via
+.BR lctl-set_param (8)
+for example,
+.BR "lctl set_param at_min=15" ,
+or through the corresponding kernel module parameter, the value is
+considered
+.I pinned
+and automatic scaling from
+.B expected_clients
+will no longer update
+.BR at_min .
+Automatic scaling can be re-enabled by writing
+.BR "lctl set_param at_min=0" ,
+which unpins
+.B at_min
+and immediately recalculates it from the current
+.B expected_clients
+value.
+.PP
+Per-target
+.BI *. FSNAME *.at_min
+settings override the global value and are not modified by
+.BR expected_clients (4).
 .PP
 If, for some reason (usually due to temporary network outages or sudden spikes
 in load immediately after mount),
@@ -83,9 +121,12 @@ filesystem package since release 1.6.4,
 .\" commit 1.6.0-1416-gde3c3fdf25
 but the per-subsystem tunables are only present since release 2.16.0.
 .\" commit v2_15_58-111-g0f2bc318d7
+The automatic scaling based on expected_clients is present since release 2.18.0.
+.\" commit 2.17.58.x
 .SH SEE ALSO
 .BR at_early_margin (4),
 .BR at_extra (4),
 .BR at_history (4),
 .BR at_max (4),
+.BR expected_clients (4),
 .BR ldlm_enqueue_min (4)

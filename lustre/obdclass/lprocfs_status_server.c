@@ -284,7 +284,26 @@ LDEBUGFS_SEQ_FOPS_RO(ldebugfs_exp_export);
 /* Global client tracking for parameter tuning */
 static unsigned int expected_clients = 1;
 
-module_param(expected_clients, uint, 0644);
+static int expected_clients_param_set(const char *val,
+				      const struct kernel_param *kp)
+{
+	unsigned int num;
+	int rc;
+
+	rc = kstrtouint(val, 0, &num);
+	if (rc)
+		return rc;
+
+	return class_expected_clients_update(num, true);
+}
+
+static const struct kernel_param_ops expected_clients_param_ops = {
+	.set = expected_clients_param_set,
+	.get = param_get_uint,
+};
+
+module_param_cb(expected_clients, &expected_clients_param_ops,
+		&expected_clients, 0644);
 MODULE_PARM_DESC(expected_clients,
 	"Order-of-magnitude estimate of client count for parameter tuning");
 
@@ -328,10 +347,12 @@ EXPORT_SYMBOL(lprocfs_reconnect_top_tally);
 
 static DEFINE_SPINLOCK(lustre_client_stats_lock);
 
-int class_expected_clients_update(unsigned int max_clients)
+int class_expected_clients_update(unsigned int max_clients, bool allow_lower)
 {
+	unsigned int current_clients;
+
 	if (unlikely(max_clients == 0 || max_clients > LR_MAX_CLIENTS)) {
-		int rc = -EOVERFLOW;
+		int rc = max_clients ? -EOVERFLOW : -EINVAL;
 
 		/* if this is ever a problem, increase/fix LR_MAX_CLIENTS */
 		CWARN("%s: invalid expected_clients=%u, ignoring: rc = %d\n",
@@ -339,15 +360,19 @@ int class_expected_clients_update(unsigned int max_clients)
 		return rc;
 	}
 
-
-	if (max_clients < expected_clients)
-		return 0;
-
 	spin_lock(&lustre_client_stats_lock);
-	expected_clients = max_clients;
-	spin_unlock(&lustre_client_stats_lock);
+	current_clients = expected_clients;
 
-	CDEBUG(D_INFO, "updated expected_clients=%u\n", expected_clients);
+	if (max_clients == current_clients ||
+	    (!allow_lower && max_clients < current_clients)) {
+		spin_unlock(&lustre_client_stats_lock);
+		return 0;
+	}
+
+	expected_clients = max_clients;
+
+	class_update_at_min_from_clients(expected_clients);
+	spin_unlock(&lustre_client_stats_lock);
 
 	return 0;
 }
@@ -355,15 +380,15 @@ EXPORT_SYMBOL(class_expected_clients_update);
 
 unsigned int class_expected_clients_get(void)
 {
-	return expected_clients;
+	unsigned int clients;
+
+	spin_lock(&lustre_client_stats_lock);
+	clients = expected_clients;
+	spin_unlock(&lustre_client_stats_lock);
+
+	return clients;
 }
 EXPORT_SYMBOL(class_expected_clients_get);
-
-void class_expected_clients_set(unsigned int new_clients)
-{
-	expected_clients = new_clients;
-}
-EXPORT_SYMBOL(class_expected_clients_set);
 
 static void lprocfs_free_client_stats(struct nid_stat *client_stat)
 {
