@@ -8,6 +8,10 @@ if UTILS
 
 SUBDIRS = . erasurecode
 
+if SELINUX_POLICY
+SUBDIRS += selinux
+endif
+
 if GSS
 SUBDIRS += gss
 GSSSRC = gss/err_util.c gss/err_util.h

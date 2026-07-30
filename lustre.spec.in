@@ -31,6 +31,15 @@
 %bcond_with kfi
 %bcond_with gni
 %bcond_without l_getsepol
+# SELinux policy module: on RHEL/Rocky 10+ the call_usermodehelper() helpers
+# (l_getsepol, lctl, etc.) are denied under enforcing mode - 10.1+ dropped
+# kernel_generic_helper_t from the base selinux-policy, and 10.0 keeps the
+# type but does not grant it what the helpers need.  Enable by default on el10+.
+%if 0%{?rhel} >= 10
+%bcond_without lustre_selinux_policy
+%else
+%bcond_with lustre_selinux_policy
+%endif
 
 %if %{with multiple_lnds}
 %global enable_multi_lnds 1
@@ -317,6 +326,21 @@ BuildRequires: pkgconfig(systemd)
 #
 %if %{with l_getsepol}
 BuildRequires: pkgconfig(libselinux) openssl-devel
+%endif
+%if %{with lustre_selinux_policy} && %{with lustre_utils}
+BuildRequires: checkpolicy policycoreutils
+# %post/%preun run semodule and restorecon on the target machine, which a
+# minimal install may not have.  Without these the module would not load at
+# all, and since a failing scriptlet does not fail the rpm transaction the
+# package would still be installed - so %post echoes an explicit warning
+# rather than relying on the exit status being noticed.
+Requires(post): policycoreutils
+Requires(preun): policycoreutils
+# policycoreutils does not pull in selinux-policy, and "semodule -i" needs a
+# policy store to install into.  Without this the module install fails on a
+# host that has the tools but no base policy.
+Requires(post): selinux-policy
+Requires(preun): selinux-policy
 %endif
 #
 # Vendor specifics:
@@ -763,6 +787,11 @@ WITH_O2IB=""
 	%{?with_gni:--enable-gni} \
 	${WITH_O2IB} \
 	%{!?with_l_getsepol:--disable-l_getsepol} \
+%if %{with lustre_selinux_policy} && %{with lustre_utils}
+	--with-selinux-policy \
+%else
+	--without-selinux-policy \
+%endif
 	--with-linux=%{kdir} \
 	--with-linux-obj=%{kobjdir} \
 	--with-kmp-moddir=%{kmoddir}/%{name}
@@ -1048,6 +1077,10 @@ echo '%exclude %{_libdir}/lustre/tests/lcov-merge.sh*' >> lustre-tests.files
 %config(noreplace) %{_sysconfdir}/lnet.conf
 %config(noreplace) %{_sysconfdir}/modprobe.d/ko2iblnd.conf
 %config(noreplace) %{_sysconfdir}/projid
+# Built under lustre/utils/selinux, so it only exists when utils are built
+%if %{with lustre_selinux_policy} && %{with lustre_utils}
+%{_datadir}/selinux/packages/lustre_helpers.pp
+%endif
 %if %{with lustre_utils}
 %config(noreplace) %{_sysconfdir}/lnet_routes.conf
 %config(noreplace) %{_sysconfdir}/lustre/mount.client.params
@@ -1140,8 +1173,43 @@ echo '%exclude %{_libdir}/lustre/tests/lcov-merge.sh*' >> lustre-tests.files
 %systemd_post lnet.service
 %systemd_post lsvcgss.service
 %endif
+%if %{with lustre_selinux_policy} && %{with lustre_utils}
+# This block runs after the systemd_post scriptlets because those are
+# an "if ... || :" construct that always exits 0: ahead of them, their
+# status would replace this one and a semodule failure would go
+# unreported.  A failing scriptlet does not fail the rpm transaction
+# either - the package stays installed - so echo explicitly, otherwise
+# an unloaded module leaves no trace in the transaction output.
+#
+# "semodule -i" upgrades an already-installed module in place, so removing
+# it first would only open a window with no policy loaded - and would leave
+# the machine with none at all if the reinstall then failed.
+#
+# Priority 200 is the range for modules shipped by packages; bare "semodule
+# -i" would install at 400, which is reserved for local admin modules and
+# would leave an admin no priority from which to override ours.
+semodule -X 200 -i %{_datadir}/selinux/packages/lustre_helpers.pp || \
+	echo "warning: failed to load the lustre_helpers SELinux policy" \
+	     "module; Lustre helper upcalls may be denied"
+# semodule -i does not relabel already-installed files, and the binaries were
+# labeled bin_t at package-install time (before the module was loaded), so
+# apply the lustre_helper_exec_t label now.  Without this the binaries stay
+# bin_t, kernel_t never transitions into lustre_helper_t at all, and the
+# helpers run with whatever the base policy grants kernel_t (e.g. l_getsepol
+# gets -EACCES reading the SELinux policy).
+restorecon -F %{_sbindir}/l_getsepol %{_sbindir}/lctl \
+	%{_sbindir}/l_getidentity %{_sbindir}/l_getauth \
+	%{_sbindir}/l_foreign_symlink 2>/dev/null || :
+%endif
 
 %preun
+%if %{with lustre_selinux_policy} && %{with lustre_utils}
+if [ $1 -eq 0 ]; then
+	# -X 200 must match %post: an unqualified -r would pick a stale
+	# priority-400 copy left by an older package instead of ours.
+	semodule -X 200 -r lustre_helpers 2>/dev/null || :
+fi
+%endif
 %if %{with systemd}
 %systemd_preun lnet.service
 %systemd_preun lsvcgss.service
