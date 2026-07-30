@@ -671,6 +671,10 @@ LC_OPENSSL_SSK
 # Tests depends from utils (multiop from liblustreapi)
 AS_IF([test "x$enable_utils" = xno], [enable_tests="no"])
 
+# Outside the enable_utils block below on purpose: the macro must run either
+# way, so that --with-selinux-policy --disable-utils is still diagnosed.
+LC_CONFIG_SELINUX_POLICY
+
 AS_IF([test "x$enable_utils" = xyes], [
 	LC_OPENSSL_GETSEPOL
 	LC_CONFIG_GETSEPOL

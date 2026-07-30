@@ -1,0 +1,38 @@
+# %sbindir% is substituted with the configured $(sbindir) when this file is
+# generated, so the labels cannot drift from the install location: with a
+# non-default --prefix or --sbindir the binaries would otherwise never get
+# lustre_helper_exec_t and the module would load but be inert - no
+# transition, no denial, no diagnostic.
+#
+# The literal /usr/sbin and /usr/bin entries are listed as well, because the
+# kernel-side upcall paths are not configurable: sepol_helper() execs
+# /usr/sbin/l_getsepol and process_param2_config() execs /usr/sbin/lctl no
+# matter how the tree was configured.  Listing both spellings also covers the
+# merged-/usr case: on RHEL/Rocky 10.2+ SELinux rewrites /usr/sbin lookups to
+# /usr/bin via file_contexts.subs_dist, so only a /usr/bin rule matches; on
+# RHEL/Rocky 8, 9 and 10.0/10.1 there is no such substitution and the
+# /usr/sbin rule matches the real path.  Unused entries are harmless, and the
+# build rule drops the duplicates left when $(sbindir) is one of these.
+#
+# l_foreign_symlink is the one exception to that reasoning: its path is not
+# fixed in the kernel at all, but taken from llite.*.foreign_symlink_upcall,
+# so labelling the shipped binary only covers a site that points the tunable
+# at it.  The upcall defaults to "none" (llite_lib.c), i.e. it is off unless
+# an admin turns it on.  It is labelled anyway because the shipped path is
+# the expected value, and lustre_helper_t already has the sysfs/debugfs
+# write access it needs; a site using its own script must label that script.
+%sbindir%/l_getsepol       --    system_u:object_r:lustre_helper_exec_t:s0
+%sbindir%/lctl             --    system_u:object_r:lustre_helper_exec_t:s0
+%sbindir%/l_getidentity    --    system_u:object_r:lustre_helper_exec_t:s0
+%sbindir%/l_getauth        --    system_u:object_r:lustre_helper_exec_t:s0
+%sbindir%/l_foreign_symlink --   system_u:object_r:lustre_helper_exec_t:s0
+/usr/sbin/l_getsepol       --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/sbin/lctl             --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/sbin/l_getidentity    --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/sbin/l_getauth        --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/sbin/l_foreign_symlink --   system_u:object_r:lustre_helper_exec_t:s0
+/usr/bin/l_getsepol        --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/bin/lctl              --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/bin/l_getidentity     --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/bin/l_getauth         --    system_u:object_r:lustre_helper_exec_t:s0
+/usr/bin/l_foreign_symlink --    system_u:object_r:lustre_helper_exec_t:s0

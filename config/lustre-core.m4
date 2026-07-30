@@ -484,6 +484,78 @@ AC_MSG_CHECKING([whether to build l_getsepol])
 AC_MSG_RESULT([$config_getsepol])
 ]) # LC_GETSEPOL
 
+# LC_CONFIG_SELINUX_POLICY
+#
+# Determine whether to build and install the lustre_helpers SELinux policy
+# module (LU-20119).  Needed on RHEL/Rocky 10+, where call_usermodehelper()
+# spawns (l_getsepol, lctl, etc.) are denied under enforcing mode: 10.1+
+# removed kernel_generic_helper_t from the base selinux-policy, and 10.0
+# keeps the type but does not grant it what the helpers need.  Enabled by default
+# when PLATFORM_ID in /etc/os-release is "platform:el10" or later; can be
+# forced with --with-selinux-policy / --without-selinux-policy.
+#
+AC_DEFUN([LC_CONFIG_SELINUX_POLICY], [
+AC_ARG_WITH([selinux-policy],
+	AS_HELP_STRING([--with-selinux-policy],
+		[install lustre_helpers SELinux policy module @<:@default: auto@:>@]),
+	[with_selinux_policy="$withval"],
+	[with_selinux_policy="auto"])
+
+selinux_policy_explicit="$with_selinux_policy"
+
+# The policy module is built in lustre/utils/selinux/, which is only reached
+# when lustre/utils is built at all (SUBDIRS is guarded by "if UTILS").
+# Without this, --disable-utils --with-selinux-policy silently produces no
+# .pp while the RPM %files section still expects one.
+AS_IF([test "x$enable_utils" = xno], [
+	AS_IF([test "$selinux_policy_explicit" = "yes"], [
+		AC_MSG_ERROR([
+
+--with-selinux-policy requires --enable-utils: the lustre_helpers policy
+module is built under lustre/utils/selinux.
+])
+	])
+	with_selinux_policy="no"
+])
+
+AS_IF([test "$with_selinux_policy" = "auto"], [
+	platform_id=$(. /etc/os-release 2>/dev/null && echo "${PLATFORM_ID:-}")
+	AS_CASE(["$platform_id"],
+		[platform:el[[1-9]][[0-9]]*], [with_selinux_policy="yes"],
+		[with_selinux_policy="no"])
+])
+
+AS_IF([test "$with_selinux_policy" = "yes"], [
+	AC_PATH_PROG([CHECKMODULE], [checkmodule], [missing])
+	AC_PATH_PROG([SEMODULE_PACKAGE], [semodule_package], [missing])
+	AC_PATH_PROG([SEMODULE], [semodule], [missing])
+	# Only used by "make install" for direct source installs; the RPM
+	# %post does its own relabel, so a missing restorecon is not fatal.
+	AC_PATH_PROG([RESTORECON], [restorecon], [])
+	selinux_policy_tools_ok=yes
+	test "$CHECKMODULE" = "missing" && selinux_policy_tools_ok=no
+	test "$SEMODULE_PACKAGE" = "missing" && selinux_policy_tools_ok=no
+	test "$SEMODULE" = "missing" && selinux_policy_tools_ok=no
+	AS_IF([test "$selinux_policy_tools_ok" = "no"], [
+		AS_IF([test "$selinux_policy_explicit" = "yes"], [
+			AC_MSG_ERROR([
+
+--with-selinux-policy requested but checkmodule, semodule_package or semodule not found.
+Install checkpolicy and policycoreutils to build the SELinux policy module.
+])
+		], [
+			AC_MSG_WARN([
+
+checkmodule, semodule_package or semodule not found; disabling SELinux policy module
+])
+			with_selinux_policy="no"
+		])
+	])
+])
+AC_MSG_CHECKING([whether to build Lustre SELinux policy module])
+AC_MSG_RESULT([$with_selinux_policy])
+]) # LC_CONFIG_SELINUX_POLICY
+
 # LC_HAVE_LIBAIO
 AC_DEFUN([LC_HAVE_LIBAIO], [
 	AC_CHECK_HEADER([libaio.h],
@@ -4565,6 +4637,7 @@ AM_CONDITIONAL(XATTR_HANDLER, test "x$lb_cv_compile_xattr_handler_flags" = xyes)
 AM_CONDITIONAL(SELINUX, test "$SELINUX" = "-lselinux")
 AM_CONDITIONAL(GETSEPOL, test x$enable_getsepol = xyes &&
                          test x$config_getsepol = xyes)
+AM_CONDITIONAL(SELINUX_POLICY, test x$with_selinux_policy = xyes)
 AM_CONDITIONAL(LLCRYPT, test x$enable_llcrypt = xyes)
 AM_CONDITIONAL(LIBAIO, test x$enable_libaio = xyes)
 ]) # LC_CONDITIONALS
@@ -4628,5 +4701,6 @@ lustre/tests/mpi/Makefile
 lustre/tests/iabf/Makefile
 lustre/utils/Makefile
 lustre/utils/gss/Makefile
+lustre/utils/selinux/Makefile
 ])
 ]) # LC_CONFIG_FILES

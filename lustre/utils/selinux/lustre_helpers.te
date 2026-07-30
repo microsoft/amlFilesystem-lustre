@@ -1,0 +1,408 @@
+module lustre_helpers 1.0;
+
+require {
+    attribute file_type;
+    attribute domain;
+    attribute exec_type;
+    attribute entry_type;
+    attribute application_exec_type;
+    attribute base_ro_file_type;
+    attribute non_auth_file_type;
+    attribute non_security_file_type;
+    role system_r;
+    type kernel_t;
+    type debugfs_t;
+    type sysfs_t;
+    type devlog_t;
+    type init_var_run_t;
+    type syslogd_var_run_t;
+    type cert_t;
+    type semanage_store_t;
+    type shell_exec_t;
+    type proc_t;
+    type security_t;
+    type selinux_config_t;
+    type ld_so_t;
+    type ld_so_cache_t;
+    type lib_t;
+    type root_t;
+    type etc_t;
+    type usr_t;
+    type device_t;
+    type urandom_device_t;
+    type sysctl_t;
+    type sysctl_crypto_t;
+    type net_conf_t;
+    type passwd_file_t;
+    type init_t;
+    type nsfs_t;
+    type tmp_t;
+    type init_tmp_t;
+    type var_t;
+    type var_run_t;
+    type var_lib_t;
+    type sysctl_kernel_t;
+    type locale_t;
+    type syslogd_t;
+    class filesystem getattr;
+    class dir { search getattr open read };
+    class file { entrypoint getattr open read write execute map };
+    class lnk_file read;
+    class chr_file { open read };
+    class unix_dgram_socket { create connect write read sendto recvfrom ioctl };
+    class unix_stream_socket { create connect read write connectto };
+    class sock_file { getattr open write };
+    class process { noatsecure rlimitinh siginh transition };
+    class fd use;
+    class udp_socket { create setopt getopt read write connect getattr };
+    class netlink_route_socket { create getopt bind nlmsg_read read write };
+}
+
+#
+# lustre_helper_t: dedicated domain for Lustre userspace helpers invoked by
+# the kernel via call_usermodehelper(): l_getsepol, lctl, l_getidentity,
+# l_getauth.  File contexts for these binaries are in lustre_helpers.fc.
+#
+# On RHEL/Rocky 9, call_usermodehelper() processes transition via the base
+# policy's kernel_t -> kernel_generic_helper_t rule, which has all needed
+# permissions defined there.  On RHEL/Rocky 10.1 and later (selinux-policy
+# 42.x) that transition was removed along with kernel_generic_helper_t
+# itself, so kernel_t execs our binaries directly.  On RHEL/Rocky 10.0
+# (selinux-policy 40.13.26) the type and the transition still exist, but
+# kernel_generic_helper_t is not granted what the helpers need - it is
+# denied security_t:file read, selinux_config_t:file read, debugfs_t:file
+# write and passwd_file_t:file read - so the helpers fail there too.  We
+# add a specific kernel_t -> lustre_helper_t transition, which takes the
+# relabeled binaries out of both paths, so the rules below do not need to
+# live on the shared kernel_t domain.
+#
+# lustre_helper_t carries the "domain" attribute so the base policy's
+# per-domain baseline applies to it (the standard self: process/file/dir/
+# lnk_file/fifo_file set, /dev/null, /dev/zero, ld.so.cache, locale data,
+# sysctl_*, security_t, ...).  Without it every one of those has to be
+# hand-derived from whatever path happened to be exercised, and any path
+# that was not exercised becomes a denial in the field.  The explicit rules
+# below are kept as they are: they document what each helper actually needs
+# and they keep the module working on a base policy whose "domain" baseline
+# differs from selinux-policy-44.4's.
+#
+# lustre_helper_exec_t carries the same attribute set the base policy gives
+# comparable exec types (kmod_exec_t, mount_exec_t, keyutils_request_exec_t),
+# plus base_ro_file_type, which bin_t has.  These binaries are labeled bin_t
+# until this module is loaded, so any attribute-based rule that reached them
+# through bin_t must keep reaching them afterwards.  Note this cannot be made
+# complete: rules that name bin_t by type rather than by attribute (for
+# example a confined domain granted execute on bin_t directly) no longer
+# apply to /usr/sbin/lctl once it is relabeled.  lctl is a general-purpose
+# admin command as well as an upcall target - the kernel execs it from
+# process_param2_config() - so relabeling it is unavoidable here, but it does
+# reach beyond the upcall.
+type lustre_helper_t;
+typeattribute lustre_helper_t domain;
+type lustre_helper_exec_t;
+typeattribute lustre_helper_exec_t file_type, exec_type, entry_type,
+	application_exec_type, base_ro_file_type, non_auth_file_type,
+	non_security_file_type;
+role system_r types lustre_helper_t;
+
+# Allow lustre_helper_t to use file descriptors inherited from kernel_t
+allow lustre_helper_t kernel_t:fd use;
+
+# kernel_t execs a Lustre helper binary and transitions to lustre_helper_t
+allow kernel_t lustre_helper_exec_t:file { getattr open read execute };
+allow kernel_t lustre_helper_t:process { transition noatsecure rlimitinh siginh };
+type_transition kernel_t lustre_helper_exec_t:process lustre_helper_t;
+
+# Entrypoint and dynamic linker/loader access (required for any dynamically
+# linked executable)
+allow lustre_helper_t lustre_helper_exec_t:file { entrypoint getattr open read execute map };
+allow lustre_helper_t ld_so_t:file { read execute map };
+allow lustre_helper_t ld_so_cache_t:file { getattr open read map };
+allow lustre_helper_t lib_t:dir search;
+allow lustre_helper_t lib_t:lnk_file read;
+allow lustre_helper_t lib_t:file { open read getattr execute map };
+allow lustre_helper_t root_t:dir search;
+allow lustre_helper_t etc_t:dir search;
+allow lustre_helper_t etc_t:lnk_file read;
+allow lustre_helper_t usr_t:dir search;
+allow lustre_helper_t usr_t:file { getattr open read };
+
+# l_getidentity: identity upcall from the MDS (mdt_identity_do_upcall() ->
+# call_usermodehelper()).  It resolves the caller's supplementary groups with
+# getpwuid()/getgrouplist() and reads the permission file named by
+# PERM_PATHNAME (/etc/lustre/perm.conf).  /etc/nsswitch.conf and
+# /etc/lustre/perm.conf are etc_t; /etc/passwd and /etc/group are
+# passwd_file_t.  Without these the identity upcall fails on every MDS running
+# enforcing SELinux, not just those using GSS.
+allow lustre_helper_t etc_t:file { getattr open read };
+allow lustre_helper_t etc_t:dir getattr;
+allow lustre_helper_t passwd_file_t:file { getattr open read };
+# NSS may consult /etc/resolv.conf and friends when nsswitch is configured to
+# use a network backend
+allow lustre_helper_t net_conf_t:file { getattr open read };
+# glibc NSS walks /proc/self and stats the mount points on its way to the
+# nsswitch backends, and reaches the nscd/sssd client sockets under /run
+allow lustre_helper_t proc_t:lnk_file read;
+allow lustre_helper_t root_t:dir getattr;
+allow lustre_helper_t usr_t:dir getattr;
+allow lustre_helper_t sysctl_kernel_t:dir search;
+allow lustre_helper_t sysctl_kernel_t:file { open read };
+allow lustre_helper_t var_t:dir search;
+allow lustre_helper_t var_run_t:dir { getattr search };
+allow lustre_helper_t var_run_t:lnk_file read;
+allow lustre_helper_t var_lib_t:dir search;
+allow lustre_helper_t lib_t:dir getattr;
+# /proc/<pid>/* of the helper is labeled with the helper's own domain, so
+# reading anything under it needs self:file and self:lnk_file as well as
+# self:dir - the same reason journald is granted them further down.
+allow lustre_helper_t self:dir { getattr search };
+allow lustre_helper_t self:file { getattr open read };
+allow lustre_helper_t self:lnk_file read;
+# sssd is the nsswitch backend on an LDAP/AD-joined MDS, which is the common
+# case for the identity upcall.  Searching the directories is not enough: an
+# NSS client also opens and writes the client socket under /var/lib/sss/pipes
+# and connects to the daemon holding it.  Without these, getpwuid() and
+# getgrouplist() are still denied wherever nsswitch is not files-backed.
+#
+# sssd ships as an ordinary loadable module at priority 100, so its types are
+# absent under "semodule -d sssd", the minimum policy, or an image built
+# without it.  Same reason as systemd-userdb below: a top-level require on an
+# undefined type makes "semodule -i" reject the whole module, so this is
+# optional.
+optional {
+    require {
+	type sssd_var_lib_t;
+	type sssd_public_t;
+	type sssd_t;
+	class dir search;
+	class sock_file { getattr open write };
+	class unix_stream_socket connectto;
+    }
+    allow lustre_helper_t sssd_var_lib_t:dir search;
+    allow lustre_helper_t sssd_public_t:dir search;
+    allow lustre_helper_t sssd_var_lib_t:sock_file { getattr open write };
+    allow lustre_helper_t sssd_t:unix_stream_socket connectto;
+}
+
+# systemd-userdb is an nsswitch backend on RHEL 9/10.  Its types do not exist
+# in the el8 base policy (selinux-policy-3.14.3), and a top-level require on
+# a type the running policy does not define makes "semodule -i" reject the
+# whole module rather than skip the rules, so this is optional.
+optional {
+    require {
+	type systemd_userdbd_runtime_t;
+	type systemd_userdbd_t;
+	class dir { getattr open read search };
+	class lnk_file read;
+	class sock_file write;
+	class unix_stream_socket connectto;
+    }
+    allow lustre_helper_t systemd_userdbd_runtime_t:dir { getattr open read search };
+    # io.systemd.DropIn and io.systemd.NameServiceSwitch are symlinks to
+    # io.systemd.Multiplexer; the userdb client reads them while enumerating
+    # the available providers
+    allow lustre_helper_t systemd_userdbd_runtime_t:lnk_file read;
+    allow lustre_helper_t systemd_userdbd_runtime_t:sock_file write;
+    allow lustre_helper_t systemd_userdbd_t:unix_stream_socket connectto;
+}
+# The io.systemd.DynamicUser socket is created by PID 1 before it transitions
+# out of kernel_t, so its peer label stays kernel_t for the life of the boot
+# and the userdb client's connect is checked against kernel_t rather than
+# systemd_userdbd_t.  Confirmed by AVC on RHEL 10.2:
+#   avc: denied { connectto } comm="l_getidentity"
+#        path="/systemd/userdb/io.systemd.DynamicUser"
+#        scontext=...:lustre_helper_t tcontext=...:kernel_t
+#        tclass=unix_stream_socket
+allow lustre_helper_t kernel_t:unix_stream_socket connectto;
+
+# Error path: glibc reads the locale data when it formats a strerror()
+# message and the zoneinfo file when it timestamps one, and journald opens
+# /proc/<pid> of the helper to annotate what the helper logged.  None of this
+# is needed when everything succeeds, but a helper whose failure cannot be
+# reported is considerably harder to diagnose - that was a large part of why
+# the original kernel_generic_helper_t breakage took so long to track down.
+allow lustre_helper_t locale_t:lnk_file read;
+allow lustre_helper_t locale_t:dir search;
+allow lustre_helper_t locale_t:file { getattr open read map };
+allow syslogd_t lustre_helper_t:dir search;
+allow syslogd_t lustre_helper_t:file { open read };
+allow syslogd_t lustre_helper_t:lnk_file read;
+
+# /dev/urandom — used by OpenSSL / libselinux for random seed
+allow lustre_helper_t device_t:dir search;
+allow lustre_helper_t urandom_device_t:chr_file { open read };
+
+# /etc/selinux/config and /proc/sys/crypto/fips_enabled — read by libselinux
+# and OpenSSL FIPS detection
+allow lustre_helper_t selinux_config_t:dir search;
+allow lustre_helper_t selinux_config_t:file { getattr open read };
+allow lustre_helper_t sysctl_t:dir search;
+allow lustre_helper_t sysctl_crypto_t:dir search;
+allow lustre_helper_t sysctl_crypto_t:file { open read };
+
+# Allow access to debugfs Lustre parameter paths (used by all helpers;
+# cfs_get_param_paths() globs /sys/kernel/debug/lustre/ to find them)
+allow lustre_helper_t debugfs_t:filesystem getattr;
+allow lustre_helper_t debugfs_t:dir { search open read };
+allow lustre_helper_t debugfs_t:file { getattr open read write };
+# glob(3) keeps a symlink as a candidate directory and resolves through it,
+# and lu_global_init() always creates one in the lustre root
+# (lu_site -> ../shrinker/...), so a wildcard parameter such as the
+# *.<target>.root_squash rewritten by process_param2_config() walks it.
+allow lustre_helper_t debugfs_t:lnk_file read;
+
+# Allow reading selinuxfs (security_policyvers(), is_selinux_enabled())
+allow lustre_helper_t security_t:filesystem getattr;
+allow lustre_helper_t security_t:file { getattr open read };
+allow lustre_helper_t security_t:dir { search open read };
+
+# Allow stat of /proc/fs/lustre (cfs_get_param_paths glob)
+allow lustre_helper_t proc_t:dir { search open read };
+allow lustre_helper_t proc_t:file { getattr open read };
+
+# Allow reading/writing sysfs Lustre parameter paths (used by all helpers;
+# cfs_get_param_paths() searches /sys/fs/lustre/ as well as debugfs)
+allow lustre_helper_t sysfs_t:file { getattr open read write };
+allow lustre_helper_t sysfs_t:dir { search open read };
+# /sys/fs/lustre carries symlinks too (llite/<inst>/lov, lov/<inst>/
+# target_obds/<ost>, osc/<ost>-osc-MDT0000), reached the same way
+allow lustre_helper_t sysfs_t:lnk_file read;
+
+# Allow unix socket for libselinux internal use
+allow lustre_helper_t self:unix_dgram_socket { create connect write read sendto recvfrom ioctl };
+
+# l_getauth: the GSS server-side context upcall (rsi_do_upcall() ->
+# call_usermodehelper()) hands the request to lsvcgssd over a unix *stream*
+# socket bound at GSS_SOCKET_PATH (/tmp/svcgssd.socket, see
+# include/uapi/linux/lustre/lgss.h), so the datagram rule above is not enough.
+# Connecting to it needs write on the socket file plus connectto on the
+# listening daemon's socket.  Observed with lsvcgss.service running: the
+# socket is plain tmp_t, and lsvcgssd - which has no SELinux policy of its
+# own - runs as unconfined_service_t under the targeted policy.  Without the
+# unconfined module a systemd service instead stays in init_t, and the /tmp
+# filetrans would give init_tmp_t, so allow those too rather than depend on
+# which policy variant is installed.
+#
+# unconfined_service_t only exists while the unconfined module is loaded, so
+# requiring it at the top level would make "semodule -i lustre_helpers.pp"
+# fail outright under "semodule -d unconfined" or the minimum/mls policy -
+# nothing would load at all.  The optional block degrades to the init_t rule
+# below instead.  It cannot simply be dropped in favour of init_t: on a stock
+# targeted policy lsvcgssd was measured running as unconfined_service_t, so
+# that is the normal case, not the fallback.
+allow lustre_helper_t self:unix_stream_socket { create connect read write };
+optional {
+    require {
+	type unconfined_service_t;
+	type init_t;
+	type lustre_helper_exec_t;
+	class unix_stream_socket connectto;
+	class file entrypoint;
+	class process transition;
+    }
+    allow lustre_helper_t unconfined_service_t:unix_stream_socket connectto;
+
+    # Relabeling lctl takes it out of bin_t, and the base policy's
+    # "type_transition init_t bin_t:process unconfined_service_t" goes with
+    # it, so a systemd unit with ExecStart=/usr/sbin/lctl would run as
+    # init_t instead of unconfined_service_t.  base_ro_file_type on
+    # lustre_helper_exec_t keeps init_t able to execute it at all; these two
+    # rules restore the domain it used to land in.  (init_t already has
+    # process transition to unconfined_service_t; only the entrypoint is
+    # missing.)
+    allow unconfined_service_t lustre_helper_exec_t:file entrypoint;
+    type_transition init_t lustre_helper_exec_t:process unconfined_service_t;
+}
+allow lustre_helper_t init_t:unix_stream_socket connectto;
+allow lustre_helper_t tmp_t:dir search;
+allow lustre_helper_t tmp_t:sock_file { getattr write };
+allow lustre_helper_t init_tmp_t:dir search;
+allow lustre_helper_t init_tmp_t:sock_file { getattr write };
+# Allow sending to syslog (journald).  The sendto check is against the label
+# of the peer socket, i.e. of whatever process created /dev/log: kernel_t
+# where PID 1 creates it by socket activation for journald, syslogd_t where
+# a syslog daemon binds it itself (rsyslog/syslog-ng with imuxsock).  Grant
+# both, as the base policy's syslog_client_type does.
+allow lustre_helper_t kernel_t:unix_dgram_socket sendto;
+allow lustre_helper_t syslogd_t:unix_dgram_socket sendto;
+allow lustre_helper_t syslogd_t:unix_stream_socket connectto;
+
+# Allow reading /dev/log symlink and writing to syslog socket
+allow lustre_helper_t devlog_t:lnk_file read;
+allow lustre_helper_t devlog_t:sock_file write;
+allow lustre_helper_t init_var_run_t:dir search;
+allow lustre_helper_t syslogd_var_run_t:dir search;
+
+# Allow reading SSL/TLS certificates (libssl used by libselinux)
+allow lustre_helper_t cert_t:dir { getattr open read search };
+allow lustre_helper_t cert_t:file { getattr open read };
+
+# Allow reading SELinux policy store (l_getsepol reads policy.NN)
+allow lustre_helper_t semanage_store_t:dir { getattr open read search };
+allow lustre_helper_t semanage_store_t:file { getattr open read };
+allow lustre_helper_t semanage_store_t:lnk_file read;
+
+# Shell binary (observed in lctl audit log; domain_can_mmap_files).  "map"
+# alone cannot take effect without open/read on the same class, so grant the
+# set a dynamically linked exec actually needs.  Note this deliberately does
+# not extend to running systemctl: l_getauth's start_daemon() fallback, which
+# shells out to "systemctl restart lsvcgss" when the lsvcgssd socket is not
+# up, stays unsupported under enforcing.  Granting a kernel-spawned helper
+# domain the ability to drive systemd would undo the point of confining it;
+# lsvcgss should be enabled as a service instead.
+allow lustre_helper_t shell_exec_t:file { getattr open read execute map };
+
+#
+# lgss_keyring: the GSS/SSK credential helper is NOT invoked via
+# call_usermodehelper() like the helpers above.  It is launched by the kernel
+# keyring request-key upcall (/etc/request-key.d/lgssc.conf), so it runs in the
+# base policy's keyutils_request_t domain rather than lustre_helper_t.  These
+# rules therefore apply to keyutils_request_t directly; the request-key
+# mechanism does not use our lustre_helper_exec_t label/transition.  Without
+# them, SSK (shared-secret key) mounts fail under enforcing SELinux on RHEL 10
+# (incl. 10.2): lgss_keyring cannot read Lustre params or resolve the target
+# NID to a hostname, so context negotiation aborts.
+#
+# keyutils_request_t does not exist in the el8 base policy
+# (selinux-policy-3.14.3), and a top-level require on a type the running
+# policy does not define makes "semodule -i" reject the whole module rather
+# than skip the rules, so this whole section is optional.
+#
+optional {
+require {
+	type keyutils_request_t;
+	type dns_port_t;
+	class tcp_socket { create setopt getopt read write connect getattr name_connect };
+}
+
+# request-key execs lgss_keyring via the kernel; allow the process perms
+allow kernel_t keyutils_request_t:process { noatsecure rlimitinh siginh };
+
+# Lustre parameter paths (debugfs/sysfs) read by lgss_keyring
+allow keyutils_request_t debugfs_t:dir search;
+allow keyutils_request_t debugfs_t:filesystem getattr;
+allow keyutils_request_t sysfs_t:file { getattr open read write };
+
+# /proc/1/ns and mount-namespace lookups
+allow keyutils_request_t init_t:dir search;
+allow keyutils_request_t init_t:file read;
+allow keyutils_request_t init_t:lnk_file read;
+allow keyutils_request_t nsfs_t:file getattr;
+
+# NID -> hostname resolution: lgss_get_service_str() -> ipv4_nid2hostname() ->
+# getaddrcanonname() -> getnameinfo(), which reads NSS config and may query DNS
+allow keyutils_request_t net_conf_t:file { getattr open read };
+allow keyutils_request_t passwd_file_t:file { getattr open read };
+allow keyutils_request_t cert_t:dir { getattr open read search };
+allow keyutils_request_t cert_t:file { getattr open read };
+allow keyutils_request_t self:udp_socket { create setopt getopt read write connect getattr };
+# glibc's resolver falls back to TCP when the UDP answer is truncated, and
+# uses TCP unconditionally under "options use-vc" in resolv.conf.  The base
+# policy grants keyutils_request_t no tcp_socket permission at all, so without
+# these getnameinfo() fails at socket() and NID resolution aborts exactly as
+# it does without the UDP rule above.  name_connect is a tcp_socket-only
+# permission, which is why the UDP path needs no matching port rule.
+allow keyutils_request_t self:tcp_socket { create setopt getopt read write connect getattr };
+allow keyutils_request_t dns_port_t:tcp_socket name_connect;
+allow keyutils_request_t self:netlink_route_socket { create getopt bind nlmsg_read read write };
+}
