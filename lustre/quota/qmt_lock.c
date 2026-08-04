@@ -90,9 +90,9 @@ int qmt_intent_policy(const struct lu_env *env, struct lu_device *ld,
 			GOTO(out, rc = -ENOLCK);
 		ldlm_lock_put(lock);
 
-		stype = qmt_uuid2idx(uuid, &idx);
-		if (stype < 0)
-			GOTO(out, rc = -EINVAL);
+		rc = qmt_uuid2idx(uuid, &stype, &idx);
+		if (rc < 0)
+			GOTO(out, rc);
 
 		/* TODO: it seems we don't need to get lqe from
 		 * lq_lvb_data anymore ... And do extra get
@@ -427,9 +427,9 @@ int qmt_lvbo_update(struct lu_device *ld, struct ldlm_resource *res,
 		GOTO(out, rc = -EFAULT);
 	}
 
-	stype = qmt_uuid2idx(&exp->exp_client_uuid, &idx);
-	if (stype < 0)
-		GOTO(out_exp, rc = stype);
+	rc = qmt_uuid2idx(&exp->exp_client_uuid, &stype, &idx);
+	if (rc < 0)
+		GOTO(out_exp, rc);
 
 	need_revoke = qmt_clear_lgeg_arr_nu(lqe, stype, idx);
 	if (lvb->lvb_id_rel == 0) {
@@ -532,9 +532,9 @@ int qmt_lvbo_fill(struct lu_device *ld, struct ldlm_lock *lock, void *lvb,
 		int idx;
 
 		uuid = &(lock)->l_export->exp_client_uuid;
-		stype = qmt_uuid2idx(uuid, &idx);
-		if (stype < 0)
-			RETURN(stype);
+		rc = qmt_uuid2idx(uuid, &stype, &idx);
+		if (rc < 0)
+			RETURN(rc);
 		qmt = lu2qmt_dev(ld);
 		/* return current qunit value & edquot flags in lvb */
 		lqe_getref(lqe);
@@ -694,9 +694,10 @@ static void qmt_setup_id_desc(struct ldlm_lock *lock, union ldlm_gl_desc *desc,
 	int idx;
 	__u64 qunit;
 	bool edquot;
+	int rc;
 
-	stype = qmt_uuid2idx(uuid, &idx);
-	LASSERT(stype >= 0);
+	rc = qmt_uuid2idx(uuid, &stype, &idx);
+	LASSERT(rc == 0);
 
 	/* DOM case - set global lqe settings */
 	if (qmt_dom(lqe_rtype(lqe), stype)) {
@@ -918,8 +919,10 @@ static int qmt_id_lock_cb(struct ldlm_lock *lock, struct lquota_entry *lqe)
 	struct lqe_glbl_data *lgd = lqe->lqe_glbl_data;
 	enum qmt_stype stype;
 	int idx;
+	int rc;
 
-	stype = qmt_uuid2idx(uuid, &idx);
+	rc = qmt_uuid2idx(uuid, &stype, &idx);
+	LASSERT(rc == 0 && idx >= 0);
 	LASSERT(stype == QMT_STYPE_OST || stype == QMT_STYPE_MDT);
 
 	CDEBUG(D_QUOTA, "stype %d rtype %d idx %d uuid %s\n",
