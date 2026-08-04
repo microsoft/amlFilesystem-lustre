@@ -1205,18 +1205,23 @@ out:
 }
 
 /*
- * Extract index from uuid or quota index file name.
+ * Extract slave type and index from uuid or quota index file name.
  *
  * \param[in] uuid	uuid or quota index name(0x1020000-OST0001_UUID)
+ * \param[out] stype	slave type (QMT_STYPE_MDT or QMT_STYPE_OST)
  * \param[out] idx	pointer to save index
  *
- * \retval		slave type(QMT_STYPE_MDT or QMT_STYPE_OST)
+ * \retval 0		success
  * \retval -EINVAL	wrong uuid
  */
-enum qmt_stype qmt_uuid2idx(struct obd_uuid *uuid, int *idx)
+int qmt_uuid2idx(struct obd_uuid *uuid, enum qmt_stype *stype, int *idx)
 {
 	char *uuid_str, *name, *dash;
 	int rc = -EINVAL;
+
+	/* Define out-params on all paths, including errors. */
+	*stype = QMT_STYPE_CNT;
+	*idx = -1;
 
 	uuid_str = (char *)uuid->uuid;
 
@@ -1227,11 +1232,11 @@ enum qmt_stype qmt_uuid2idx(struct obd_uuid *uuid, int *idx)
 	}
 
 	dash = strrchr(uuid_str, '-');
-	name = dash + 1;
+	name = dash == NULL ? uuid_str : dash + 1;
 	/* Going to get index from MDTXXXX/OSTXXXX. Thus uuid should
 	 * have at least 8 bytes after '-': 3 for MDT/OST, 4 for index
 	 * and 1 byte for null character. */
-	if (*dash != '-' || ((uuid_str + UUID_MAX - name) < 8)) {
+	if (dash == NULL || ((uuid_str + UUID_MAX - name) < 8)) {
 		CERROR("quota: wrong UUID format '%s': rc = %d\n",
 		       uuid_str, rc);
 		return rc;
@@ -1240,17 +1245,19 @@ enum qmt_stype qmt_uuid2idx(struct obd_uuid *uuid, int *idx)
 	rc = target_name2index(name, idx, NULL);
 	switch (rc) {
 	case LDD_F_SV_TYPE_MDT:
-		rc = QMT_STYPE_MDT;
+		*stype = QMT_STYPE_MDT;
 		break;
 	case LDD_F_SV_TYPE_OST:
-		rc = QMT_STYPE_OST;
+		*stype = QMT_STYPE_OST;
 		break;
 	default:
-		CERROR("quota: wrong UUID type '%s': rc = %d\n", uuid_str, rc);
 		rc = -EINVAL;
+		CERROR("quota: wrong UUID type '%s': rc = %d\n", uuid_str, rc);
+		*idx = -1;
+		RETURN(rc);
 	}
 
-	RETURN(rc);
+	RETURN(0);
 }
 
 /*
@@ -1316,9 +1323,9 @@ static int qmt_dqacq(const struct lu_env *env, struct lu_device *ld,
 	ldlm_lock_put(lock);
 
 	uuid = &req->rq_export->exp_client_uuid;
-	stype = qmt_uuid2idx(uuid, &idx);
-	if (stype < 0)
-		RETURN(stype);
+	rc = qmt_uuid2idx(uuid, &stype, &idx);
+	if (rc < 0)
+		RETURN(rc);
 
 	if (req_is_rel(qbody->qb_flags) + req_is_acq(qbody->qb_flags) +
 	    req_is_preacq(qbody->qb_flags) > 1) {

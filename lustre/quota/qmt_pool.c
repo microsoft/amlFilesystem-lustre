@@ -547,9 +547,9 @@ static int qmt_slv_add(const struct lu_env *env, struct lu_fid *glb_fid,
 	LASSERT(!rc);
 
 	obd_str2uuid(&uuid, slv_name);
-	stype = qmt_uuid2idx(&uuid, &idx);
-	if (stype < 0)
-		return stype;
+	rc = qmt_uuid2idx(&uuid, &stype, &idx);
+	if (rc < 0)
+		return rc;
 
 	CDEBUG(D_QUOTA, "add new idx:%d in %s\n", idx, qpi->qpi_name);
 	rc = qmt_sarr_pool_add(qpi, idx, stype);
@@ -833,9 +833,9 @@ int qmt_pool_new_conn(const struct lu_env *env, struct qmt_device *qmt,
 	bool created = false;
 	int idx, i, rc = 0;
 
-	stype = qmt_uuid2idx(uuid, &idx);
-	if (stype < 0)
-		RETURN(stype);
+	rc = qmt_uuid2idx(uuid, &stype, &idx);
+	if (rc < 0)
+		RETURN(rc);
 	CDEBUG(D_QUOTA, "FID "DFID"\n", PFID(glb_fid));
 
 	/* extract pool info from global index FID */
@@ -900,9 +900,18 @@ int qmt_pool_new_conn(const struct lu_env *env, struct qmt_device *qmt,
 				GOTO(out, rc);
 			}
 		} else {
-			/* No array to store DOM indexes. Just increment the
-			 * slave number in data global pool.
+			/* Record DOM MDT in tgts[MDT] for usage-cache.
+			 * Stay out of lgd / recalc.
 			 */
+			rc = qmt_sarr_pool_add(pool, idx, stype);
+			if (rc == -EEXIST)
+				rc = 0;
+			if (rc) {
+				CERROR("%s: cannot add DOM idx:%d to pool %s: rc = %d\n",
+				       qmt->qmt_svname, idx,
+				       pool->qpi_name, rc);
+				GOTO(out, rc);
+			}
 			pool->qpi_slv_nr[stype][qtype]++;
 		}
 
@@ -1759,32 +1768,53 @@ int qmt_pool_del(struct obd_device *obd, char *poolname)
 
 static inline int qmt_sarr_pool_init(struct qmt_pool_info *qpi)
 {
-	return lu_tgt_pool_init(&qpi->qpi_sarr.osts, 0);
+	int rc;
+
+	rc = lu_tgt_pool_init(qpi_sarr_tgts(qpi), 0);
+	if (rc)
+		return rc;
+
+	/* Named DT / MD keep the non-primary array uninitialized until
+	 * first add. Global DT pre-creates the MDT list for DOM.
+	 */
+	if (qmt_pool_global(qpi) && qpi->qpi_rtype == LQUOTA_RES_DT) {
+		rc = lu_tgt_pool_init(qpi_sarr(qpi, QMT_STYPE_MDT), 0);
+		if (rc)
+			lu_tgt_pool_free(qpi_sarr_tgts(qpi));
+	}
+	return rc;
 }
 
 static inline int
 _qmt_sarr_pool_add(struct qmt_pool_info *qpi, int idx, enum qmt_stype stype,
 		   bool locked)
 {
-	/* We don't have an array for DOM */
-	if (qmt_dom(qpi->qpi_rtype, stype))
-		return 0;
+	struct lu_tgt_pool *sarr = qpi_sarr(qpi, stype);
 
+	if (!sarr->op_array) {
+		int rc = lu_tgt_pool_init(sarr, 0);
+
+		if (rc)
+			return rc;
+	}
 	if (locked)
-		return lu_tgt_pool_add_locked(&qpi->qpi_sarr.osts, idx, 32);
-	else
-		return lu_tgt_pool_add(&qpi->qpi_sarr.osts, idx, 32);
+		return lu_tgt_pool_add_locked(sarr, idx, 32);
+	return lu_tgt_pool_add(sarr, idx, 32);
 }
 
 static inline int qmt_sarr_pool_rem(struct qmt_pool_info *qpi, int idx)
 {
-	return lu_tgt_pool_remove(&qpi->qpi_sarr.osts, idx);
+	return lu_tgt_pool_remove(qpi_sarr_tgts(qpi), idx);
 }
 
 static inline void qmt_sarr_pool_free(struct qmt_pool_info *qpi)
 {
-	if (qpi->qpi_sarr.osts.op_array)
-		lu_tgt_pool_free(&qpi->qpi_sarr.osts);
+	int i;
+
+	for (i = 0; i < QMT_STYPE_CNT; i++) {
+		if (qpi_sarr(qpi, i)->op_array)
+			lu_tgt_pool_free(qpi_sarr(qpi, i));
+	}
 }
 
 static inline int qmt_sarr_check_idx(struct qmt_pool_info *qpi, int idx)
@@ -1792,19 +1822,19 @@ static inline int qmt_sarr_check_idx(struct qmt_pool_info *qpi, int idx)
 	if (qmt_pool_global(qpi) || qpi->qpi_lqa)
 		return 0;
 
-	return lu_tgt_check_index(idx, &qpi->qpi_sarr.osts);
+	return lu_tgt_check_index(idx, qpi_sarr_tgts(qpi));
 }
 
 int qmt_sarr_get_idx(struct qmt_pool_info *qpi, int arr_idx)
 {
-	LASSERTF(arr_idx < qpi->qpi_sarr.osts.op_count && arr_idx >= 0,
+	LASSERTF(arr_idx < qpi_sarr_tgts(qpi)->op_count && arr_idx >= 0,
 		 "idx invalid %d op_count %d\n", arr_idx,
-		 qpi->qpi_sarr.osts.op_count);
-	return qpi->qpi_sarr.osts.op_array[arr_idx];
+		 qpi_sarr_tgts(qpi)->op_count);
+	return qpi_sarr_tgts(qpi)->op_array[arr_idx];
 }
 
-/* Number of slaves in a pool */
+/* Number of slaves in a pool (primary list; excludes DOM MDTs). */
 unsigned int qmt_sarr_count(struct qmt_pool_info *qpi)
 {
-	return qpi->qpi_sarr.osts.op_count;
+	return qpi_sarr_tgts(qpi)->op_count;
 }
