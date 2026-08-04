@@ -36426,6 +36426,59 @@ test_805b() {
 }
 run_test 805b "grant free space vs a changed block size"
 
+test_805c() {
+	(( $MDS1_VERSION >= $(version_code 2.17.56) )) ||
+		skip "need MDS >= 2.17.56 for OBD_FAIL_TGT_STATFS_SHRINK"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+
+	local -a grant
+
+	mkdir_on_mdt0 $DIR/$tdir || error "mkdir $tdir failed"
+	$LFS setstripe -E 1M -L mdt -E EOF -c1 $DIR/$tdir ||
+		error "setstripe DoM failed"
+
+	# take some grant on the MDT by writing to the DoM components
+	for ((i = 0; i < 16; i++)); do
+		dd if=/dev/zero of=$DIR/$tdir/f-$i bs=1M count=1 ||
+			error "write f-$i failed"
+	done
+	grant=($($LCTL get_param -n mdc.$FSNAME-MDT0000-*.cur_grant_bytes))
+	echo "MDT grant: $grant bytes"
+	# the write below consumes grant, and none is handed back once the
+	# device has shrunk, so keep a margin over the 1MB it shrinks to
+	(( grant > 2 * 1048576 )) || skip "only $grant bytes of MDT grant"
+
+	#define OBD_FAIL_TGT_STATFS_SHRINK	0x728
+	do_facet mds1 $LCTL set_param fail_val=1 fail_loc=0x728
+	stack_trap "do_facet mds1 $LCTL set_param fail_loc=0 fail_val=0"
+
+	# Only the grant paths refresh tgd_osfs, so a DoM write is what applies
+	# the shrink - and it has to reach the MDT before the statfs below.
+	do_facet mds1 $LCTL clear
+	sleep 2
+	dd if=/dev/zero of=$DIR/$tdir/f-16 bs=4k count=1 conv=fsync ||
+		error "write f-16 failed"
+
+	do_facet mds1 "$LCTL dk" > $TMP/$tfile.dk
+	grep -q "cfs_fail_loc=728" $TMP/$tfile.dk ||
+		error "OBD_FAIL_TGT_STATFS_SHRINK did not fire"
+
+	# MDS_STATFS runs tgt_grant_sanity_check() against the cached size
+	stat -f $MOUNT || error "statfs failed"
+	do_facet mds1 $LCTL set_param fail_loc=0 fail_val=0
+
+	# the check ran with the grant above the size the device now reports,
+	# which is what used to LBUG
+	do_facet mds1 "$LCTL dk" | grep -q "tot_granted .* > maxsize" ||
+		error "grant sanity check did not see the shrunk device"
+
+	# outlive llite.*.statfs_max_age, or this is answered from the client
+	# cache and never reaches the MDS
+	sleep 2
+	stat -f $MOUNT || error "statfs failed after fail_loc reset"
+}
+run_test 805c "grant sanity check vs a shrinking device"
+
 # Size-on-MDS test
 check_lsom_data()
 {
