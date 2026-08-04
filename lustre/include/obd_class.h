@@ -50,6 +50,8 @@
 					 * device.
 					 */
 
+#define OBD_DEVICE_TAG_TARGET       XA_MARK_1 /* Target device in xarray */
+
 #define OBD_MAX_INDEX xa_limit_31b.max
 
 #define obd_device_find(devno)						\
@@ -71,6 +73,9 @@
 #define obd_device_for_each_uuid(devno, obd, uuid)	 \
 	obd_device_for_each_cond(devno, obd,		 \
 				 obd_uuid_equals(uuid, &obd->obd_uuid))
+
+#define obd_device_for_each_target(devno, obd)		\
+	xa_for_each_marked(&obd_devs, devno, obd, OBD_DEVICE_TAG_TARGET)
 
 #define obd_device_lock() xa_lock(&obd_devs)
 #define obd_device_unlock() xa_unlock(&obd_devs)
@@ -109,6 +114,7 @@ struct obd_device *class_newdev(const char *type_name, const char *name,
 int class_register_device(struct obd_device *obd);
 void class_unregister_device(struct obd_device *obd);
 void class_free_dev(struct obd_device *obd);
+void obd_nid_stats_hash_destroy(struct obd_device *obd);
 
 struct obd_device *class_str2obd(const char *str);
 int class_name2dev(const char *name);

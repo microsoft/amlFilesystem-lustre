@@ -38098,6 +38098,82 @@ test_920()
 }
 run_test 920 "Test multy LUFID"
 
+test_921() {
+	(( $MDS1_VERSION >= $(version_code 2.17.57) )) ||
+		skip "need MDS > 2.17.57 for nid_stats_idle_time"
+	(( $OST1_VERSION >= $(version_code 2.17.57) )) ||
+		skip "need OST > 2.17.57 for nid_stats_idle_time"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+
+	# Find our client's NID
+	local cli_nid
+	cli_nid=$($LCTL list_nids | head -n 1)
+	[[ -n "$cli_nid" ]] || error "failed to get client NID"
+	echo "Client NID: $cli_nid"
+
+	if [[ "$cli_nid" == "0@lo" ]]; then
+		skip "Client is on loopback NID ($cli_nid); skipped"
+	fi
+
+	local srv_nodes=$(comma_list $(all_server_nodes))
+
+	# A server sharing the NID of this client (co-located client and
+	# server, or several MDTs on one node) keeps an export on that NID
+	# after the client is unmounted, so the NID stats never go idle.
+	local srv_nid
+	for srv_nid in $(do_nodes $srv_nodes $LCTL list_nids); do
+		[[ "$srv_nid" == "$cli_nid" ]] &&
+			skip "client NID $cli_nid is also used by a server"
+	done
+
+	local orig_idle_time
+	orig_idle_time=$(do_facet $SINGLEMDS $LCTL \
+		get_param -n mdt.*.nid_stats_idle_time | head -n 1)
+
+	stack_trap "do_nodes $srv_nodes $LCTL set_param \
+		*.*.nid_stats_idle_time=$orig_idle_time"
+
+	do_nodes $srv_nodes $LCTL set_param *.*.nid_stats_idle_time=3 ||
+		error "failed to set nid_stats_idle_time"
+
+	# Touch/Write file so that we have active exports on MDT and OST
+	$LFS mkdir -i 0 $DIR/$tdir || error "failed to mkdir on MDT 0"
+	local tfile=$tdir/f921
+	$LFS setstripe -c 1 -i 0 $DIR/$tfile || error "failed to setstripe"
+	echo "test_921" > $DIR/$tfile || error "failed to write to $DIR/$tfile"
+
+	# Check that the NID stats exist initially on MDT and OST
+	do_facet $SINGLEMDS $LCTL get_param \
+		"mdt.*.exports.\"$cli_nid\".stats" > /dev/null ||
+		error "NID stats for $cli_nid do not exist initially on MDT"
+	do_facet ost1 $LCTL get_param \
+		"obdfilter.*.exports.\"$cli_nid\".stats" > /dev/null ||
+		error "NID stats for $cli_nid do not exist initially on OST"
+
+	# Unmount the client
+	stack_trap "mount_client $MOUNT"
+	echo "Unmounting client from $MOUNT..."
+	umount_client $MOUNT || error "failed to unmount client"
+
+	# Wait for the background idle NID stats garbage collector (runs
+	# every 60s) to run and remove the idle NID stats on MDT and OST.
+	echo -n "Waiting for the idle NID stats background scanner "
+	echo "to reclaim NID stats on MDT and OST..."
+	local cmd="$LCTL get_param mdt.*.exports"
+	cmd+=".\"$cli_nid\".stats >/dev/null 2>&1"
+	cmd+=" && echo exists || echo removed"
+	wait_update_facet $SINGLEMDS "$cmd" "removed" 70 ||
+		error "NID stats for $cli_nid still exist on MDT"
+
+	cmd="$LCTL get_param obdfilter.*.exports"
+	cmd+=".\"$cli_nid\".stats >/dev/null 2>&1"
+	cmd+=" && echo exists || echo removed"
+	wait_update_facet ost1 "$cmd" "removed" 70 ||
+		error "NID stats for $cli_nid still exist on OST"
+}
+run_test 921 "Test NID stats garbage collection via nid_stats_idle_time"
+
 complete_test $SECONDS
 [ -f $EXT2_DEV ] && rm $EXT2_DEV || true
 check_and_cleanup_lustre

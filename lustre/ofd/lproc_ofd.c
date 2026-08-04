@@ -1170,6 +1170,7 @@ LUSTRE_RW_ATTR(checksum_t10pi_enforce);
 
 LUSTRE_RW_ATTR(recovery_time_hard);
 LUSTRE_RW_ATTR(recovery_time_soft);
+LUSTRE_RW_ATTR(nid_stats_idle_time);
 LUSTRE_RW_ATTR(ir_factor);
 
 LUSTRE_WO_ATTR(evict_client);
@@ -1298,6 +1299,7 @@ static struct attribute *ofd_attrs[] = {
 	&lustre_attr_ir_factor.attr,
 	&lustre_attr_job_cleanup_interval.attr,
 	&lustre_attr_lfsck_speed_limit.attr,
+	&lustre_attr_nid_stats_idle_time.attr,
 	&lustre_attr_no_create.attr,
 #if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 20, 53, 0)
 	&lustre_attr_no_precreate.attr,

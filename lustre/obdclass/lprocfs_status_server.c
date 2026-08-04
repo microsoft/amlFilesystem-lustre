@@ -18,6 +18,7 @@
 
 #include <cfs_hash.h>
 #include <obd_class.h>
+#include <obd_target.h>
 #include <obd_cksum.h>
 #include <lprocfs_status.h>
 #include <lustre_nodemap.h>
@@ -174,9 +175,9 @@ EXPORT_SYMBOL(lprocfs_init_ldlm_stats);
 static int
 ldebugfs_exp_print_export_seq(struct obd_export *exp, void *cb_data)
 {
-	struct seq_file		*m = cb_data;
-	struct obd_device	*obd;
-	struct obd_connect_data	*ocd;
+	struct seq_file *m = cb_data;
+	struct obd_device *obd;
+	struct obd_connect_data *ocd;
 
 	LASSERT(exp != NULL);
 	if (!exp->exp_nid_stats)
@@ -244,13 +245,39 @@ out:
  *        target_version: 2.10.51.0
  *        export_flags: [ ... ]
  *
+ * Once the last export of this NID is gone the statistics are kept around
+ * until they are reclaimed, and only the idle time is reported:
+ * idle_seconds: 25
+ *
  */
 static int ldebugfs_exp_export_seq_show(struct seq_file *m, void *data)
 {
 	struct nid_stat *stats = m->private;
+	timeout_t last_idle;
+	int rc;
 
-	return obd_nid_export_for_each(stats->nid_obd, &stats->nid,
-				       ldebugfs_exp_print_export_seq, m);
+	rc = obd_nid_export_for_each(stats->nid_obd, &stats->nid,
+				     ldebugfs_exp_print_export_seq, m);
+	/*
+	 * nid_last_idle, not the for_each() return code, is the actual
+	 * signal for "no export left for this NID": it is only set once
+	 * the last export drops its reference (nid_stat_release_ref()) and
+	 * is cleared the moment any export revives this entry
+	 * (obd_nid_stats_insert()). Checking it instead of just rc also
+	 * covers the case where this NID's rhlist is non-empty but every
+	 * export on it currently has exp_failed set - the window between
+	 * class_fail_export() and obd_nid_del() - which
+	 * obd_nid_export_for_each() reports as rc == 0, the same as when
+	 * nothing needed reporting.
+	 */
+	last_idle = stats->nid_last_idle;
+	if ((rc == -ENODEV || rc == 0) && last_idle > 0) {
+		seq_printf(m, "idle_seconds: %d\n",
+			   (timeout_t)((u32)ktime_get_seconds() - last_idle));
+		rc = 0;
+	}
+
+	return rc;
 }
 LDEBUGFS_SEQ_FOPS_RO(ldebugfs_exp_export);
 
@@ -347,34 +374,125 @@ static void lprocfs_free_client_stats(struct nid_stat *client_stat)
 		 "nid %s:count %d\n", libcfs_nidstr(&client_stat->nid),
 		 atomic_read(&client_stat->nid_exp_ref_count));
 
-	debugfs_remove_recursive(client_stat->nid_debugfs);
-
 	if (client_stat->nid_stats)
 		lprocfs_stats_free(&client_stat->nid_stats);
 
 	if (client_stat->nid_ldlm_stats)
 		lprocfs_stats_free(&client_stat->nid_ldlm_stats);
 
-	OBD_FREE_PTR(client_stat);
+	/* A reader that looked this entry up in obd_nid_stats_hash before it
+	 * was removed can still be inside its RCU read section, and
+	 * rhl_for_each_entry_rcu() advances through the nid_hash of the entry
+	 * it is standing on, so freeing the entry here would leave that walk
+	 * chasing a freed list head. Defer the reclaim to a grace period
+	 * instead. Only the entry itself needs this: the statistics are
+	 * reached through the debugfs files, which obd_nid_stats_remove() has
+	 * already torn down, and through the exports, of which none is left
+	 * because nid_exp_ref_count is zero above.
+	 */
+	OBD_FREE_RCU(client_stat, sizeof(*client_stat), nid_rcu);
 }
 
 void lprocfs_free_per_client_stats(struct obd_device *obd)
 {
 	struct nid_stat *stat;
+	LIST_HEAD(free_list);
 
 	ENTRY;
-	/* we need extra list - because hash_exit called to early */
-	/* not need locking because all clients is died */
-	while (!list_empty(&obd->obd_nid_stats)) {
-		stat = list_first_entry(&obd->obd_nid_stats,
-					struct nid_stat, nid_list);
+	spin_lock(&obd->obd_nid_lock);
+	list_splice_init(&obd->obd_nid_stats, &free_list);
+	list_splice_init(&obd->obd_nid_stats_idle, &free_list);
+	spin_unlock(&obd->obd_nid_lock);
+
+	while (!list_empty(&free_list)) {
+		stat = list_first_entry(&free_list, struct nid_stat, nid_list);
 		list_del_init(&stat->nid_list);
-		obd_nid_stats_put(obd, stat);
+		obd_nid_stats_remove(obd, stat);
 		lprocfs_free_client_stats(stat);
 	}
 	EXIT;
 }
 EXPORT_SYMBOL(lprocfs_free_per_client_stats);
+
+void lprocfs_evict_idle_nid_stats(struct obd_device *obd)
+{
+	struct nid_stat *stat;
+	LIST_HEAD(dispose_list);
+	timeout_t idle_time;
+
+	ENTRY;
+	/* the timeout can be changed while this loop is running, so use a
+	 * stable value for the whole scan; this also covers a device that
+	 * isn't (or is no longer) a valid "target"
+	 */
+	idle_time = obd_nid_stats_idle_time(obd);
+	if (idle_time <= 0)
+		RETURN_EXIT;
+
+	/* class_cleanup() does not wait for obd_refcount - the reference the
+	 * ping evictor holds on obd across this call - before tearing the
+	 * target down, so by the time this scan reaches the loop below,
+	 * lprocfs_free_per_client_stats() and lprocfs_obd_cleanup() may
+	 * already be freeing obd_debugfs_exports and every nid_debugfs
+	 * dentry under it. obd_nid_stats_inprogress and the OBDF_STOPPING
+	 * check below rule that out the same way obd_conn_inprogress rules
+	 * out a connect racing with class_cleanup(): this is a Dekker-style
+	 * handshake, so the increment must be fully ordered against the
+	 * test_bit() below (atomic_inc_return() gives that, unlike a plain
+	 * atomic_inc()) and pairs with the smp_mb() class_cleanup() issues
+	 * between its set_bit(OBDF_STOPPING) and its own read of this
+	 * counter. With both sides ordered, whichever of this increment or
+	 * that set_bit() happens first is guaranteed to be seen by the
+	 * other side, so either class_cleanup() blocks below until this
+	 * scan (and its debugfs removals) is done, or this scan sees
+	 * STOPPING and never touches debugfs at all.
+	 */
+	atomic_inc_return(&obd->obd_nid_stats_inprogress);
+	if (test_bit(OBDF_STOPPING, obd->obd_flags)) {
+		if (atomic_dec_and_test(&obd->obd_nid_stats_inprogress))
+			wake_up_var(&obd->obd_nid_stats_inprogress);
+		RETURN_EXIT;
+	}
+
+	spin_lock(&obd->obd_nid_lock);
+	while (!list_empty(&obd->obd_nid_stats_idle)) {
+		stat = list_first_entry(&obd->obd_nid_stats_idle,
+					struct nid_stat, nid_list);
+		/* this idle list is sorted by time so we're confident that the
+		 * entries after this are not expired
+		 */
+		if (time_before32((u32)ktime_get_seconds(),
+				  stat->nid_last_idle + idle_time))
+			break;
+
+		CDEBUG(D_HA, "%s: evicting idle NID stats %s - last idle %us ago\n",
+		       obd->obd_name, libcfs_nidstr(&stat->nid),
+		       (u32)ktime_get_seconds() - (u32)stat->nid_last_idle);
+
+		stat->nid_last_idle = NID_STATS_DISPOSE;
+		list_move(&stat->nid_list, &dispose_list);
+
+		if (need_resched()) {
+			spin_unlock(&obd->obd_nid_lock);
+			cond_resched();
+			spin_lock(&obd->obd_nid_lock);
+		}
+	}
+	spin_unlock(&obd->obd_nid_lock);
+
+	while (!list_empty(&dispose_list)) {
+		stat = list_first_entry(&dispose_list, struct nid_stat,
+					nid_list);
+		list_del_init(&stat->nid_list);
+		obd_nid_stats_remove(obd, stat);
+		lprocfs_free_client_stats(stat);
+	}
+
+	if (atomic_dec_and_test(&obd->obd_nid_stats_inprogress))
+		wake_up_var(&obd->obd_nid_stats_inprogress);
+	RETURN_EXIT;
+}
+EXPORT_SYMBOL(lprocfs_evict_idle_nid_stats);
 
 static int ldebugfs_exp_print_nodemap_seq(struct obd_export *exp, void *cb_data)
 {
@@ -559,57 +677,114 @@ int lprocfs_nid_stats_clear_seq_show(struct seq_file *m, void *data)
 }
 EXPORT_SYMBOL(lprocfs_nid_stats_clear_seq_show);
 
-static int ldebugfs_nid_stats_clear_write_cb(void *obj, void *data)
-{
-	struct nid_stat *stat = obj;
-
-	ENTRY;
-	CDEBUG(D_INFO, "refcnt %d\n", atomic_read(&stat->nid_exp_ref_count));
-	if (atomic_read(&stat->nid_exp_ref_count) == 1) {
-		/* object has only hash references. */
-		spin_lock(&stat->nid_obd->obd_nid_lock);
-		list_move(&stat->nid_list, data);
-		spin_unlock(&stat->nid_obd->obd_nid_lock);
-		RETURN(1);
-	}
-	/* we has reference to object - only clear data */
-	if (stat->nid_stats)
-		lprocfs_stats_clear(stat->nid_stats);
-
-	RETURN(0);
-}
-
 ssize_t
 ldebugfs_nid_stats_clear_seq_write(struct file *file, const char __user *buffer,
 				   size_t count, loff_t *off)
 {
 	struct seq_file *m = file->private_data;
 	struct obd_device *obd = m->private;
-	struct nid_stat *client_stat;
-	struct rhashtable_iter iter;
+	struct nid_stat *stat;
+	LIST_HEAD(snapshot);
 	LIST_HEAD(free_list);
 
-	rhashtable_walk_enter(&obd->obd_nid_stats_hash.ht, &iter);
-	rhashtable_walk_start(&iter);
-	while ((client_stat = rhashtable_walk_next(&iter)) != NULL) {
-		if (IS_ERR(client_stat)) {
-			if (PTR_ERR(client_stat) == -EAGAIN)
-				continue;
-			break;
+	/* lprocfs_free_per_client_stats() only drains obd_nid_stats and
+	 * obd_nid_stats_idle; while an entry is parked on the local snapshot
+	 * list below it is on neither, so class_cleanup() tearing the target
+	 * down concurrently could reach obd_precleanup() with that entry
+	 * invisible to the drain and never free it. Guard this the same way
+	 * lprocfs_evict_idle_nid_stats() guards its own dispose_list, so
+	 * class_cleanup() waits for this write to finish (see its
+	 * obd_nid_stats_inprogress wait) before it gets there. See that
+	 * function for why this needs to be atomic_inc_return() rather than
+	 * a plain atomic_inc().
+	 */
+	atomic_inc_return(&obd->obd_nid_stats_inprogress);
+	if (test_bit(OBDF_STOPPING, obd->obd_flags)) {
+		if (atomic_dec_and_test(&obd->obd_nid_stats_inprogress))
+			wake_up_var(&obd->obd_nid_stats_inprogress);
+		return count;
+	}
+
+	/* 1. Clear statistics of all active stats on obd_nid_stats.
+	 *
+	 * obd_nid_lock is also taken on the connect and disconnect path, so
+	 * clearing every counter of every client in a single hold would stall
+	 * them all. Instead every entry present at the start is moved onto a
+	 * local snapshot list under the lock, then popped one at a time and
+	 * moved back onto the tail of obd_nid_stats as it is cleared, which
+	 * keeps obd_nid_stats valid so that the lock can be dropped whenever
+	 * this thread needs to reschedule. Only the entries which were on the
+	 * list when the walk started are on the snapshot, so each is cleared
+	 * exactly once regardless of concurrent list changes: a brand new
+	 * connection, or an existing entry revived off obd_nid_stats_idle,
+	 * appends directly to obd_nid_stats and is left for the next clear,
+	 * while a concurrent disconnect moving an entry to obd_nid_stats_idle
+	 * simply unlinks it from wherever it currently sits - snapshot or
+	 * obd_nid_stats - and this walk never sees it again.
+	 *
+	 * The lock is deliberately NOT dropped unconditionally around the
+	 * lprocfs_stats_clear() call itself, even though nothing below it
+	 * needs the lock: phase 2 of a second, concurrent nid_stats_clear
+	 * write disposes every entry it finds on obd_nid_stats_idle with no
+	 * check on how long it has been idle, unlike the ping evictor. If
+	 * this entry's last export disconnected in that window, that second
+	 * writer could free it out from under the unlocked
+	 * lprocfs_stats_clear(stat->nid_stats) call above. Holding the lock
+	 * across the clear keeps that disconnect (nid_stat_release_ref(),
+	 * which also takes obd_nid_lock) from being able to move this entry
+	 * to obd_nid_stats_idle while it is in use here.
+	 */
+	spin_lock(&obd->obd_nid_lock);
+	list_splice_init(&obd->obd_nid_stats, &snapshot);
+
+	while (!list_empty(&snapshot)) {
+		stat = list_first_entry(&snapshot, struct nid_stat, nid_list);
+		list_move_tail(&stat->nid_list, &obd->obd_nid_stats);
+		if (stat->nid_stats)
+			lprocfs_stats_clear(stat->nid_stats);
+
+		if (need_resched()) {
+			spin_unlock(&obd->obd_nid_lock);
+			cond_resched();
+			spin_lock(&obd->obd_nid_lock);
 		}
-
-		if (ldebugfs_nid_stats_clear_write_cb(client_stat, &free_list))
-			obd_nid_stats_put(obd, client_stat);
 	}
-	rhashtable_walk_stop(&iter);
-	rhashtable_walk_exit(&iter);
 
+	/* 2. Move all idle stats from obd_nid_stats_idle to free_list.
+	 *
+	 * list_for_each_entry_safe()'s cached "next" pointer isn't safe to
+	 * carry across a dropped lock - a concurrent nid_stat_release_ref()
+	 * or another clear-write could unlink it first - so this re-derives
+	 * the first entry from the (stable) list head after reacquiring,
+	 * the same way lprocfs_evict_idle_nid_stats() drains its own idle
+	 * list, rather than adding need_resched() directly into a _safe
+	 * iteration.
+	 */
+	while (!list_empty(&obd->obd_nid_stats_idle)) {
+		stat = list_first_entry(&obd->obd_nid_stats_idle,
+					struct nid_stat, nid_list);
+		stat->nid_last_idle = NID_STATS_DISPOSE;
+		list_move_tail(&stat->nid_list, &free_list);
+
+		if (need_resched()) {
+			spin_unlock(&obd->obd_nid_lock);
+			cond_resched();
+			spin_lock(&obd->obd_nid_lock);
+		}
+	}
+	spin_unlock(&obd->obd_nid_lock);
+
+	/* 3. Remove from hash and free the idle stats outside the spinlock */
 	while (!list_empty(&free_list)) {
-		client_stat = list_first_entry(&free_list, struct nid_stat,
-					       nid_list);
-		list_del_init(&client_stat->nid_list);
-		lprocfs_free_client_stats(client_stat);
+		stat = list_first_entry(&free_list, struct nid_stat, nid_list);
+		list_del_init(&stat->nid_list);
+		obd_nid_stats_remove(obd, stat);
+		lprocfs_free_client_stats(stat);
 	}
+
+	if (atomic_dec_and_test(&obd->obd_nid_stats_inprogress))
+		wake_up_var(&obd->obd_nid_stats_inprogress);
+
 	return count;
 }
 EXPORT_SYMBOL(ldebugfs_nid_stats_clear_seq_write);
@@ -698,6 +873,26 @@ static struct ldebugfs_vars ldebugfs_obd_exports_vars[] = {
 	{ NULL }
 };
 
+/* Drop a reference, queuing the stat for idle eviction once only the
+ * hash's own reference is left. Decrement and last-ref check must be
+ * atomic under obd_nid_lock - other droppers don't all serialize on it,
+ * so a separate read+decrement could race and miss the last reference.
+ */
+static void nid_stat_release_ref(struct obd_device *obd, struct nid_stat *stat)
+{
+	int ref;
+
+	spin_lock(&obd->obd_nid_lock);
+	ref = atomic_dec_return(&stat->nid_exp_ref_count);
+	LASSERTF(ref >= 0, "stat %px nid_exp_ref_count < 0\n", stat);
+	if (ref == 1) {
+		/* stamped under the lock to keep the idle list time-ordered */
+		stat->nid_last_idle = ktime_get_seconds();
+		list_move_tail(&stat->nid_list, &obd->obd_nid_stats_idle);
+	}
+	spin_unlock(&obd->obd_nid_lock);
+}
+
 int lprocfs_exp_setup(struct obd_export *exp, struct lnet_nid *nid)
 {
 	struct nid_stat *new_stat, *old_stat;
@@ -736,11 +931,10 @@ int lprocfs_exp_setup(struct obd_export *exp, struct lnet_nid *nid)
 	new_stat->nid_reconnect_delay = -1;
 	/* we need set default refcount to 1 to balance obd_disconnect */
 	atomic_set(&new_stat->nid_exp_ref_count, 1);
+	new_stat->nid_last_idle = 0;
+	INIT_LIST_HEAD(&new_stat->nid_list);
 
-	old_stat = obd_nid_stats_get(obd, new_stat);
-	/* old_stat ERR pointer means we failed to add new_stat
-	 * to the hash
-	 */
+	old_stat = obd_nid_stats_insert(obd, new_stat);
 	if (IS_ERR(old_stat))
 		GOTO(destroy_new, rc = PTR_ERR(old_stat));
 
@@ -750,13 +944,20 @@ int lprocfs_exp_setup(struct obd_export *exp, struct lnet_nid *nid)
 	/* Return -EALREADY here so that we know that the /proc
 	 * entry already has been created */
 	if (old_stat != new_stat) {
+		struct nid_stat *drop = NULL;
+
 		spin_lock(&exp->exp_lock);
 		if (exp->exp_nid_stats) {
 			LASSERT(exp->exp_nid_stats == old_stat);
-			nidstat_putref(exp->exp_nid_stats);
+			drop = exp->exp_nid_stats;
 		}
 		exp->exp_nid_stats = old_stat;
 		spin_unlock(&exp->exp_lock);
+		/* release outside exp_lock - nid_stat_release_ref() takes
+		 * obd_nid_lock, which other paths already nest the other way
+		 */
+		if (drop)
+			nid_stat_release_ref(obd, drop);
 		GOTO(destroy_new, rc = -EALREADY);
 	}
 
@@ -773,11 +974,6 @@ int lprocfs_exp_setup(struct obd_export *exp, struct lnet_nid *nid)
 	exp->exp_nid_stats = new_stat;
 	spin_unlock(&exp->exp_lock);
 
-	/* protect competitive add to list, not need locking on destroy */
-	spin_lock(&obd->obd_nid_lock);
-	list_add(&new_stat->nid_list, &obd->obd_nid_stats);
-	spin_unlock(&obd->obd_nid_lock);
-
 	RETURN(0);
 
 destroy_new:
@@ -790,11 +986,12 @@ EXPORT_SYMBOL(lprocfs_exp_setup);
 int lprocfs_exp_cleanup(struct obd_export *exp)
 {
 	struct nid_stat *stat = exp->exp_nid_stats;
+	struct obd_device *obd = exp->exp_obd;
 
-	if (!stat || !exp->exp_obd)
+	if (!stat || !obd)
 		RETURN(0);
 
-	nidstat_putref(exp->exp_nid_stats);
+	nid_stat_release_ref(obd, stat);
 	exp->exp_nid_stats = NULL;
 
 	return 0;
@@ -1539,6 +1736,40 @@ ssize_t recovery_time_hard_store(struct kobject *kobj,
 	return count;
 }
 EXPORT_SYMBOL(recovery_time_hard_store);
+
+ssize_t nid_stats_idle_time_show(struct kobject *kobj, struct attribute *attr,
+				 char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct obd_device_target *target = obd2obt(obd);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 target->obt_nid_stats_idle_time);
+}
+EXPORT_SYMBOL(nid_stats_idle_time_show);
+
+ssize_t nid_stats_idle_time_store(struct kobject *kobj,
+				  struct attribute *attr,
+				  const char *buffer, size_t count)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct obd_device_target *target = obd2obt(obd);
+	long val;
+	int rc;
+
+	rc = kstrtol(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	if (val < 0 || val > INT_MAX)
+		return -EINVAL;
+
+	target->obt_nid_stats_idle_time = val;
+	return count;
+}
+EXPORT_SYMBOL(nid_stats_idle_time_store);
 
 ssize_t instance_show(struct kobject *kobj, struct attribute *attr,
 		      char *buf)

@@ -572,9 +572,17 @@ extern int lprocfs_add_clear_entry(struct obd_device *obd,
 #ifdef CONFIG_LUSTRE_FS_SERVER
 extern int lprocfs_exp_setup(struct obd_export *exp, struct lnet_nid *peer_nid);
 extern int lprocfs_exp_cleanup(struct obd_export *exp);
+extern void lprocfs_free_per_client_stats(struct obd_device *obd);
+extern void lprocfs_evict_idle_nid_stats(struct obd_device *obd);
 #else
 static inline int lprocfs_exp_cleanup(struct obd_export *exp)
 { return 0; }
+static inline void lprocfs_free_per_client_stats(struct obd_device *obd)
+{
+}
+static inline void lprocfs_evict_idle_nid_stats(struct obd_device *obd)
+{
+}
 #endif
 extern struct proc_dir_entry *
 lprocfs_add_simple(struct proc_dir_entry *root, char *name,
@@ -584,7 +592,7 @@ lprocfs_add_symlink(const char *name, struct proc_dir_entry *parent,
 		    const char *format, ...);
 struct dentry *ldebugfs_add_symlink(const char *name, const char *target,
 				    const char *format, ...);
-extern void lprocfs_free_per_client_stats(struct obd_device *obd);
+
 #ifdef CONFIG_LUSTRE_FS_SERVER
 extern ssize_t
 ldebugfs_nid_stats_clear_seq_write(struct file *file, const char __user *buffer,
@@ -1020,6 +1028,11 @@ ssize_t recovery_time_hard_show(struct kobject *kobj, struct attribute *attr,
 ssize_t recovery_time_hard_store(struct kobject *kobj,
 				 struct attribute *attr,
 				 const char *buffer, size_t count);
+ssize_t nid_stats_idle_time_show(struct kobject *kobj, struct attribute *attr,
+				 char *buf);
+ssize_t nid_stats_idle_time_store(struct kobject *kobj,
+				  struct attribute *attr,
+				  const char *buffer, size_t count);
 ssize_t instance_show(struct kobject *kobj, struct attribute *attr,
 		      char *buf);
 #endif
@@ -1130,10 +1143,6 @@ static inline int lprocfs_add_clear_entry(struct obd_export *exp)
 	return 0;
 }
 
-static inline void lprocfs_free_per_client_stats(struct obd_device *obd)
-{
-}
-
 #ifdef CONFIG_LUSTRE_FS_SERVER
 static inline int lprocfs_exp_setup(struct obd_export *exp,
 				    struct lnet_nid *peer_nid)
@@ -1144,6 +1153,12 @@ static inline int lprocfs_exp_setup(struct obd_export *exp,
 static inline int lprocfs_exp_cleanup(struct obd_export *exp)
 {
 	return 0;
+}
+static inline void lprocfs_free_per_client_stats(struct obd_device *obd)
+{
+}
+static inline void lprocfs_evict_idle_nid_stats(struct obd_device *obd)
+{
 }
 
 static inline struct proc_dir_entry *

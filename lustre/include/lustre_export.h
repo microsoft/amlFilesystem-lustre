@@ -118,6 +118,8 @@ struct mgs_export_data {
 	spinlock_t		med_lock;	/* protect med_clients */
 };
 
+#define NID_STATS_DISPOSE ((timeout_t)-1)
+
 /**
  * per-NID statistics structure.
  * It tracks access patterns to this export on a per-client-NID basis
@@ -134,6 +136,17 @@ struct nid_stat {
 	atomic_t		 nid_exp_ref_count;
 	/* secs to reconnect in last recovery; -1 = never reconnected */
 	timeout_t		 nid_reconnect_delay;
+	/* how long this entry has been idle (not used by any exports)
+	 * 0: not in idle
+	 * -1: in dispose (NID_STATS_DISPOSE)
+	 * >0: in idle by seconds
+	 */
+	timeout_t		 nid_last_idle;
+	/* deferred free: an RCU reader of obd_nid_stats_hash may still be
+	 * traversing this entry when it is removed from the table, so its
+	 * memory must not be reclaimed until a grace period has elapsed
+	 */
+	struct rcu_head		 nid_rcu;
 };
 
 #define nidstat_getref(nidstat)	\

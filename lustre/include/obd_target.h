@@ -42,6 +42,7 @@ struct obd_device_target {
 	/* recent reconnects (delays arrive ascending); newest at cursor-1 */
 	struct obt_reconnect_entry obt_reconnect_top[OBT_RECONNECT_TOP_MAX];
 	unsigned int		obt_reconnect_top_cursor;
+	timeout_t		obt_nid_stats_idle_time;
 };
 
 #define OBJ_SUBDIR_COUNT 32 /* set to zero for no subdirs */
@@ -116,6 +117,24 @@ static inline struct obd_device_target *obd2obt(struct obd_device *obd)
 	return obt;
 }
 
+#define NID_STATS_IDLE_DEFAULT 3600
+
+/* returns 0 for a device that isn't yet a valid "target" - a device is
+ * tagged OBD_DEVICE_TAG_TARGET (making it visible to
+ * obd_device_for_each_target()) at class_register_device() (attach) time,
+ * which runs before obd_obt_init() sets obt_magic during setup. obt_magic
+ * gates whether obd->u may be interpreted as obd_device_target at all.
+ */
+static inline timeout_t obd_nid_stats_idle_time(struct obd_device *obd)
+{
+	struct obd_device_target *obt = (void *)&obd->u;
+
+	if (obt->obt_magic != OBT_MAGIC)
+		return 0;
+
+	return obt->obt_nid_stats_idle_time;
+}
+
 static inline struct obd_device_target *obd_obt_init(struct obd_device *obd)
 {
 	struct obd_device_target *obt;
@@ -124,6 +143,7 @@ static inline struct obd_device_target *obd_obt_init(struct obd_device *obd)
 	obt->obt_magic = OBT_MAGIC;
 	obt->obt_instance = 0;
 	spin_lock_init(&obt->obt_reconnect_hist.oh_lock);
+	obt->obt_nid_stats_idle_time = NID_STATS_IDLE_DEFAULT;
 
 	return obt;
 }

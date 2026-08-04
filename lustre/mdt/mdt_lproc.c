@@ -1361,6 +1361,7 @@ LUSTRE_RW_ATTR(hsm_control);
 
 LUSTRE_RW_ATTR(recovery_time_hard);
 LUSTRE_RW_ATTR(recovery_time_soft);
+LUSTRE_RW_ATTR(nid_stats_idle_time);
 LUSTRE_RW_ATTR(ir_factor);
 
 LUSTRE_RO_ATTR(tot_dirty);
@@ -1435,6 +1436,7 @@ static struct attribute *mdt_attrs[] = {
 	&lustre_attr_dom_lock.attr,
 	&lustre_attr_dom_read_open.attr,
 	&lustre_attr_migrate_hsm_allowed.attr,
+	&lustre_attr_nid_stats_idle_time.attr,
 	&lustre_attr_hsm_control.attr,
 	&lustre_attr_job_cleanup_interval.attr,
 	&lustre_attr_job_xattr.attr,

@@ -381,6 +381,7 @@ struct obd_device *class_newdev(const char *type_name, const char *name,
 	INIT_LIST_HEAD(&newdev->obd_delayed_exports);
 	newdev->obd_exports_timed.rb_node = NULL;
 	INIT_LIST_HEAD(&newdev->obd_nid_stats);
+	INIT_LIST_HEAD(&newdev->obd_nid_stats_idle);
 	spin_lock_init(&newdev->obd_nid_lock);
 	spin_lock_init(&newdev->obd_dev_lock);
 	mutex_init(&newdev->obd_dev_mutex);
@@ -406,6 +407,7 @@ struct obd_device *class_newdev(const char *type_name, const char *name,
 	kref_init(&newdev->obd_refcount);
 
 	atomic_set(&newdev->obd_conn_inprogress, 0);
+	atomic_set(&newdev->obd_nid_stats_inprogress, 0);
 
 	strncpy(newdev->obd_uuid.uuid, uuid, UUID_MAX);
 
@@ -448,6 +450,8 @@ void class_free_dev(struct obd_device *obd)
 			CERROR("Cleanup %s returned %d\n",
 				obd->obd_name, err);
 	}
+
+	obd_nid_stats_hash_destroy(obd);
 
 	obd_device_free(obd);
 
@@ -543,6 +547,10 @@ int class_register_device(struct obd_device *new_obd)
 
 		if (rc != 0)
 			goto out;
+
+		if (strcmp(new_obd->obd_type->typ_name, LUSTRE_MDT_NAME) == 0 ||
+		    strcmp(new_obd->obd_type->typ_name, LUSTRE_OST_NAME) == 0)
+			__xa_set_mark(&obd_devs, dev_no, OBD_DEVICE_TAG_TARGET);
 
 		new_obd->obd_minor = dev_no;
 		atomic_inc(&obd_devs_count);

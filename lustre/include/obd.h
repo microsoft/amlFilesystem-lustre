@@ -688,6 +688,7 @@ enum {
 	/* device need scrub */
 	OBDF_NEED_SCRUB	= OBDF_SERVER_OPTS,
 	OBDF_NO_TRANSNO,	/* no committed-transno notification */
+	OBDF_NID_STATS_HASH,	/* obd_nid_stats_hash is initialized */
 #endif
 	OBDF_NUM_FLAGS,
 };
@@ -721,6 +722,7 @@ struct obd_device {
 	/* client_generation-export hash body */
 	struct cfs_hash		    *obd_gen_hash;
 	struct list_head	obd_nid_stats;
+	struct list_head	obd_nid_stats_idle;
 	struct list_head	obd_exports;
 	struct list_head	obd_unlinked_exports;
 	struct list_head	obd_delayed_exports;
@@ -815,6 +817,15 @@ struct obd_device {
 	int				obd_pool_limit;
 
 	atomic_t			obd_conn_inprogress;
+	/* count of lprocfs_evict_idle_nid_stats() scans currently walking
+	 * their dispose list and tearing down nid_debugfs dentries; a
+	 * target teardown recursively frees the same dentries via
+	 * obd_debugfs_exports, so class_cleanup() waits for this to reach
+	 * zero (see the OBDF_STOPPING check in lprocfs_evict_idle_nid_stats)
+	 * before it gets there, the same way it already waits on
+	 * obd_conn_inprogress above
+	 */
+	atomic_t			obd_nid_stats_inprogress;
 
 	struct kset		        obd_kset; /* sysfs object collection */
 	struct kobj_type		obd_ktype;
@@ -870,8 +881,9 @@ int obd_nid_export_for_each(struct obd_device *obd, struct lnet_nid *nid,
 int obd_nid_add(struct obd_device *obd, struct obd_export *exp);
 void obd_nid_del(struct obd_device *obd, struct obd_export *exp);
 
-struct nid_stat *obd_nid_stats_get(struct obd_device *obd, struct nid_stat *ns);
-void obd_nid_stats_put(struct obd_device *obd, struct nid_stat *ns);
+struct nid_stat *obd_nid_stats_insert(struct obd_device *obd,
+				      struct nid_stat *ns);
+void obd_nid_stats_remove(struct obd_device *obd, struct nid_stat *ns);
 
 /* both client and MDT recovery are aborted, or MDT is stopping  */
 static inline bool obd_recovery_abort(struct obd_device *obd)

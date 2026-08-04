@@ -15,7 +15,6 @@
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include <linux/delay.h>
 #include <linux/kobject.h>
 #include <linux/string.h>
 
@@ -275,48 +274,115 @@ static const struct rhashtable_params nid_stats_hash_params = {
 	.automatic_shrinking	= true,
 };
 
-struct nid_stat *obd_nid_stats_get(struct obd_device *obd, struct nid_stat *ns)
+struct nid_stat *obd_nid_stats_insert(struct obd_device *obd,
+				      struct nid_stat *ns)
 {
 	struct rhlist_head *exports, *pos;
-	struct nid_stat *ns2 = NULL, *tmp;
+	struct nid_stat *tmp, *ret = NULL;
+	unsigned long deadline = jiffies + cfs_time_seconds(obd_timeout);
 
+retry:
 	rcu_read_lock();
 	exports = rhltable_lookup(&obd->obd_nid_stats_hash, &ns->nid,
 				  nid_stats_hash_params);
-	if (!exports)
-		goto insert_key;
+	if (exports) {
+		rhl_for_each_entry_rcu(tmp, pos, exports, nid_hash) {
+			if (obd == tmp->nid_obd) {
+				spin_lock(&obd->obd_nid_lock);
+				if (tmp->nid_last_idle == NID_STATS_DISPOSE) {
+					spin_unlock(&obd->obd_nid_lock);
+					ret = ERR_PTR(-EBUSY);
+					break;
+				}
 
-	rhl_for_each_entry_rcu(tmp, pos, exports, nid_hash) {
-		if (obd == tmp->nid_obd) {
-			nidstat_getref(tmp);
-			ns2 = tmp;
-			goto unlock;
+				nidstat_getref(tmp);
+				tmp->nid_last_idle = 0;
+				list_move_tail(&tmp->nid_list,
+					       &obd->obd_nid_stats);
+				spin_unlock(&obd->obd_nid_lock);
+
+				ret = tmp;
+				break;
+			}
 		}
 	}
 
-	if (!ns2) {
+	if (IS_ERR(ret)) {
+		long timeout;
+
+		rcu_read_unlock();
+
+		if (time_after_eq(jiffies, deadline)) {
+			CERROR("%s: NID stats for %s still disposing after %us: rc = %ld\n",
+			       obd->obd_name, libcfs_nidstr(&ns->nid),
+			       obd_timeout, PTR_ERR(ret));
+			return ret;
+		}
+
+		ret = NULL;
+		/* Entries only carry NID_STATS_DISPOSE while the disposer
+		 * (lprocfs_evict_idle_nid_stats() or
+		 * ldebugfs_nid_stats_clear_seq_write()) still holds
+		 * obd_nid_stats_inprogress, and obd_nid_stats_remove() -
+		 * which is what would let this lookup succeed - always
+		 * happens before that count is dropped. So waiting for it to
+		 * reach zero is waiting for the specific entry seen above to
+		 * either finish disposing or, if a fresh batch grabs the
+		 * count first, for that batch to finish; either way this is
+		 * real progress, not a fixed guess at how long disposal takes.
+		 *
+		 * deadline - jiffies is computed once into a signed timeout
+		 * rather than passed inline: jiffies may cross deadline
+		 * between the time_after_eq() check above and this line, and
+		 * an inline unsigned subtraction would then wrap to a huge
+		 * value that schedule_timeout() rejects as negative. A
+		 * non-positive timeout here just skips straight to the retry,
+		 * where the check above catches the now-elapsed deadline.
+		 */
+		timeout = (long)(deadline - jiffies);
+		if (timeout > 0)
+			wait_var_event_timeout(&obd->obd_nid_stats_inprogress,
+				!atomic_read(&obd->obd_nid_stats_inprogress),
+				timeout);
+		goto retry;
+	}
+
+	if (!ret) { /* Need to insert new key */
 		int rc;
-insert_key:
+
 		nidstat_getref(ns);
 		rc = rhltable_insert_key(&obd->obd_nid_stats_hash, &ns->nid,
 					 &ns->nid_hash, nid_stats_hash_params);
 		if (rc < 0) {
 			nidstat_putref(ns);
-			ns2 = ERR_PTR(rc);
+			ret = ERR_PTR(rc);
 		} else {
-			ns2 = ns;
+			spin_lock(&obd->obd_nid_lock);
+			list_move_tail(&ns->nid_list, &obd->obd_nid_stats);
+			spin_unlock(&obd->obd_nid_lock);
+
+			ret = ns;
 		}
 	}
-unlock:
+
 	rcu_read_unlock();
-
-	return ns2;
+	return ret;
 }
-EXPORT_SYMBOL(obd_nid_stats_get);
+EXPORT_SYMBOL(obd_nid_stats_insert);
 
-void obd_nid_stats_put(struct obd_device *obd, struct nid_stat *ns)
+void obd_nid_stats_remove(struct obd_device *obd, struct nid_stat *ns)
 {
 	int rc;
+
+	LASSERT(list_empty(&ns->nid_list));
+
+	/* Destroy the debugfs entry before removing the nid_stat from the
+	 * hash table. This ensures that any concurrent obd_nid_stats_insert()
+	 * for the same NID will find the old stat (in DISPOSE state) and wait
+	 * for its eviction to complete (including debugfs removal) before
+	 * creating a new one, avoiding EEXIST errors on debugfs creation.
+	 */
+	debugfs_remove_recursive(ns->nid_debugfs);
 
 	rcu_read_lock();
 	rc = rhltable_remove(&obd->obd_nid_stats_hash, &ns->nid_hash,
@@ -325,7 +391,7 @@ void obd_nid_stats_put(struct obd_device *obd, struct nid_stat *ns)
 		nidstat_putref(ns);
 	rcu_read_unlock();
 }
-EXPORT_SYMBOL(obd_nid_stats_put);
+EXPORT_SYMBOL(obd_nid_stats_remove);
 
 #endif /* CONFIG_LUSTRE_FS_SERVER */
 
@@ -790,10 +856,18 @@ int class_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 	if (err)
 		GOTO(err_uuid_hash, err = -ENOMEM);
 
-	/* create a nid-stats lustre hash */
-	err = rhltable_init(&obd->obd_nid_stats_hash, &nid_stats_hash_params);
-	if (err)
-		GOTO(err_nid_hash, err = -ENOMEM);
+	/* create a nid-stats lustre hash. It is destroyed by class_free_dev()
+	 * rather than by class_cleanup(), so it may still be around if this
+	 * device was set up before.
+	 */
+	if (!test_bit(OBDF_NID_STATS_HASH, obd->obd_flags)) {
+		err = rhltable_init(&obd->obd_nid_stats_hash,
+				    &nid_stats_hash_params);
+		if (err)
+			GOTO(err_nid_hash, err = -ENOMEM);
+
+		set_bit(OBDF_NID_STATS_HASH, obd->obd_flags);
+	}
 
 	/* create a client_generation-export lustre hash */
 	obd->obd_gen_hash = cfs_hash_create("UUID_HASH",
@@ -804,7 +878,7 @@ int class_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 					    CFS_HASH_MAX_THETA,
 					    &gen_hash_ops, CFS_HASH_DEFAULT);
 	if (!obd->obd_gen_hash)
-		GOTO(err_nid_stats_hash, err = -ENOMEM);
+		GOTO(err_nid_hash, err = -ENOMEM);
 #endif /* CONFIG_LUSTRE_FS_SERVER */
 
 	err = obd_setup(obd, lcfg);
@@ -833,8 +907,9 @@ err_gen_hash:
 		cfs_hash_putref(obd->obd_gen_hash);
 		obd->obd_gen_hash = NULL;
 	}
-err_nid_stats_hash:
-	rhltable_destroy(&obd->obd_nid_stats_hash);
+	/* obd_nid_stats_hash is left alone, it is owned by the device and
+	 * destroyed by class_free_dev()
+	 */
 err_nid_hash:
 	rhltable_destroy(&obd->obd_nid_hash);
 #endif /* CONFIG_LUSTRE_FS_SERVER */
@@ -922,6 +997,23 @@ int class_cleanup(struct obd_device *obd, struct lustre_cfg *lcfg)
 		       atomic_read(&obd->obd_conn_inprogress) == 0);
 	smp_rmb();
 
+	/* wait for any in-flight lprocfs_evict_idle_nid_stats() scan to
+	 * finish freeing its dispose list before this proceeds to tear
+	 * down obd_debugfs_exports and the nid_debugfs dentries under it;
+	 * OBDF_STOPPING above is what makes any scan starting after this
+	 * point a no-op instead of a new racer.
+	 *
+	 * The set_bit(OBDF_STOPPING) above and this read need to be fully
+	 * ordered against the scan's atomic_inc_return()/test_bit() pair,
+	 * or both sides could see the pre-update value of the other's flag
+	 * (classic store-buffering). wait_var_event()'s fast path checks
+	 * the condition inline before taking any lock, so an explicit
+	 * smp_mb() is needed here; it has no barrier of its own to lean on.
+	 */
+	smp_mb();
+	wait_var_event(&obd->obd_nid_stats_inprogress,
+		       atomic_read(&obd->obd_nid_stats_inprogress) == 0);
+
 	if (lcfg->lcfg_bufcount >= 2 && LUSTRE_CFG_BUFLEN(lcfg, 1) > 0) {
 		for (flag = lustre_cfg_string(lcfg, 1); *flag != 0; flag++)
 			switch (*flag) {
@@ -969,10 +1061,6 @@ int class_cleanup(struct obd_device *obd, struct lustre_cfg *lcfg)
 #ifdef CONFIG_LUSTRE_FS_SERVER
 	/* destroy a nid-export hash body */
 	rhltable_free_and_destroy(&obd->obd_nid_hash, nid_export_exit, NULL);
-
-	/* destroy a nid-stats hash body */
-	rhltable_free_and_destroy(&obd->obd_nid_stats_hash, nid_stats_exit,
-				  NULL);
 
 	/* destroy a client_generation-export hash body */
 	if (obd->obd_gen_hash) {
@@ -1025,6 +1113,16 @@ void class_decref(struct obd_device *obd, const char *scope, const void *source)
 	kref_put(&obd->obd_refcount, class_decref_free);
 }
 EXPORT_SYMBOL(class_decref);
+
+void obd_nid_stats_hash_destroy(struct obd_device *obd)
+{
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	if (test_and_clear_bit(OBDF_NID_STATS_HASH, obd->obd_flags))
+		rhltable_free_and_destroy(&obd->obd_nid_stats_hash,
+					  nid_stats_exit, NULL);
+#endif
+}
+EXPORT_SYMBOL(obd_nid_stats_hash_destroy);
 
 /**
  * class_add_conn() - Add server connection with client OBD
