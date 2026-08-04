@@ -62,6 +62,18 @@ static int lbug_on_grant_miscount;
 module_param(lbug_on_grant_miscount, int, 0644);
 MODULE_PARM_DESC(lbug_on_grant_miscount, "LBUG on grant miscount");
 
+/* Shift to convert bytes into cached statfs block counts.
+ *
+ * tgd_blockbits is sampled once at mount, but os_bsize is not fixed for the
+ * life of a mount: a ZFS recordsize change moves it under a mounted target,
+ * so the counts have to be converted with the size that came with them.
+ */
+static inline int tgt_osfs_blockbits(struct tg_grants_data *tgd)
+	__must_hold(&tgd->tgd_osfs_lock)
+{
+	return fls64(tgd->tgd_osfs.os_bsize) - 1;
+}
+
 /* Helpers to inflate/deflate grants for clients that do not support the grant
  * parameters */
 static inline u64 tgt_grant_inflate(struct tg_grants_data *tgd, u64 val)
@@ -195,7 +207,9 @@ void tgt_grant_sanity_check(struct obd_device *obd, const char *func)
 	    obd->obd_grant_check_threshold)
 		return;
 
-	maxsize = tgd->tgd_osfs.os_blocks << tgd->tgd_blockbits;
+	spin_lock(&tgd->tgd_osfs_lock);
+	maxsize = tgd->tgd_osfs.os_blocks * tgd->tgd_osfs.os_bsize;
+	spin_unlock(&tgd->tgd_osfs_lock);
 
 	spin_lock(&obd->obd_dev_lock);
 	spin_lock(&tgd->tgd_grant_lock);
@@ -284,6 +298,7 @@ int tgt_statfs_internal(const struct lu_env *env, struct lu_target *lut,
 	spin_lock(&tgd->tgd_osfs_lock);
 	if (tgd->tgd_osfs_age < max_age || max_age == 0) {
 		u64 unstable;
+		int blockbits;
 
 		/* statfs data are too old, get up-to-date one.
 		 * we must be cautious here since multiple threads might be
@@ -310,6 +325,33 @@ int tgt_statfs_internal(const struct lu_env *env, struct lu_target *lut,
 
 		osfs->os_namelen = min_t(__u32, osfs->os_namelen, NAME_MAX);
 
+		blockbits = fls64(osfs->os_bsize) - 1;
+
+		/* emulate a "zfs set recordsize=1<<fail_val": the reported
+		 * block size changes and the counts move the other way, so
+		 * the space the device actually has is unchanged
+		 */
+		if (CFS_FAIL_CHECK(OBD_FAIL_TGT_STATFS_BSIZE)) {
+			int bits = cfs_fail_val;
+
+			if (bits < 9 || bits > 24) {
+				CWARN("%s: ignoring fail_val %u, not a block size shift in [9, 24]: rc = %d\n",
+				      tgt_name(lut), cfs_fail_val, -EINVAL);
+			} else {
+				osfs->os_bsize = 1U << bits;
+				if (bits < blockbits) {
+					osfs->os_blocks <<= blockbits - bits;
+					osfs->os_bfree <<= blockbits - bits;
+					osfs->os_bavail <<= blockbits - bits;
+				} else {
+					osfs->os_blocks >>= bits - blockbits;
+					osfs->os_bfree >>= bits - blockbits;
+					osfs->os_bavail >>= bits - blockbits;
+				}
+				blockbits = bits;
+			}
+		}
+
 		spin_lock(&tgd->tgd_grant_lock);
 		spin_lock(&tgd->tgd_osfs_lock);
 		/* calculate how much space was written while we released the
@@ -322,7 +364,7 @@ int tgt_statfs_internal(const struct lu_env *env, struct lu_target *lut,
 			 * the cached statfs data that we are about to crunch.
 			 * Take them into account in the new statfs data */
 			osfs->os_bavail -= min_t(u64, osfs->os_bavail,
-					       unstable >> tgd->tgd_blockbits);
+						 unstable >> blockbits);
 			/* However, we don't really know if those writes got
 			 * accounted in the statfs call, so tell
 			 * tgt_grant_space_left() there is some uncertainty
@@ -382,7 +424,6 @@ static void tgt_grant_statfs(const struct lu_env *env, struct obd_export *exp,
 {
 	struct obd_device	*obd = exp->exp_obd;
 	struct lu_target	*lut = obd2obt(obd)->obt_lut;
-	struct tg_grants_data	*tgd = &lut->lut_tgd;
 	struct tgt_thread_info	*tti;
 	struct obd_statfs	*osfs;
 	time64_t max_age;
@@ -404,8 +445,8 @@ static void tgt_grant_statfs(const struct lu_env *env, struct obd_export *exp,
 
 	CDEBUG(D_CACHE, "%s: cli %s/%p free: %llu avail: %llu\n",
 	       obd->obd_name, exp->exp_client_uuid.uuid, exp,
-	       osfs->os_bfree << tgd->tgd_blockbits,
-	       osfs->os_bavail << tgd->tgd_blockbits);
+	       osfs->os_bfree * osfs->os_bsize,
+	       osfs->os_bavail * osfs->os_bsize);
 }
 
 /**
@@ -437,7 +478,7 @@ static u64 tgt_grant_space_left(struct obd_export *exp)
 
 	spin_lock(&tgd->tgd_osfs_lock);
 	/* get available space from cached statfs data */
-	left = tgd->tgd_osfs.os_bavail << tgd->tgd_blockbits;
+	left = tgd->tgd_osfs.os_bavail * tgd->tgd_osfs.os_bsize;
 	unstable = tgd->tgd_osfs_unstable; /* those might be accounted twice */
 	spin_unlock(&tgd->tgd_osfs_lock);
 
@@ -1364,12 +1405,14 @@ EXPORT_SYMBOL(tgt_grant_prepare_write);
  */
 long tgt_grant_create(const struct lu_env *env, struct obd_export *exp, s64 *nr)
 {
-	struct lu_target	*lut = obd2obt(exp->exp_obd)->obt_lut;
-	struct tg_grants_data	*tgd = &lut->lut_tgd;
-	struct tg_export_data	*ted = &exp->exp_target_data;
-	u64			 left = 0;
-	unsigned long		 wanted;
-	unsigned long		 granted;
+	struct lu_target *lut = obd2obt(exp->exp_obd)->obt_lut;
+	struct tg_grants_data *tgd = &lut->lut_tgd;
+	struct tg_export_data *ted = &exp->exp_target_data;
+	u64 left = 0;
+	u64 avail;
+	u64 size;
+	unsigned long wanted;
+	unsigned long granted;
 
 	ENTRY;
 
@@ -1384,14 +1427,19 @@ long tgt_grant_create(const struct lu_env *env, struct obd_export *exp, s64 *nr)
 	/* protect all grant counters */
 	spin_lock(&tgd->tgd_grant_lock);
 
-	/* fail precreate request if there is not enough blocks available for
-	 * writing */
-	if (tgd->tgd_osfs.os_bavail - (ted->ted_grant >> tgd->tgd_blockbits) <
-	    (tgd->tgd_osfs.os_blocks >> 10)) {
+	spin_lock(&tgd->tgd_osfs_lock);
+	avail = tgd->tgd_osfs.os_bavail * tgd->tgd_osfs.os_bsize;
+	size = tgd->tgd_osfs.os_blocks * tgd->tgd_osfs.os_bsize;
+	spin_unlock(&tgd->tgd_osfs_lock);
+
+	/* fail precreate request if there is not enough space available for
+	 * writing, keeping 0.1% of the device beyond this export's grant
+	 */
+	if (avail < ted->ted_grant + (size >> 10)) {
 		spin_unlock(&tgd->tgd_grant_lock);
-		CDEBUG(D_RPCTRACE, "%s: not enough space for create %llu\n",
-		       exp->exp_obd->obd_name,
-		       tgd->tgd_osfs.os_bavail * tgd->tgd_osfs.os_blocks);
+		CDEBUG(D_RPCTRACE,
+		       "%s: no space to create: avail=%llu grant=%ld size=%llu\n",
+		       exp->exp_obd->obd_name, avail, ted->ted_grant, size);
 		RETURN(-ENOSPC);
 	}
 
@@ -1479,9 +1527,9 @@ void tgt_grant_commit(struct obd_export *exp, unsigned long pending,
 	if (rc == 0) {
 		spin_lock(&tgd->tgd_osfs_lock);
 		/* Take pending out of cached statfs data */
-		tgd->tgd_osfs.os_bavail -= min_t(u64,
-						 tgd->tgd_osfs.os_bavail,
-						 pending >> tgd->tgd_blockbits);
+		tgd->tgd_osfs.os_bavail -=
+			min_t(u64, tgd->tgd_osfs.os_bavail,
+			      pending >> tgt_osfs_blockbits(tgd));
 		if (tgd->tgd_statfs_inflight)
 			/* someone is running statfs and want to be notified of
 			 * writes happening meanwhile */
