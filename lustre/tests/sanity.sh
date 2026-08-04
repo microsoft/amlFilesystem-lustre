@@ -36333,7 +36333,7 @@ cleanup_805() {
 	trap 0
 }
 
-test_805() {
+test_805a() {
 	local zfs_version=$(do_facet mds1 cat /sys/module/zfs/version)
 	[ "$mds1_FSTYPE" != "zfs" ] && skip "ZFS specific test"
 	[ $(version_code $zfs_version) -lt $(version_code 0.7.2) ] &&
@@ -36371,7 +36371,60 @@ test_805() {
 	do_facet $SINGLEMDS zfs set quota=$old $fsset
 	trap 0
 }
-run_test 805 "ZFS can remove from full fs"
+run_test 805a "ZFS can remove from full fs"
+
+test_805b() {
+	(( $MDS1_VERSION >= $(version_code 2.17.56) )) ||
+		skip "need MDS >= 2.17.56 for OBD_FAIL_TGT_STATFS_BSIZE"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+
+	local avail
+	local seen
+	local dbg
+
+	mkdir_on_mdt0 $DIR/$tdir || error "mkdir $tdir failed"
+	$LFS setstripe -E 1M -L mdt -E EOF -c1 $DIR/$tdir ||
+		error "setstripe DoM failed"
+
+	avail=$($LFS df $MOUNT | awk '/MDT0000/ { print $4 }')
+	(( avail > 0 )) || error "no MDT space reported"
+	echo "MDT avail: $avail KB"
+
+	dbg=$(do_facet mds1 $LCTL get_param -n debug | tr ' ' ',')
+	stack_trap "do_facet mds1 $LCTL set_param fail_loc=0 fail_val=0"
+	stack_trap "do_facet mds1 $LCTL set_param debug=$dbg"
+	do_facet mds1 $LCTL set_param debug=+cache
+
+	# fail_val is the block size shift: 1K is below any real block size,
+	# 1M is above the ZFS default of 128K
+	for bits in 10 20; do
+		#define OBD_FAIL_TGT_STATFS_BSIZE	0x727
+		do_facet mds1 $LCTL set_param fail_val=$bits fail_loc=0x727
+		do_facet mds1 $LCTL clear
+
+		# a DoM write refreshes the statfs data used for grants
+		sleep 2
+		dd if=/dev/zero of=$DIR/$tdir/f-$bits bs=4k count=1 \
+			conv=fsync || error "write with $bits bit blocks failed"
+
+		do_facet mds1 "$LCTL dk" > $TMP/$tfile.dk
+		grep -q "cfs_fail_loc=727" $TMP/$tfile.dk ||
+			error "OBD_FAIL_TGT_STATFS_BSIZE did not fire"
+		# other targets on this node are rescaled too, match ours
+		local pat="$FSNAME-MDT0000: .*avail="
+
+		seen=$(sed -n "s/.*$pat\([0-9]*\) left=.*/\1/p" \
+		       $TMP/$tfile.dk | tail -n1)
+		[[ -n "$seen" ]] || error "no grant statfs trace on the MDS"
+		seen=$((seen / 1024))
+		echo "grant avail with $((1 << bits)) byte blocks: $seen KB"
+
+		# only the reported block size changed, the free space did not
+		(( seen < avail * 2 && seen > avail / 2 )) ||
+			error "grant sees $seen KB free, df says $avail KB"
+	done
+}
+run_test 805b "grant free space vs a changed block size"
 
 # Size-on-MDS test
 check_lsom_data()
