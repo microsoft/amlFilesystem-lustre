@@ -66,11 +66,6 @@ struct qmt_pool_info;
 #define qmt_pool_global(qpi) \
 	(!strncmp(qpi->qpi_name, GLB_POOL_NAME, \
 		  strlen(GLB_POOL_NAME) + 1) ? true : false)
-/* Draft for mdt pools */
-union qmt_sarray {
-	struct lu_tgt_pool	osts;
-};
-
 /* Since DOM support, data resources can exist
  * on both MDT and OST targets. */
 enum qmt_stype {
@@ -82,6 +77,18 @@ enum qmt_stype {
 #define qmt_dom(rtype, stype) \
 	((rtype == LQUOTA_RES_DT && \
 	 stype == QMT_STYPE_MDT) ? true : false)
+
+/*
+ * Per-pool slave target arrays, indexed by qmt_stype.
+ *
+ * Primary members (lgd / recalc / grant): DT → tgts[OST], MD → tgts[MDT].
+ * DT tgts[MDT] holds DOM MDTs for usage-cache; MD tgts[OST] is reserved.
+ */
+struct qmt_sarray {
+	struct lu_tgt_pool	tgts[QMT_STYPE_CNT];
+};
+
+#define qpi_sarr(qpi, stype)	(&(qpi)->qpi_sarr.tgts[stype])
 
 enum {
 	/* set while recalc_thread is working */
@@ -99,7 +106,7 @@ struct qmt_pool_info {
 	/* chained list of all pools managed by the same qmt */
 	struct list_head	 qpi_linkage;
 	char			 qpi_name[QPI_MAXNAME];
-	union qmt_sarray	 qpi_sarr;
+	struct qmt_sarray	 qpi_sarr;
 	/* recalculation thread pointer */
 	struct task_struct	*qpi_recalc_task;
 	/* rw semaphore to avoid acquire/release during
@@ -161,6 +168,13 @@ struct qmt_pool_info {
 	rwlock_t		 qpi_lqa_lock;
 };
 
+static inline enum qmt_stype qpi_primary_stype(struct qmt_pool_info *qpi)
+{
+	return qpi->qpi_rtype == LQUOTA_RES_DT ? QMT_STYPE_OST : QMT_STYPE_MDT;
+}
+
+#define qpi_sarr_tgts(qpi)	qpi_sarr(qpi, qpi_primary_stype(qpi))
+
 static inline int qpi_slv_nr(struct qmt_pool_info *pool, int qtype)
 {
 	int i, sum = 0;
@@ -173,12 +187,10 @@ static inline int qpi_slv_nr(struct qmt_pool_info *pool, int qtype)
 
 static inline int qpi_slv_nr_by_rtype(struct qmt_pool_info *pool, int qtype)
 {
-	if (pool->qpi_rtype == LQUOTA_RES_DT)
-		/* Here should be qpi_slv_nr() if MDTs will be added
-		 * to quota pools */
-		return pool->qpi_slv_nr[QMT_STYPE_OST][qtype];
-	else
-		return pool->qpi_slv_nr[QMT_STYPE_MDT][qtype];
+	/* lgd / recalc still use the primary stype only. DOM MDTs live
+	 * in DT tgts[MDT] for usage-cache and are counted in qpi_slv_nr().
+	 */
+	return pool->qpi_slv_nr[qpi_primary_stype(pool)][qtype];
 }
 /*
  * Helper routines and prototypes
@@ -457,10 +469,10 @@ int qmt_pool_destroy(struct obd_device *obd, enum lquota_res_type rtype,
 		     char *poolname, bool is_lqa);
 int qmt_start_pool_recalc(struct lu_env *env, struct qmt_pool_info *qpi);
 
-#define qmt_sarr_read_down(qpi) down_read(&qpi->qpi_sarr.osts.op_rw_sem)
-#define qmt_sarr_read_up(qpi) up_read(&qpi->qpi_sarr.osts.op_rw_sem)
-#define qmt_sarr_write_down(qpi) down_write(&qpi->qpi_sarr.osts.op_rw_sem)
-#define qmt_sarr_write_up(qpi) up_write(&qpi->qpi_sarr.osts.op_rw_sem)
+#define qmt_sarr_read_down(qpi) down_read(&qpi_sarr_tgts(qpi)->op_rw_sem)
+#define qmt_sarr_read_up(qpi) up_read(&qpi_sarr_tgts(qpi)->op_rw_sem)
+#define qmt_sarr_write_down(qpi) down_write(&qpi_sarr_tgts(qpi)->op_rw_sem)
+#define qmt_sarr_write_up(qpi) up_write(&qpi_sarr_tgts(qpi)->op_rw_sem)
 int qmt_sarr_get_idx(struct qmt_pool_info *qpi, int arr_idx);
 unsigned int qmt_sarr_count(struct qmt_pool_info *qpi);
 
@@ -527,7 +539,7 @@ int qmt_set_with_lqe(const struct lu_env *env, struct qmt_device *qmt,
 		     __u64 time, __u32 valid, bool is_default, bool is_updated);
 int qmt_dqacq0(const struct lu_env *, struct qmt_device *, struct obd_uuid *,
 	       __u32, __u64, __u64, struct quota_body *, int);
-enum qmt_stype qmt_uuid2idx(struct obd_uuid *, int *);
+int qmt_uuid2idx(struct obd_uuid *, enum qmt_stype *, int *);
 
 /* qmt_lock.c */
 int qmt_intent_policy(const struct lu_env *, struct lu_device *,
