@@ -631,10 +631,13 @@ again:
 
 		/* try to consume local quota space first */
 		rc = qsd_acquire_local(lqe, space);
-		if (rc != -EAGAIN)
+		if (rc != -EAGAIN) {
 			/* rc == 0, Wouhou! enough local quota space
 			 * rc < 0, something bad happened */
-			break;
+			if (rc != -EDQUOT || lqe->lqe_pending_req == 0)
+				break;
+		}
+
 		/*
 		 * There might be a window that commit transaction
 		 * have updated usage but pending write doesn't change
