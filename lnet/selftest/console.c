@@ -113,6 +113,50 @@ lstcon_node_put(struct lstcon_node *nd)
 	LIBCFS_FREE(nd, sizeof(*nd) + sizeof(*ndl));
 }
 
+/**
+ * lstcon_id_to_primary() - Replace a peer NID with its primary NID.
+ * @id: Peer process ID. The function changes the NID in place.
+ *
+ * The console keys a node on one NID. A secondary NID must map to the
+ * node of the peer primary NID, or the peer gets a second node. A NID
+ * that already keys a node keeps its value. Later commands then find a
+ * node that LNet did not resolve at add time.
+ *
+ * Context: Can sleep. LNetPrimaryNID() can wait for discovery. The caller
+ *          holds console_session.ses_mutex.
+ * Return: 0, or %-EINTR when a signal is pending. After a signal,
+ *         LNetPrimaryNID() cannot wait for discovery, and a NID that
+ *         needs discovery keeps its value.
+ */
+static int
+lstcon_id_to_primary(struct lnet_processid *id)
+{
+	struct lnet_nid nid = id->nid;
+	struct lstcon_node *nd;
+
+	/* lstcon_ndlink_find() rejects a wildcard NID */
+	if (LNET_NID_IS_ANY(&id->nid))
+		return 0;
+
+	if (lstcon_node_find(id, &nd, 0) == 0) {
+		lstcon_node_put(nd);
+		return 0;
+	}
+
+	LNetPrimaryNID(&nid);
+	/* FIXME: The test RPCs carry only 4-byte NIDs */
+	if (nid_is_nid4(&nid))
+		id->nid = nid;
+
+	/* The pinger waits for ses_mutex and computes the session expiry
+	 * from ses_laststamp. Renew the stamp, so that a slow resolution
+	 * does not expire the session.
+	 */
+	console_session.ses_laststamp = ktime_get_real_seconds();
+
+	return signal_pending(current) ? -EINTR : 0;
+}
+
 static int
 lstcon_ndlink_find(struct list_head *hash, struct lnet_processid *id,
 		   struct lstcon_ndlink **ndlpp, int create)
@@ -399,6 +443,10 @@ lstcon_group_nodes_add(struct lstcon_group *grp,
 
 		/* skip if it's in this group already */
 		lnet_pid4_to_pid(id4, &id);
+		rc = lstcon_id_to_primary(&id);
+		if (rc != 0)
+			break;
+
 		rc = lstcon_group_ndlink_find(grp, &id, &ndl, 0);
 		if (rc == 0)
 			continue;
@@ -471,6 +519,10 @@ lstcon_group_nodes_remove(struct lstcon_group *grp,
 
 		/* move node to tmp group */
 		lnet_pid4_to_pid(id4, &id);
+		rc = lstcon_id_to_primary(&id);
+		if (rc != 0)
+			goto error;
+
 		if (lstcon_group_ndlink_find(grp, &id, &ndl, 0) == 0)
 			lstcon_group_ndlink_move(grp, tmp, ndl);
 	}
@@ -1473,6 +1525,10 @@ lstcon_nodes_stat(int count, struct lnet_process_id __user *ids_up,
 
 		/* add to tmp group */
 		lnet_pid4_to_pid(id4, &id);
+		rc = lstcon_id_to_primary(&id);
+		if (rc != 0)
+			break;
+
 		rc = lstcon_group_ndlink_find(tmp, &id, &ndl, 2);
 		if (rc != 0) {
 			CDEBUG((rc == -ENOMEM) ? D_ERROR : D_NET,
@@ -1585,6 +1641,10 @@ lstcon_nodes_debug(int timeout, int count,
 
 		/* node is added to tmp group */
 		lnet_pid4_to_pid(id4, &id);
+		rc = lstcon_id_to_primary(&id);
+		if (rc != 0)
+			break;
+
 		rc = lstcon_group_ndlink_find(grp, &id, &ndl, 1);
 		if (rc != 0) {
 			CERROR("Can't create node link\n");

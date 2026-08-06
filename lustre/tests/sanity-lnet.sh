@@ -393,6 +393,7 @@ if $FORCE_LARGE_NID; then
 	always_except LU-19334 257
 	always_except LU-19363 270
 	always_except LU-9680 302
+	always_except LU-19323 330
 
 	FAKE_NID="${FAKE_IPV6}@tcp"
 else
@@ -7360,6 +7361,39 @@ test_315() {
 	fi
 }
 run_test 315 "Bounce pool and its worker follow an HCA failover"
+
+test_330() {
+	[[ -x $LSTSH ]] || skip "lst.sh not found"
+
+	which lst &>/dev/null ||
+		skip "$LSTSH needs lst in $PATH"
+
+	# setup_health_test true gives each node two or more NIDs.
+	# Element [1] is a secondary NID.
+	setup_health_test true || return $?
+
+	(( ${#LNIDS[@]} >= 2 && ${#RNIDS[@]} >= 2 )) || {
+		cleanup_health_test
+		skip "Need a secondary NID on each node"
+	}
+
+	do_rpc_nodes $HOSTNAME,$RNODE load_module \
+		../lnet/selftest/lnet_selftest ||
+		error "Failed to load lnet-selftest module"
+
+	# Without -H, lst.sh gives the secondary NIDs to "lst add_group"
+	# with no change.
+	$LSTSH -t "${RNIDS[1]}" -f "${LNIDS[1]}" -m rw -s 4k ||
+		error "lst with secondary NIDs failed (rw 4k)"
+
+	$LSTSH -t "${RNIDS[1]}" -f "${LNIDS[1]}" -m rw ||
+		error "lst with secondary NIDs failed (rw)"
+
+	cleanup_health_test || return $?
+
+	return 0
+}
+run_test 330 "LST works when a peer is named by a secondary NID"
 
 test_350() {
 	reinit_dlc || return $?
