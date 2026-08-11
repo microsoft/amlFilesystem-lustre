@@ -1161,7 +1161,6 @@ static struct dentry *ll_lookup_it(struct inode *parent, struct dentry *dentry,
 						  dentry->d_name.len, NULL))) {
 			/* get encryption context from reference file */
 			int ctx_size = LLCRYPT_ENC_CTX_SIZE;
-			struct lustre_sb_info *lsi;
 			struct file *ref_file;
 			struct inode *ref_inode;
 			void *ctx;
@@ -1178,16 +1177,14 @@ static struct dentry *ll_lookup_it(struct inode *parent, struct dentry *dentry,
 				GOTO(inherit, rc = -EINVAL);
 			}
 
-			lsi = s2lsi(ref_inode->i_sb);
-
 getctx:
 			OBD_ALLOC(ctx, ctx_size);
 			if (!ctx)
 				GOTO(out, retval = ERR_PTR(-ENOMEM));
 
 #ifdef CONFIG_LL_ENCRYPTION
-			rc = lsi->lsi_cop->get_context(ref_inode,
-						       ctx, ctx_size);
+			rc = s2lsi(ref_inode->i_sb)->lsi_cop->get_context(
+				ref_inode, ctx, ctx_size);
 #elif defined(HAVE_LUSTRE_CRYPTO)
 			rc = ref_inode->i_sb->s_cop->get_context(ref_inode,
 								 ctx, ctx_size);
