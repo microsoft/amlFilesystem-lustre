@@ -105,31 +105,25 @@ int llapi_hsm_data_version_set(int fd, __u64 data_version)
 }
 
 /*
- * Create a file without any name and open it for read/write
- *
- * - file is created as if it were a standard file in the given \a directory
- * - file does not appear in \a directory and mtime does not change because
- *   the filename is handled specially by the Lustre MDS.
- * - file is destroyed at final close
- *
- * \param[in]	directory	directory from which to inherit layout/MDT idx
- * \param[in]	mdt_idx		MDT index on which the file is created,
- *				\a idx == -1 means no specific MDT is requested
- * \param[in]	mode		standard open(2) mode
- * \param[in]	stripe_param	stripe parameters. May be NULL.
- *
- * \retval	a file descriptor on success.
- * \retval	-errno on error.
+ * Helper function to create volatile files. It allows striping
+ * layout, if needed, to be specified as either a llapi_stripe_param
+ * or a llapi_layout but not both.
  */
-int llapi_create_volatile_param(const char *directory, int mdt_idx,
-				int open_flags, mode_t mode,
-				const struct llapi_stripe_param *stripe_param)
+static int create_volatile(const char *directory, int mdt_idx,
+			   int open_flags, mode_t mode,
+			   const struct llapi_stripe_param *stripe_param,
+			   const struct llapi_layout *layout)
 {
 	char file_path[PATH_MAX];
 	int saved_errno = errno;
-	int fd;
+	int fd = -1;
 	unsigned int rnumber;
 	int rc;
+
+	if (stripe_param != NULL && layout != NULL) {
+		errno = EINVAL;
+		return -EINVAL;
+	}
 
 	do {
 		rnumber = random();
@@ -142,8 +136,10 @@ int llapi_create_volatile_param(const char *directory, int mdt_idx,
 				      "%s/" LUSTRE_VOLATILE_HDR ":%.4X:%.4X",
 				      directory, mdt_idx, rnumber);
 
-		if (rc < 0 || rc >= sizeof(file_path))
+		if (rc < 0 || rc >= sizeof(file_path)) {
+			errno = ENAMETOOLONG;
 			return -ENAMETOOLONG;
+		}
 
 		/*
 		 * Either open O_WRONLY or O_RDWR, creating RDONLY
@@ -157,22 +153,28 @@ int llapi_create_volatile_param(const char *directory, int mdt_idx,
 		if (stripe_param != NULL) {
 			fd = llapi_file_open_param(file_path, open_flags,
 						   mode, stripe_param);
+		} else if (layout) {
+			fd = llapi_layout_file_open(file_path, open_flags,
+						    mode, layout);
+			/* llapi_layout_file_open() sets errno; fall back in
+			 * case a path is ever added that does not.
+			 */
 			if (fd < 0)
-				rc = fd;
+				fd = errno ? -errno : -EINVAL;
 		} else {
 			fd = open(file_path, open_flags, mode);
 			if (fd < 0)
-				rc = -errno;
+				fd = -errno;
 		}
-	} while (fd < 0 && rc == -EEXIST);
+	} while (fd == -EEXIST);
 
 	if (fd < 0) {
-		llapi_error(LLAPI_MSG_ERROR, rc,
+		llapi_error(LLAPI_MSG_ERROR, fd,
 			    "Cannot create volatile file '%s' in '%s'",
 			    file_path + strlen(directory) + 1 +
 			    LUSTRE_VOLATILE_HDR_LEN,
 			    directory);
-		return rc;
+		saved_errno = -fd;
 	}
 
 	/*
@@ -184,12 +186,65 @@ int llapi_create_volatile_param(const char *directory, int mdt_idx,
 	(void)unlink(file_path);
 
 	/*
-	 * Since we are returning successfully we restore errno (and
-	 * mask out possible EEXIST from open() and ENOENT from unlink().
+	 * Restore errno to the incoming value on success, or to the error
+	 * that failed the open, masking out any EEXIST from open() and
+	 * ENOENT from unlink().
 	 */
 	errno = saved_errno;
 
 	return fd;
+}
+
+/*
+ * Create a file without any name and open it for read/write
+ *
+ * - file is created as if it were a standard file in the given \a directory
+ * - file does not appear in \a directory and mtime does not change because
+ *   the filename is handled specially by the Lustre MDS.
+ * - file is destroyed at final close
+ *
+ * \param[in]	directory	directory from which to inherit layout/MDT idx
+ * \param[in]	mdt_idx		MDT index on which the file is created,
+ *				\a mdt_idx == -1 means no specific MDT
+ * \param[in]	open_flags	standard open(2) flags
+ * \param[in]	mode		standard open(2) mode
+ * \param[in]	stripe_param	stripe parameters. Default layout if NULL.
+ *
+ * \retval	a file descriptor on success.
+ * \retval	-errno on error (errno is also set).
+ */
+int llapi_file_open_volatile_param(const char *directory, int mdt_idx,
+				  int open_flags, mode_t mode,
+				  const struct llapi_stripe_param *stripe_param)
+{
+	return create_volatile(directory, mdt_idx, open_flags,
+			       mode, stripe_param, NULL);
+}
+
+/*
+ * Create a file without any name and open it for read/write
+ *
+ * - file is created as if it were a standard file in the given \a directory
+ * - file does not appear in \a directory and mtime does not change because
+ *   the filename is handled specially by the Lustre MDS.
+ * - file is destroyed at final close
+ *
+ * \param[in]	directory	directory from which to inherit layout/MDT idx
+ * \param[in]	mdt_idx		MDT index on which the file is created,
+ *				\a mdt_idx == -1 means no specific MDT
+ * \param[in]	open_flags	standard open(2) flags
+ * \param[in]	mode		standard open(2) mode
+ * \param[in]	layout		stripe layout. Default layout if NULL.
+ *
+ * \retval	a file descriptor on success.
+ * \retval	-errno on error (errno is also set).
+ */
+int llapi_layout_file_open_volatile(const char *directory, int mdt_idx,
+				    int open_flags, mode_t mode,
+				    const struct llapi_layout *layout)
+{
+	return create_volatile(directory, mdt_idx, open_flags,
+			       mode, NULL, layout);
 }
 
 /*
@@ -205,18 +260,38 @@ int llapi_create_volatile_param(const char *directory, int mdt_idx,
  *   security problems arise because it cannot be opened by another process.
  *
  * \param[in]	directory	directory from which to inherit layout/MDT idx
- * \param[in]	idx		MDT index on which the file is created,
- *				\a idx == -1 means no specific MDT is requested
+ * \param[in]	mdt_idx		MDT index on which the file is created,
+ *				\a mdt_idx == -1 means no specific MDT
  * \param[in]	open_flags	standard open(2) flags
  *
  * \retval	a file descriptor on success.
- * \retval	-errno on error.
+ * \retval	-errno on error (errno is also set).
  */
+int llapi_file_open_volatile_idx(const char *directory, int mdt_idx,
+				 int open_flags)
+{
+	return create_volatile(directory, mdt_idx, open_flags,
+			       S_IRUSR | S_IWUSR, NULL, NULL);
+}
+
+/*
+ * Deprecated in 2.18.0 in favour of llapi_file_open_volatile_param() and
+ * llapi_file_open_volatile_idx().  They are kept here so that applications
+ * already linked against liblustreapi still resolve the old symbols.
+ */
+int llapi_create_volatile_param(const char *directory, int mdt_idx,
+				int open_flags, mode_t mode,
+				const struct llapi_stripe_param *stripe_param)
+{
+	return create_volatile(directory, mdt_idx, open_flags,
+			       mode, stripe_param, NULL);
+}
+
 int llapi_create_volatile_idx(const char *directory, int mdt_idx,
 			      int open_flags)
 {
-	return llapi_create_volatile_param(directory, mdt_idx, open_flags,
-					   S_IRUSR | S_IWUSR, NULL);
+	return create_volatile(directory, mdt_idx, open_flags,
+			       S_IRUSR | S_IWUSR, NULL, NULL);
 }
 
 /**

@@ -679,7 +679,7 @@ int llapi_open_by_fid(const char *lustre_dir, const struct lu_fid *fid,
 int llapi_get_version_string(char *version, unsigned int version_size);
 /* llapi_get_version() is deprecated, use llapi_get_version_string() instead */
 int llapi_get_version(char *buffer, int buffer_size, char **version)
-	__attribute__((deprecated));
+	__attribute__((deprecated("use llapi_get_version_string() instead")));
 int llapi_get_data_version(int fd, __u64 *data_version, __u64 flags);
 int llapi_file_flush(int fd);
 int llapi_fsync(int fd);
@@ -697,17 +697,38 @@ void llapi_hsm_log_error(enum llapi_message_level level, int _rc,
 			 const char *fmt, va_list args);
 
 int llapi_get_agent_uuid(char *path, char *buf, size_t bufsize);
-int llapi_create_volatile_idx(const char *directory, int mdt_idx,
-			      int open_flags);
-int llapi_create_volatile_param(const char *directory, int mdt_idx,
+
+int llapi_file_open_volatile_idx(const char *directory, int mdt_idx,
+				 int open_flags);
+int llapi_file_open_volatile_param(const char *directory, int mdt_idx,
 				int open_flags, mode_t mode,
 				const struct llapi_stripe_param *stripe_param);
-
-static inline int llapi_create_volatile(char *directory, int open_flags)
+static inline int llapi_file_open_volatile(const char *directory,
+					   int open_flags)
 {
-	return llapi_create_volatile_idx(directory, -1, open_flags);
+	return llapi_file_open_volatile_idx(directory, -1, open_flags);
 }
+/* allow this name for consistency, but maps to the actual function */
+#define llapi_file_open_volatile_layout(dir, mdt_idx, open_flags, mode, layout)\
+	llapi_layout_file_open_volatile(dir, mdt_idx, open_flags, mode, layout)
 
+/* llapi_create_volatile*() deprecated in 2.18.0, use the equivalent
+ * llapi_file_open_volatile*() instead.  These are kept as real functions
+ * in the library so that applications already linked against it still
+ * resolve the old symbols.
+ */
+int llapi_create_volatile_idx(const char *directory, int mdt_idx,
+			      int open_flags)
+	__attribute__((deprecated("use llapi_file_open_volatile_idx()")));
+int llapi_create_volatile_param(const char *directory, int mdt_idx,
+				int open_flags, mode_t mode,
+				const struct llapi_stripe_param *stripe_param)
+	__attribute__((deprecated("use llapi_file_open_volatile_param()")));
+static inline __attribute__((deprecated("use llapi_file_open_volatile()")))
+int llapi_create_volatile(const char *directory, int open_flags)
+{
+	return llapi_file_open_volatile_idx(directory, -1, open_flags);
+}
 
 int llapi_fswap_layouts_grouplock(int fd1, int fd2, __u64 dv1, __u64 dv2,
 				  int gid, __u64 flags);
@@ -1334,6 +1355,37 @@ int llapi_layout_file_open(const char *path, int open_flags, mode_t mode,
  */
 int llapi_layout_file_create(const char *path, int open_flags, int mode,
 			     const struct llapi_layout *layout);
+
+/**
+ * Create volatile file in \a directory with specified \a layout and
+ * \a mode on the specified \a mdt_idx (-1 selects MDT automatically).
+ *
+ * One access mode and zero or more file creation flags and file status
+ * flags May be bitwise-or'd in \a open_flags (see open(2)).  A read-only
+ * access mode is promoted to O_RDWR, and O_CREAT, O_EXCL and O_NOFOLLOW
+ * are always added, since the file has to be created to be returned.
+ * Return an open file descriptor for the file.  If \a layout is non-NULL
+ * and \a directory is not on a Lustre filesystem this function will fail
+ * and set errno to ENOTTY.
+ *
+ * The file has no name in \a directory and is removed once all open file
+ * descriptors to it are closed.
+ *
+ * \param[in]	directory	directory from which to inherit layout/MDT idx
+ * \param[in]	mdt_idx		MDT index on which the file is created,
+ *				\a mdt_idx == -1 means no specific MDT
+ * \param[in]	open_flags	standard open(2) flags
+ * \param[in]	mode		standard open(2) mode
+ * \param[in]	layout		layout for the new file, default if NULL
+ *
+ * \retval	0+ An open file descriptor.
+ * \retval	-errno on error (errno is also set).  NB this differs from
+ *		llapi_layout_file_open() and llapi_layout_file_create()
+ *		above, which return -1.
+ */
+int llapi_layout_file_open_volatile(const char *directory, int mdt_idx,
+				int open_flags, mode_t mode,
+				const struct llapi_layout *layout);
 
 /**
  * Set flags to the header of component layout.

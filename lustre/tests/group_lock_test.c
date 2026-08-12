@@ -220,8 +220,8 @@ static void test12(void)
 	ASSERTF(rc == 0, "mkdir failed for '%s': %s",
 		mainpath, strerror(errno));
 
-	fd = llapi_create_volatile_idx(mainpath, -1, O_CREAT | O_WRONLY);
-	ASSERTF(fd >= 0, "llapi_create_volatile_idx failed on '%s': %s",
+	fd = llapi_file_open_volatile_idx(mainpath, -1, O_CREAT | O_WRONLY);
+	ASSERTF(fd >= 0, "llapi_file_open_volatile_idx failed on '%s': %s",
 		mainpath, strerror(-fd));
 
 	gid = 34895;
@@ -233,9 +233,9 @@ static void test12(void)
 
 	close(fd);
 
-	fd = llapi_create_volatile_idx(mainpath, -1,
+	fd = llapi_file_open_volatile_idx(mainpath, -1,
 				       O_CREAT | O_WRONLY | O_LOV_DELAY_CREATE);
-	ASSERTF(fd >= 0, "llapi_create_volatile_idx failed on '%s': %s",
+	ASSERTF(fd >= 0, "llapi_file_open_volatile_idx failed on '%s': %s",
 		mainpath, strerror(-fd));
 
 	gid = 3354895;
@@ -247,8 +247,8 @@ static void test12(void)
 
 	close(fd);
 
-	fd = llapi_create_volatile_idx(mainpath, -1, O_RDONLY);
-	ASSERTF(fd >= 0, "llapi_create_volatile_idx failed on '%s': %s",
+	fd = llapi_file_open_volatile_idx(mainpath, -1, O_RDONLY);
+	ASSERTF(fd >= 0, "llapi_file_open_volatile_idx failed on '%s': %s",
 		mainpath, strerror(-fd));
 
 	gid = 3489655;

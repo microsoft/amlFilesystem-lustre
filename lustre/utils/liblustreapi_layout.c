@@ -1934,6 +1934,12 @@ int llapi_layout_file_open(const char *path, int open_flags, mode_t mode,
 					    fsname);
 		if (rc) {
 			llapi_layout_sanity_perror(rc);
+			/* Not every sanity failure sets errno, and a stale
+			 * ENOENT from the pool check is cleared there, so
+			 * guarantee one for callers testing errno.
+			 */
+			if (errno == 0)
+				errno = EINVAL;
 			return -1;
 		}
 	}

@@ -520,10 +520,9 @@ retry_open:
 	}
 
 	if (fd < 0) {
-		rc = -errno;
-		llapi_error(LLAPI_MSG_ERROR, rc, "unable to open '%s'", name);
-		free(lum);
-		return rc;
+		fd = -errno;
+		llapi_error(LLAPI_MSG_ERROR, errno, "unable to open '%s'", name);
+		goto out;
 	}
 
 	/*  Initialize IOCTL striping pattern structure */
@@ -570,6 +569,7 @@ retry_open:
 				 "inactive OST among your specified %d OST(s)",
 				 param->lsp_stripe_count);
 		close(fd);
+		fd = rc;
 		/* the only reason we get EACESS on the ioctl is if setstripe
 		 * has been explicitly restricted, normal permission errors
 		 * happen earlier on open() and we never call ioctl()
@@ -593,7 +593,6 @@ retry_open:
 					  "setstripe error for '%s': %s", name,
 					  errmsg);
 		}
-		fd = rc;
 	}
 
 out:
@@ -703,6 +702,7 @@ retry_open:
 			errmsg = strerror(errno);
 
 		close(fd);
+		fd = rc;
 		/* the only reason we get ENOPERM on the ioctl is if setstripe
 		 * has been explicitly restricted, normal permission errors
 		 * happen earlier on open() and we never call ioctl()
@@ -725,8 +725,6 @@ retry_open:
 					  "setstripe error for '%s': %s", name,
 					  errmsg);
 		}
-
-		fd = rc;
 	}
 
 out_free:
