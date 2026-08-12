@@ -40,7 +40,7 @@ jobs:
 
       - run: |
           git push origin --tags
-          for b in $(ls .git/refs/remotes/upstream); do
+          for b in $(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream); do
             echo "Pushing updates to branch $b"
             git push -f origin upstream/${b}:refs/heads/upstream/${b};
           done
