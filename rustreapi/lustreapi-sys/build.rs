@@ -64,6 +64,8 @@ fn main() {
         .allowlist_function("llapi_file_open_param")
         .allowlist_function("llapi_file_fget_mdtidx")
         .allowlist_function("llapi_layout.*")
+        .allowlist_function("llapi_file_open_volatile_param")
+        // kept for pre-2.18 installs, where the name above does not exist
         .allowlist_function("llapi_create_volatile_param")
         // HSM
         .allowlist_function("llapi_hsm.*")

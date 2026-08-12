@@ -14,6 +14,8 @@ LIBMAN = 					\
 	llapi_changelog_set_xflags.3		\
 	llapi_changelog_start.3			\
 	llapi_changelog_start_user.3		\
+	llapi_create_volatile.3			\
+	llapi_create_volatile_idx.3		\
 	llapi_create_volatile_param.3		\
 	llapi_dir_create.3			\
 	llapi_dir_create_foreign.3		\
@@ -25,6 +27,9 @@ LIBMAN = 					\
 	llapi_file_create_foreign.3		\
 	llapi_file_get_stripe.3			\
 	llapi_file_open.3			\
+	llapi_file_open_volatile.3		\
+	llapi_file_open_volatile_idx.3		\
+	llapi_file_open_volatile_param.3	\
 	llapi_find_param_alloc.3		\
 	llapi_find_param_free.3			\
 	llapi_get_fsname.3			\
@@ -70,6 +75,7 @@ LIBMAN = 					\
 	llapi_layout_file_comp_del.3		\
 	llapi_layout_file_create.3		\
 	llapi_layout_file_open.3		\
+	llapi_layout_file_open_volatile.3	\
 	llapi_layout_free.3			\
 	llapi_layout_get_by_fd.3		\
 	llapi_layout_get_by_fid.3		\

@@ -1767,6 +1767,75 @@ static void test35(void)
 	close(fd);
 }
 
+#define T351_DESC		"Test creating a volatile file with a layout"
+static void test351(void)
+{
+	int rc;
+	int fd;
+	uint64_t count;
+	uint64_t size;
+	struct llapi_layout *layout = llapi_layout_alloc();
+	struct llapi_layout *filelayout;
+	char mypool[LOV_MAXPOOLNAME + 1] = { '\0' };
+
+	ASSERTF(layout != NULL, "errno %d", errno);
+
+	/* stripe count */
+	rc = llapi_layout_stripe_count_set(layout, T0_STRIPE_COUNT);
+	ASSERTF(rc == 0, "errno = %d", errno);
+	rc = llapi_layout_stripe_count_get(layout, &count);
+	ASSERTF(rc == 0 && count == T0_STRIPE_COUNT, "%"PRIu64" != %d", count,
+		T0_STRIPE_COUNT);
+
+	/* stripe size */
+	rc = llapi_layout_stripe_size_set(layout, T0_STRIPE_SIZE);
+	ASSERTF(rc == 0, "errno = %d", errno);
+	rc = llapi_layout_stripe_size_get(layout, &size);
+	ASSERTF(rc == 0 && size == T0_STRIPE_SIZE, "%"PRIu64" != %d", size,
+		T0_STRIPE_SIZE);
+
+	/* pool_name */
+	rc = llapi_layout_pool_name_set(layout, poolname);
+	ASSERTF(rc == 0, "errno = %d", errno);
+	rc = llapi_layout_pool_name_get(layout, mypool, sizeof(mypool));
+	ASSERTF(rc == 0, "errno = %d", errno);
+	rc = strcmp(mypool, poolname);
+	ASSERTF(rc == 0, "%s != %s", mypool, poolname);
+
+	/* ost_index */
+	rc = llapi_layout_ost_index_set(layout, 0, T0_OST_OFFSET);
+	ASSERTF(rc == 0, "errno = %d", errno);
+
+	fd = llapi_layout_file_open_volatile(lustre_dir, -1, 0, 0660, layout);
+	ASSERTF(fd >= 0, "errno = %d", errno);
+
+	/* verify the layout that landed on the file, not the one built here */
+	filelayout = llapi_layout_get_by_fd(fd, 0);
+	ASSERTF(filelayout != NULL, "errno = %d", errno);
+
+	rc = close(fd);
+	ASSERTF(rc == 0, "close(%s): errno = %d", "volatile", errno);
+
+	__test1_helper(filelayout);
+
+	llapi_layout_free(filelayout);
+
+	/* A layout naming a pool that does not exist must fail rather than
+	 * return descriptor 0.  llapi_layout_file_open() reports the sanity
+	 * failure with errno cleared, which create_volatile() turned into
+	 * fd = -errno = 0 and the caller read as success.
+	 */
+	rc = llapi_layout_pool_name_set(layout, "nosuchpool");
+	ASSERTF(rc == 0, "errno = %d", errno);
+
+	errno = 0;
+	fd = llapi_layout_file_open_volatile(lustre_dir, -1, 0, 0660, layout);
+	ASSERTF(fd < 0, "expected failure for a missing pool, got fd %d", fd);
+	ASSERTF(errno != 0, "errno not set for a missing pool");
+
+	llapi_layout_free(layout);
+}
+
 #define T36_DESC	"verify mirror count is validated"
 static void test36(void)
 {
@@ -4688,6 +4757,7 @@ static struct test_tbl_entry test_tbl[] = {
 	TEST_REGISTER(33),
 	TEST_REGISTER(34),
 	TEST_REGISTER(35),
+	TEST_REGISTER(351),
 	TEST_REGISTER(36),
 	TEST_REGISTER(37),
 	TEST_REGISTER(40),

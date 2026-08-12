@@ -279,7 +279,7 @@ static void test12(void)
 	rc = mkdir(mainpath, 0);
 	ASSERTF(rc == 0, "mkdir failed for '%s': %s",
 		mainpath, strerror(errno));
-	fd = llapi_create_volatile_idx(mainpath, -1, 0);
+	fd = llapi_file_open_volatile_idx(mainpath, -1, 0);
 	ASSERTF(fd >= 0, "creat failed for '%s': %s",
 		mainpath, strerror(errno));
 

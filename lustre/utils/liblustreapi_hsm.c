@@ -1039,7 +1039,7 @@ static int create_restore_volatile(struct hsm_copyaction_private *hcp,
 	}
 
 	if (hcp->source_fd < 0) {
-		fd = llapi_create_volatile_idx(parent, mdt_index, open_flags);
+		fd = llapi_file_open_volatile_idx(parent, mdt_index, open_flags);
 	} else {
 		/* We need to insert source_fd in volatile file name, so open
 		 * it manually.

@@ -764,9 +764,9 @@ int main(int argc, char **argv)
 			len = -1; /* mdt index */
 			if (commands[1] >= '0' && commands[1] <= '9')
 				len = atoi(commands + 1);
-			fd = llapi_create_volatile_idx(fname, len, flags);
+			fd = llapi_file_open_volatile_idx(fname, len, flags);
 			if (fd < 0) {
-				perror("llapi_create_volatile");
+				perror("llapi_file_open_volatile_idx");
 				exit(fd);
 			}
 			rc = fd;

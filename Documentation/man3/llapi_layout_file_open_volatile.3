@@ -1,0 +1,196 @@
+.TH LLAPI_LAYOUT_FILE_OPEN_VOLATILE 3 2026-08-12 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_layout_file_open_volatile, llapi_file_open_volatile \- open new temporary file with layout
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_layout_file_open_volatile(const char *" directory ,
+.BI "                                    int " mdt_idx ", int " open_flags ,
+.BI "                                    mode_t " mode ,
+.BI "                                    const struct llapi_layout *" layout )
+.PP
+.BI "int llapi_file_open_volatile(const char *" directory ", int " open_flags )
+.PP
+.BI "int llapi_file_open_volatile_idx(const char *" directory ,
+.BI "                                 int " mdt_idx ", int " open_flags )
+.PP
+.BI "int llapi_file_open_volatile_param(const char *" directory ,
+.BI "                                 int " mdt_idx ", int " open_flags ,
+.BI "                                 mode_t " mode ,
+.BI "                                 const struct llapi_stripe_param *" param )
+.fi
+.SH DESCRIPTION
+The
+.BR llapi_layout_file_open_volatile ()
+function and its
+.BR llapi_file_open_volatile* ()
+variants open a file handle on a new anonymous, temporary,
+volatile file on a Lustre filesystem, similar to the Linux kernel
+.BR open (2) " O_TMPFILE"
+functionality.
+The variants allow increasing specificity in the layout of the created file,
+see
+.BR llapi_file_open_param (3)
+and
+.BR llapi_layout_file_create (3)
+for details of usage.
+The created file is not visible in the namespace with
+.BR ls (1).
+Once the file is closed, or the owning process dies,
+the file and its objects are permanently deleted from the filesystem.
+.P
+With no layout or stripe parameters these functions will also work on
+a non\-Lustre filesystem, where the file is created then unlinked,
+leaving only the file descriptor to access the file. This is not
+strictly equivalent because there is a small window during which the
+file is visible to users (provided they have access to the parent
+.IR directory ).
+Given a
+.I layout
+or
+.IR stripe_param ,
+the call instead fails there, since the striping cannot be applied:
+.B ENOTTY
+in general, or
+.B ENODEV
+when
+.I stripe_param
+names a pool, which is looked up before the filesystem is touched.
+.P
+The
+.I directory
+parameter indicates where to create the file on the Lustre filesystem.
+.P
+.I mdt_idx
+is the MDT index onto which to create the file.
+To use a default MDT, set mdt_idx to \-1.
+.P
+.I open_flags
+are standard
+.BR open (2)
+flags, but a read-only access mode is promoted to
+.B O_RDWR
+and
+.BR O_CREAT ", " O_EXCL " and " O_NOFOLLOW
+are always added: the file has to be created to be returned.
+.P
+.I mode
+is the same as
+.BR open (2).
+.P
+.I layout
+and
+.I param
+are different structures that describe the striping information.
+If it is NULL, then the default for the directory is used.
+.B struct llapi_layout
+is an opaque data structure that is allocated by
+.BR llapi_layout_alloc (3)
+and modified with the
+.BR llapi_layout (7)
+functions.
+.SH RETURN VALUE
+All variants return an open file descriptor on success,
+or a negative errno on failure.
+.SH ERRORS
+The negative errno can be, but is not limited to:
+.TP 15
+.B -EINVAL
+An invalid value was passed.
+.TP 15
+.B -ENOMEM
+Not enough memory to allocate a resource.
+.TP 15
+.B -ENAMETOOLONG
+The generated volatile file name does not fit in PATH_MAX.
+.TP 15
+.B -ENODEV
+.I stripe_param
+names a pool and
+.I directory
+is not on a Lustre filesystem.
+.TP 15
+.B -ENOTTY
+.I layout
+is non-NULL and
+.I directory
+is not on a Lustre filesystem.
+.SH EXAMPLES
+Create volatile file on MDT0002, copy data to it, and swap layouts:
+.nf
+#include <lustre/lustreapi.h>
+
+int main(int argc, char *argv[])
+{
+        int fd_src, fd_dst;
+        __u64 dv_src, dv_dst;
+	struct llapi_layout *layout = NULL;
+        int rc;
+
+	layout = llapi_layout_alloc();
+	if (!layout) {
+                fprintf(stderr, "%s: layout allocation failed: %s\\n",
+                        argv[0], strerror(errno));
+		return errno;
+	}
+	rc = llapi_layout_stripe_count_set(layout, 2);
+	:
+
+        fd_dst = llapi_layout_file_open_volatile(argv[1], 2, 0, 0644, layout);
+        if (fd_dst < 0) {
+		rc = -fd_dst;
+                fprintf(stderr, "%s: volatile file creation failed: %s\\n",
+                        argv[0], strerror(rc));
+                goto out;
+        }
+        fd_src = open(argv[2], O_RDWR);
+        rc = llapi_get_data_version(fd_src, &dv_src, 0);
+	:
+        /* copy data from @fd_src to @fd_dst */
+	:
+        rc = llapi_get_data_version(fd_src, &dv_dst, LL_DV_RD_FLUSH);
+	:
+        rc = llapi_fswap_layouts(fd_src, fd_dst, dv_src, dv_dst,
+                                 SWAP_LAYOUTS_CLOSE);
+        if (rc < 0) {
+                fprintf(stderr, "%s: swap layouts failed: %s\\n",
+                        argv[0], strerror(-rc));
+                goto out;
+        }
+
+out:
+	llapi_layout_free(layout);
+        return rc;
+}
+.fi
+.SH AVAILABILITY
+The
+.BR llapi_layout_file_open_volatile() ,
+.BR llapi_file_open_volatile() ,
+.BR llapi_file_open_volatile_idx() ,
+and
+.BR llapi_file_open_volatile_param()
+variants are part of the
+.BR lustre (7)
+user application interface library since release 2.18.0.
+.\" Added in commit 2.17.57
+These functions were originally implemented as
+.B llapi_create_volatile_param(),
+.B llapi_create_volatile_idx(),
+and
+.B llapi_create_volatile()
+in release 2.4.0,
+.\" Added in commit 2.3.53-7-gf715e4e298
+but were renamed and deprecated because the
+.B create
+name does not accurately reflect that they return an open file descriptor.
+.SH AUTHORS
+Frank Zago for Cray Inc.
+.SH SEE ALSO
+.BR llapi_file_open (3),
+.BR llapi_file_open_param (3),
+.BR llapi_file_open_pool (3),
+.BR llapi_fswap_layouts (3),
+.BR llapi_layout_file_create (3),
+.BR lustreapi (7)

@@ -38,6 +38,7 @@ use std::{
     os::{
         fd::{AsRawFd, FromRawFd},
         raw::c_int,
+        unix::ffi::OsStrExt,
     },
     path::Path,
     ptr,
@@ -266,7 +267,7 @@ impl OpenOptions {
         let creation_mode = self.get_creation_mode()?;
         let flags = access_mode | creation_mode;
 
-        let cpath = CString::new(path.to_string_lossy().to_string())?;
+        let cpath = CString::new(path.as_os_str().as_bytes())?;
 
         if self.lov_delay {
             let flags = flags | self.get_lov_delay();
@@ -280,8 +281,6 @@ impl OpenOptions {
             };
         }
 
-        // TODO: remove param and just use layout, at least when
-        // llapi_create_volatile_layout is available
         if let Some(ref layout) = self.layout {
             return unsafe {
                 cvt_lz_m(
@@ -318,15 +317,51 @@ impl OpenOptions {
         let creation_mode = self.get_creation_mode()?;
         let flags = access_mode | creation_mode;
 
+        let cpath = CString::new(dir.as_os_str().as_bytes())?;
+
+        // llapi_layout_file_open_volatile() is only in 2.18 and later; an
+        // older library cannot apply a layout to a volatile file at all, so
+        // say so rather than silently dropping it.
+        if let Some(ref _layout) = self.layout {
+            #[cfg(feature = "LUSTRE_2_18")]
+            {
+                let fd = unsafe {
+                    cvt_lz(llapi_layout_file_open_volatile(
+                        cpath.as_ptr(),
+                        self.mdt.unwrap_or(-1),
+                        flags,
+                        self.mode,
+                        _layout.as_lu_layout(),
+                    ))?
+                };
+                return Ok(unsafe { File::from_raw_fd(fd) });
+            }
+            #[cfg(not(feature = "LUSTRE_2_18"))]
+            return Err(MsgErrno(
+                "volatile file with a layout needs Lustre 2.18".to_string(),
+                errno::Errno::EOPNOTSUPP,
+            ));
+        }
+
         let mut param: MaybeUninit<llapi_stripe_param> = MaybeUninit::zeroed();
         self.get_stripe_param(param.as_mut_ptr());
         let param = unsafe { param.assume_init() };
 
-        let cpath = dir.as_os_str().as_encoded_bytes().as_ptr() as *const c_char;
-
+        #[cfg(not(feature = "LUSTRE_2_18"))]
         let fd = unsafe {
             cvt_lz(llapi_create_volatile_param(
-                cpath,
+                cpath.as_ptr(),
+                self.mdt.unwrap_or(-1),
+                flags,
+                self.mode,
+                &param as *const llapi_stripe_param,
+            ))?
+        };
+
+        #[cfg(feature = "LUSTRE_2_18")]
+        let fd = unsafe {
+            cvt_lz(llapi_file_open_volatile_param(
+                cpath.as_ptr(),
                 self.mdt.unwrap_or(-1),
                 flags,
                 self.mode,
