@@ -3770,6 +3770,95 @@ test_154b() {
 }
 run_test 154b "restore update llog after failed recovery"
 
+# Undo a corrupt_update_llog_hdr() that died with the backing filesystem still
+# mounted.  A run that got all the way through has already put mds2 back as an
+# MDT, and must be left alone.
+restore_mds2_backing_fs() {
+	local mnt=$(facet_mntpt mds2)
+	local fstype=$(facet_fstype mds2)
+
+	# a run that got all the way through left mds2 serving as an MDT
+	do_facet mds2 "grep -qE '^\S* $mnt lustre(_tgt)? ' /proc/mounts" &&
+		return 0
+
+	do_facet mds2 "grep -q '^\S* $mnt $fstype ' /proc/mounts" &&
+		unmount_fstype mds2
+
+	start mds2 $(mdsdevname 2) $MDS_MOUNT_OPTS
+}
+
+# Overwrite the first update log catalog header with a foreign-endian
+# lrh_type ($1, four bytes of hex in on-disk order) and an lrh_len of
+# 0xdc75d9ce, which swabs to ~3.4GB and so places the record tail far outside
+# the header buffer.  Then check the MDS reads it, rejects it and still
+# recovers.  The log has to be at least LLOG_MIN_CHUNK_SIZE long, or
+# llog_osd_read_header() discards it as "header too small" before it swabs.
+corrupt_update_llog_hdr() {
+	local type="$1"
+	local mnt=$(facet_mntpt mds2)
+	local rejected="renew invalid update log"
+	local before=$(do_facet mds1 "dmesg | grep -c '$rejected'" || true)
+
+	stop mds2
+	mount_fstype mds2 || error "cannot mount the mds2 backing filesystem"
+
+	local ula=($(do_facet mds2 od -t u8 $mnt/update_log | \
+		awk '{ if($2 > 0) printf "0x%x:0x%x:0x0 ", $3, $2  }'))
+	(( ${#ula[@]} >= 2 )) || error "update_log file corruption"
+
+	local catfile=$mnt/update_log_dir/\[${ula[0]}\]
+
+	echo "corrupt header of $catfile with lrh_type $type"
+	do_facet mds2 "dd if=/dev/zero of=$catfile bs=4096 count=8" ||
+		error "cannot extend $catfile"
+	do_facet mds2 "printf '\xce\xd9\x75\xdc\x00\x00\x00\x00\x${type:0:2}\
+\x${type:2:2}\x${type:4:2}\x${type:6:2}' |
+		       dd of=$catfile bs=1 count=12 conv=notrunc" ||
+		error "cannot corrupt $catfile"
+	# without this a mis-plant would leave the log intact and pass
+	do_facet mds2 "od -An -tx1 -N12 $catfile | tr -d ' \n'" |
+		grep -q "ced975dc00000000$type" ||
+		error "corrupt header not planted in $catfile"
+	unmount_fstype mds2
+
+	start mds2 $(mdsdevname 2) $MDS_MOUNT_OPTS || error "mds2 start fail"
+	# MDT0001 refuses the restarted MDT0000 until its own recovery ends
+	wait_recovery_complete mds2 || error "mds2 recovery not done"
+
+	stop mds1
+	start mds1 $(mdsdevname 1) $MDS_MOUNT_OPTS || error "mds1 start fail"
+
+	echo waiting mds1 recovery....
+	wait_recovery_complete mds1 20
+
+	do_facet mds1 $LCTL get_param mdt.$FSNAME-MDT0000.recovery_status | \
+		grep -w COMPLETE || error "Recovery was blocked"
+
+	# recovery also completes if nothing ever opened the corrupt log, so
+	# check that the MDS really read it and threw it away
+	local after=$(do_facet mds1 "dmesg | grep -c '$rejected'" || true)
+
+	(( after > before )) || error "corrupt update log was not rejected"
+}
+
+test_154c() {
+	(( MDS1_VERSION >= $(version_code 2.17.57) )) ||
+		skip "need MDS >= 2.17.57 for llog header swab fix"
+	(( MDSCOUNT >= 2 )) || skip "needs >= 2 MDTs"
+
+	stack_trap restore_mds2_backing_fs
+
+	# LLOG_HDR_MAGIC: the header swabber reaches LLOG_HDR_TAIL() itself.
+	# test_154a only gets here with random data, at odds of 1 in 4096.
+	corrupt_update_llog_hdr 10645539
+
+	# CHANGELOG_REC: LLOG_REC_HDR_NEEDS_SWABBING() only matches the
+	# 12-bit op prefix, so the same buffer also reaches record swabbers
+	# that size their tail from the very lrh_len that is being distrusted
+	corrupt_update_llog_hdr 10660000
+}
+run_test 154c "corrupt byte-swapped update llog header can be skipped"
+
 test_155() {
 	(( MDS1_VERSION >= $(version_code v2_15_58-110-g71f8e5d6506f) )) ||
 		skip "need MDS >= 2.15.58.110 for ptlrpc fix"

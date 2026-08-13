@@ -36,7 +36,7 @@ void lustre_swab_lu_fid(struct lu_fid *fid);
 void lustre_swab_ost_id(struct ost_id *oid);
 void lustre_swab_ll_fid(struct ll_fid *fid);
 void lustre_swab_llogd_body(struct llogd_body *d);
-void lustre_swab_llog_hdr(struct llog_log_hdr *h);
+void lustre_swab_llog_hdr(struct llog_log_hdr *h, size_t hdr_size);
 void lustre_swab_llogd_conn_body(struct llogd_conn_body *d);
 void lustre_swab_llog_rec(struct llog_rec_hdr *rec);
 void lustre_swab_llog_id(struct llog_logid *lid);

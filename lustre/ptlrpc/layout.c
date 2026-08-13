@@ -1129,9 +1129,17 @@ struct req_msg_field RMF_LLOGD_BODY =
 		    lustre_swab_llogd_body, NULL);
 EXPORT_SYMBOL(RMF_LLOGD_BODY);
 
+/* the RMF swabber signature carries no length, but __req_capsule_get() has
+ * already refused any buffer shorter than rmf_size
+ */
+static void lustre_swab_llog_log_hdr(void *buf)
+{
+	lustre_swab_llog_hdr(buf, sizeof(struct llog_log_hdr));
+}
+
 struct req_msg_field RMF_LLOG_LOG_HDR =
 	DEFINE_MSGF("llog_log_hdr", 0, sizeof(struct llog_log_hdr),
-		    lustre_swab_llog_hdr, NULL);
+		    lustre_swab_llog_log_hdr, NULL);
 EXPORT_SYMBOL(RMF_LLOG_LOG_HDR);
 
 struct req_msg_field RMF_LLOGD_CONN_BODY =
