@@ -1552,14 +1552,14 @@ static int lfsck_layout_trans_stop(const struct lu_env *env,
 {
 	int rc;
 
-	/* XXX: If there is something worng or it needs to repair nothing,
-	 *	then notify the lower to stop the modification. Currently,
-	 *	we use th_result for such purpose, that may be replaced by
-	 *	some rollback mechanism in the future.
+	/* XXX: If there is something wrong or it needs to repair nothing,
+	 * then notify the lower layer to stop the modification. Currently,
+	 * we use th_result for this purpose, that could potentially be
+	 * replaced by some rollback mechanism in the future.
 	 */
 	handle->th_result = result;
 	rc = dt_trans_stop(env, dev, handle);
-	if (result != 0)
+	if (result)
 		return result > 0 ? 0 : result;
 
 	return rc == 0 ? 1 : rc;
@@ -3582,11 +3582,11 @@ static int __lfsck_layout_repair_dangling(const struct lu_env *env,
 	rc = lfsck_ibits_lock(env, lfsck, parent, &lh,
 			      MDS_INODELOCK_LAYOUT | MDS_INODELOCK_XATTR,
 			      LCK_EX);
-	if (rc != 0)
+	if (rc)
 		GOTO(log, rc);
 
 	rc = dt_attr_get(env, parent, la);
-	if (rc != 0)
+	if (rc)
 		GOTO(unlock1, rc);
 
 	la->la_mode = S_IFREG | 0666;
@@ -3609,8 +3609,11 @@ static int __lfsck_layout_repair_dangling(const struct lu_env *env,
 		GOTO(unlock1, rc);
 
 	rc = lfsck_lov2layout(tbuf->lb_buf, ff, comp_id);
-	if (rc)
+	if (rc) {
+		if (rc > 0)
+			rc = 0;
 		GOTO(unlock1, rc);
+	}
 
 	buf = lfsck_buf_get(env, ff, sizeof(struct filter_fid));
 	handle = lfsck_trans_create(env, dev, lfsck);
@@ -3618,21 +3621,21 @@ static int __lfsck_layout_repair_dangling(const struct lu_env *env,
 		GOTO(unlock1, rc = PTR_ERR(handle));
 
 	rc = dt_declare_create(env, child, la, NULL, dof, handle);
-	if (rc != 0)
+	if (rc)
 		GOTO(stop, rc);
 
 	rc = dt_declare_xattr_set(env, child, NULL, buf, XATTR_NAME_FID,
 				  LU_XATTR_CREATE, handle);
-	if (rc != 0)
+	if (rc)
 		GOTO(stop, rc);
 
 	rc = dt_trans_start_local(env, dev, handle);
-	if (rc != 0)
+	if (rc)
 		GOTO(stop, rc);
 
 	dt_read_lock(env, parent, 0);
 	if (unlikely(lfsck_is_dead_obj(parent)))
-		GOTO(unlock2, rc = 0);
+		GOTO(unlock2, rc = 1);
 
 	if (lfsck->li_bookmark_ram.lb_param & LPF_DELAY_CREATE_OSTOBJ) {
 		struct ost_id *oi = &info->lti_oi;
@@ -3648,7 +3651,7 @@ static int __lfsck_layout_repair_dangling(const struct lu_env *env,
 		if (unlikely(rc == -ENODATA))
 			rc = 0;
 		if (rc <= 0)
-			GOTO(unlock2, rc);
+			GOTO(unlock2, rc = rc ?: 1);
 
 		lmm = lovea->lb_buf;
 		magic = le32_to_cpu(lmm->lmm_magic);
@@ -3672,14 +3675,14 @@ static int __lfsck_layout_repair_dangling(const struct lu_env *env,
 			}
 
 			/* Someone removed the component, do nothing. */
-			GOTO(unlock2, rc = 0);
+			GOTO(unlock2, rc = 1);
 		}
 
 check:
 		count = le16_to_cpu(lmm->lmm_stripe_count);
 		/* Someone changed the LOV EA, do nothing. */
 		if (count <= ea_off)
-			GOTO(unlock2, rc = 0);
+			GOTO(unlock2, rc = 1);
 
 		if (magic == LOV_MAGIC_V1) {
 			objs = &lmm->lmm_objects[ea_off];
@@ -3693,13 +3696,15 @@ check:
 		ostid_le_to_cpu(&objs->l_ost_oi, oi);
 		idx2 = le32_to_cpu(objs->l_ost_idx);
 		rc = ostid_to_fid(tfid, oi, idx2);
-		/* Someone changed the LOV EA, do nothing. */
-		if (rc != 0 || !lu_fid_eq(tfid, cfid))
+		if (rc)
 			GOTO(unlock2, rc);
+		/* Someone changed the LOV EA, do nothing. */
+		if (!lu_fid_eq(tfid, cfid))
+			GOTO(unlock2, rc = 1);
 	}
 
 	rc = dt_create(env, child, la, NULL, dof, handle);
-	if (rc != 0)
+	if (rc)
 		GOTO(unlock2, rc);
 
 	rc = dt_xattr_set(env, child, buf, XATTR_NAME_FID, LU_XATTR_CREATE,
