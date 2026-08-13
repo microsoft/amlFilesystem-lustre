@@ -453,6 +453,7 @@ drop_rule_match(struct lnet_drop_rule *rule,
 	if (attr->u.drop.da_drop_all) {
 		CDEBUG(D_NET, "set to drop all messages\n");
 		drop = true;
+		spin_lock(&rule->dr_lock);
 		goto drop_matched;
 	}
 
