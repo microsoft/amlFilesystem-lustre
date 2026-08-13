@@ -1284,7 +1284,7 @@ static int lod_update_log_stale(const struct lu_env *env, struct dt_object *dto,
 
 	hdr = (struct llog_log_hdr *)buf->lb_buf;
 	if (LLOG_REC_HDR_NEEDS_SWABBING(&hdr->llh_hdr))
-		lustre_swab_llog_hdr(hdr);
+		lustre_swab_llog_hdr(hdr, buf->lb_len);
 	/* log header is sane and flag LLOG_F_MAX_AGE|LLOG_F_RM_ON_ERR is set */
 	if (rc >= sizeof(*hdr) &&
 	    hdr->llh_hdr.lrh_type == LLOG_HDR_MAGIC &&

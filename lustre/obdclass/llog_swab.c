@@ -21,6 +21,27 @@
 #include <lustre_update.h>
 #include <llog_swab.h>
 
+/**
+ * llog_hdr_tail() - locate an llog header tail inside its buffer
+ * @h: llog header
+ * @hdr_size: size of the buffer @h lives in
+ *
+ * LLOG_HDR_TAIL() locates the tail from llh_hdr.lrh_len, which comes straight
+ * off disk or the wire and may be corrupt or still in the peer's byte order.
+ *
+ * Return: the tail, or NULL if it does not lie within @hdr_size bytes of @h
+ */
+static struct llog_rec_tail *llog_hdr_tail(struct llog_log_hdr *h,
+					   size_t hdr_size)
+{
+	__u32 len = h->llh_hdr.lrh_len;
+
+	if (len < LLOG_MIN_CHUNK_SIZE || len > hdr_size)
+		return NULL;
+
+	return LLOG_HDR_TAIL(h);
+}
+
 static void print_llogd_body(struct llogd_body *d)
 {
 	CDEBUG(D_OTHER, "llogd body: %p\n", d);
@@ -264,7 +285,10 @@ void lustre_swab_llog_rec(struct llog_rec_hdr *rec)
 		__swab32s(&llh->llh_flags);
 		__swab32s(&llh->llh_size);
 		__swab32s(&llh->llh_cat_idx);
-		tail = LLOG_HDR_TAIL(llh);
+		/* a log header buffer gets here from lustre_swab_llog_hdr(),
+		 * which swabs the tail itself because only it is told how
+		 * big that buffer is
+		 */
 		break;
 	}
 	case LLOG_LOGID_MAGIC:
@@ -316,8 +340,10 @@ void lustre_swab_llog_rec(struct llog_rec_hdr *rec)
 	}
 }
 
-static void print_llog_hdr(struct llog_log_hdr *h)
+static void print_llog_hdr(struct llog_log_hdr *h, size_t hdr_size)
 {
+	struct llog_rec_tail *tail = llog_hdr_tail(h, hdr_size);
+
 	CDEBUG(D_OTHER, "llog header: %p\n", h);
 	CDEBUG(D_OTHER, "\tllh_hdr.lrh_index: %#x\n", h->llh_hdr.lrh_index);
 	CDEBUG(D_OTHER, "\tllh_hdr.lrh_len: %#x\n", h->llh_hdr.lrh_len);
@@ -328,20 +354,42 @@ static void print_llog_hdr(struct llog_log_hdr *h)
 	CDEBUG(D_OTHER, "\tllh_flags: %#x\n", h->llh_flags);
 	CDEBUG(D_OTHER, "\tllh_size: %#x\n", h->llh_size);
 	CDEBUG(D_OTHER, "\tllh_cat_idx: %#x\n", h->llh_cat_idx);
-	CDEBUG(D_OTHER, "\tllh_tail.lrt_index: %#x\n",
-	       LLOG_HDR_TAIL(h)->lrt_index);
-	CDEBUG(D_OTHER, "\tllh_tail.lrt_len: %#x\n",
-	       LLOG_HDR_TAIL(h)->lrt_len);
+	if (!tail)
+		return;
+	CDEBUG(D_OTHER, "\tllh_tail.lrt_index: %#x\n", tail->lrt_index);
+	CDEBUG(D_OTHER, "\tllh_tail.lrt_len: %#x\n", tail->lrt_len);
 }
 
-void lustre_swab_llog_hdr(struct llog_log_hdr *h)
+/**
+ * lustre_swab_llog_hdr() - swab an llog header read into a buffer
+ * @h: llog header to swab
+ * @hdr_size: size of the buffer @h was read into, which bounds the header
+ *	      length the tail is located from
+ */
+void lustre_swab_llog_hdr(struct llog_log_hdr *h, size_t hdr_size)
 {
+	struct llog_rec_tail *tail;
+
 	ENTRY;
-	print_llog_hdr(h);
+	print_llog_hdr(h, hdr_size);
+
+	/* This buffer holds a log header, so do not let any other record
+	 * type's swabber loose on it: several of them locate their tail, or
+	 * size their loops, from fields nothing has validated.  Callers
+	 * reject the untouched header on lrh_type.
+	 */
+	if (h->llh_hdr.lrh_type != __swab32(LLOG_HDR_MAGIC))
+		RETURN_EXIT;
 
 	lustre_swab_llog_rec(&h->llh_hdr);
 
-	print_llog_hdr(h);
+	tail = llog_hdr_tail(h, hdr_size);
+	if (tail) {
+		__swab32s(&tail->lrt_len);
+		__swab32s(&tail->lrt_index);
+	}
+
+	print_llog_hdr(h, hdr_size);
 	EXIT;
 }
 EXPORT_SYMBOL(lustre_swab_llog_hdr);

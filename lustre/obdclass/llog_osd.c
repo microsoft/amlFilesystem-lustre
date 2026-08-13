@@ -236,7 +236,7 @@ static int llog_osd_read_header(const struct lu_env *env,
 	}
 
 	if (LLOG_REC_HDR_NEEDS_SWABBING(llh_hdr))
-		lustre_swab_llog_hdr(handle->lgh_hdr);
+		lustre_swab_llog_hdr(handle->lgh_hdr, handle->lgh_hdr_size);
 
 	if (llh_hdr->lrh_type != LLOG_HDR_MAGIC) {
 		CERROR("%s: bad log %s "DFID" header magic: %#x (expected %#x)\n",
@@ -254,16 +254,27 @@ static int llog_osd_read_header(const struct lu_env *env,
 		       PFID(lu_object_fid(&o->do_lu)),
 		       llh_hdr->lrh_len, LLOG_MIN_CHUNK_SIZE);
 		GOTO(unlock, rc = -EINVAL);
+	} else if (handle->lgh_hdr->llh_bitmap_offset !=
+		   offsetof(struct llog_log_hdr, llh_bitmap)) {
+		rc = -EINVAL;
+		CERROR("%s: bad log %s "DFID" bitmap offset: %#x (expected %#zx): rc = %d\n",
+		       o->do_lu.lo_dev->ld_obd->obd_name,
+		       handle->lgh_name ? handle->lgh_name : "",
+		       PFID(lu_object_fid(&o->do_lu)),
+		       handle->lgh_hdr->llh_bitmap_offset,
+		       offsetof(struct llog_log_hdr, llh_bitmap), rc);
+		GOTO(unlock, rc);
 	} else if (LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_index >
 		   LLOG_HDR_BITMAP_SIZE(handle->lgh_hdr) ||
 		   LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_len !=
 			llh_hdr->lrh_len) {
+		rc = -EINVAL;
 		CERROR("%s: incorrectly sized log %s "DFID" tailer: %#x : rc = %d\n",
 		       o->do_lu.lo_dev->ld_obd->obd_name,
 		       handle->lgh_name ? handle->lgh_name : "",
 		       PFID(lu_object_fid(&o->do_lu)),
-		       LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_len, -EIO);
-		GOTO(unlock, rc = -EINVAL);
+		       LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_len, rc);
+		GOTO(unlock, rc);
 	}
 
 	handle->lgh_hdr->llh_flags |= (flags & LLOG_F_EXT_MASK);

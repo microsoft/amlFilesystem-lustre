@@ -264,6 +264,7 @@ static int llog_client_read_header(const struct lu_env *env,
 	struct llogd_body *body;
 	struct llog_log_hdr *hdr;
 	struct llog_rec_hdr *llh_hdr;
+	size_t max_len;
 	int rc;
 
 	ENTRY;
@@ -293,8 +294,23 @@ static int llog_client_read_header(const struct lu_env *env,
 	if (!hdr)
 		GOTO(out, rc = -EFAULT);
 
-	if (handle->lgh_hdr_size < hdr->llh_hdr.lrh_len)
-		GOTO(out, rc = -EFAULT);
+	/* lrh_len comes from the peer and both the memcpy() below and
+	 * LLOG_HDR_TAIL() are sized by it, so it has to be bounded here,
+	 * before it is used, and not in the sanity checks below.
+	 */
+	max_len = min_t(size_t, handle->lgh_hdr_size,
+			req_capsule_get_size(&req->rq_pill, &RMF_LLOG_LOG_HDR,
+					     RCL_SERVER));
+	if (hdr->llh_hdr.lrh_len < LLOG_MIN_CHUNK_SIZE ||
+	    hdr->llh_hdr.lrh_len > max_len) {
+		rc = -EFAULT;
+		CERROR("%s: incorrectly sized log header: %#x, expecting %#x to %#zx: rc = %d\n",
+		       imp->imp_obd->obd_name, hdr->llh_hdr.lrh_len,
+		       LLOG_MIN_CHUNK_SIZE, max_len, rc);
+		CERROR("%s: you may need to run tunefs.lustre --writeconf\n",
+		       imp->imp_obd->obd_name);
+		GOTO(out, rc);
+	}
 
 	memcpy(handle->lgh_hdr, hdr, hdr->llh_hdr.lrh_len);
 	handle->lgh_last_idx = LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_index;
@@ -307,14 +323,19 @@ static int llog_client_read_header(const struct lu_env *env,
 		rc = -EIO;
 	} else if (llh_hdr->lrh_len !=
 		   LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_len ||
-		   (llh_hdr->lrh_len & (llh_hdr->lrh_len - 1)) != 0 ||
-		   llh_hdr->lrh_len < LLOG_MIN_CHUNK_SIZE ||
-		   llh_hdr->lrh_len > handle->lgh_hdr_size) {
+		   (llh_hdr->lrh_len & (llh_hdr->lrh_len - 1)) != 0) {
 		CERROR("incorrectly sized log header: %#x, expecting %#x (power of two > 8192)\n",
 		       llh_hdr->lrh_len,
 		       LLOG_HDR_TAIL(handle->lgh_hdr)->lrt_len);
 		CERROR("you may need to re-run lconf --write_conf.\n");
 		rc = -EIO;
+	} else if (handle->lgh_hdr->llh_bitmap_offset !=
+		   offsetof(struct llog_log_hdr, llh_bitmap)) {
+		rc = -EIO;
+		CERROR("%s: bad log header bitmap offset: %#x (expecting %#zx): rc = %d\n",
+		       imp->imp_obd->obd_name,
+		       handle->lgh_hdr->llh_bitmap_offset,
+		       offsetof(struct llog_log_hdr, llh_bitmap), rc);
 	}
 	EXIT;
 out:
