@@ -129,9 +129,22 @@ Conflicts:	%{lustre_name}-all-dkms
 %endif
 Requires:	gcc, make
 Requires:	kernel-devel >= 3.10
-# DKMS configure checks for Python dev headers and keyutils for GSS support
+# DKMS configure checks for Python dev headers and keyutils for GSS support.
+# The keyutils -devel package is named differently across distros:
+#   - SUSE/SLES:                     keyutils-devel
+#   - RHEL/Fedora/AlmaLinux/Rocky/EL: keyutils-libs-devel
+# EL10 additionally ships no "Provides: keyutils-devel" compat, so a plain
+# "Requires: keyutils-devel" is unsatisfiable there. Accept either name via a
+# boolean dependency (matches the rich-dep style used in lustre.spec.in). Guard
+# it behind the same version check used elsewhere in this repo because RPM
+# boolean deps require rpm >= 4.13 (EL8+); on EL7 (rpm 4.11) fall back to the
+# plain keyutils-libs-devel name, which EL7 also uses.
 Requires:	python3-devel
-Requires:	keyutils-devel
+%if 0%{?rhel} > 7 || 0%{?suse_version} >= 1500 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
+Requires:	(keyutils-devel or keyutils-libs-devel)
+%else
+Requires:	keyutils-libs-devel
+%endif
 %if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1 || 0%{?azurelinux}
 Recommends:	perl
 Suggests:	bash-completion
