@@ -39,7 +39,7 @@ static inline int LNET_NID_IS_ANY(const struct lnet_nid *nid)
 }
 
 #define LNET_ANY_NID ((struct lnet_nid)			\
-		      {0xFF, 0xFF, ~0, {~0, ~0, ~0, ~0} })
+		      {0xFF, 0xFF, 0xFFFF, {~0U, ~0U, ~0U, ~0U} })
 
 #define LNET_PID_RESERVED 0xf0000000 /* reserved bits in PID */
 #define LNET_PID_USERFLAG 0x80000000 /* set in userspace peers */

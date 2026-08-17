@@ -33066,9 +33066,10 @@ test_400a() { # LU-1606, was conf-sanity test_74
 run_test 400a "Lustre client api program can compile and link"
 
 test_400b() { # LU-1606, LU-5011
-	local header
+	local prefix=/usr/include/linux
 	local out=$TMP/$tfile
-	local prefix=/usr/include/linux/lustre
+	local cpp_compiler=true
+	local header
 
 	# We use a hard coded prefix so that this test will not fail
 	# when run in tree. There are headers in lustre/include/lustre/
@@ -33081,7 +33082,14 @@ test_400b() { # LU-1606, LU-5011
 		skip_env "$CC is not installed"
 	fi
 
-	for header in $prefix/*.h; do
+	echo | $CC -x c++ -fsyntax-only - > /dev/null 2>&1 ||
+		cpp_compiler=false
+	$cpp_compiler || echo "skip C++ compilation: no compiler available"
+
+	stack_trap "rm -f $out"
+
+	local -a c_fails cpp_fails
+	for header in $prefix/{lustre,lnet}/*.h; do
 		if ! [[ -f "$header" ]]; then
 			continue
 		fi
@@ -33090,10 +33098,19 @@ test_400b() { # LU-1606, LU-5011
 			continue # lustre_ioctl.h is internal header
 		fi
 
-		$CC -Wall -Werror -include $header -c -x c /dev/null -o $out ||
-			error "cannot compile '$header'"
+		echo $CC -Wall -Werror -include $header -c -x c /dev/null -o $out |
+			bash -x || c_fails+=( "$header" )
+
+		$cpp_compiler || continue
+		echo $CC -Wall -Werror -include $header -c -x c++ /dev/null -o $out |
+			bash -x || cpp_fails+=( "$header" )
 	done
-	rm -f $out
+
+	echo
+	(( ! ${#c_fails[@]} )) ||
+		error "Compilation of C headers failed: ${c_fails[*]}"
+	(( ! ${#cpp_fails[@]} )) ||
+		error "Compilation of C++ headers failed: ${cpp_fails[*]}"
 }
 run_test 400b "packaged headers can be compiled"
 

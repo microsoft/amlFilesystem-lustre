@@ -265,6 +265,7 @@ typedef struct statx lstatx_t;
 #define LUSTRE_FIEMAP_FLAGS_COMPAT (FIEMAP_FLAG_SYNC | FIEMAP_FLAG_DEVICE_ORDER)
 
 enum obd_statfs_state {
+	OS_STATFS_NONE		= 0x00000000,
 	OS_STATFS_DEGRADED	= 0x00000001, /**< RAID degraded/rebuilding */
 	OS_STATFS_READONLY	= 0x00000002, /**< filesystem is read-only */
 	OS_STATFS_NOCREATE	= 0x00000004, /**< no object creation */
@@ -311,7 +312,7 @@ struct obd_statfs_state_name *obd_statfs_state_name_find(__u32 state)
 	  { .osn_state = OS_STATFS_ENOINO,   .osn_name = 'I', .osn_err = true },
 	  { .osn_state = OS_STATFS_SUM,      .osn_name = 'a', /* aggregate */ },
 	  { .osn_state = OS_STATFS_NONROT,   .osn_name = 'f', /* flash */     },
-	  { .osn_state = 0, }
+	  { .osn_state = OS_STATFS_NONE, }
 	};
 	int i;
 
@@ -814,8 +815,8 @@ enum lov_pattern {
 /* current client IO only understand these patterns */
 static inline bool lov_pattern_supported(enum lov_pattern pattern)
 {
-	enum lov_pattern pattern_base = pattern & ~(LOV_PATTERN_F_RELEASED |
-						    LOV_PATTERN_F_MASK);
+	__u32 pattern_base = pattern & ~(LOV_PATTERN_F_RELEASED |
+					 LOV_PATTERN_F_MASK);
 
 	/* compression is only supported standalone with raid0 for now */
 	if (pattern_base == LOV_PATTERN_MDT ||
@@ -2650,7 +2651,7 @@ static inline const char *hsm_copytool_action2name(enum hsm_copytool_action  a)
 	}
 }
 
-/* Copytool item action description */
+/* Copytool item action description (variable length)*/
 struct hsm_action_item {
 	__u32      hai_len;     /* valid size of this struct */
 	__u32      hai_action;  /* hsm_copytool_action, but use known size */
@@ -2659,8 +2660,24 @@ struct hsm_action_item {
 	struct hsm_extent hai_extent;  /* byte range to operate on */
 	__u64      hai_cookie;  /* action cookie from coordinator */
 	__u64      hai_gid;     /* grouplock id */
-	char       hai_data[];  /* variable length */
+#if !defined(__cplusplus)
+	char       hai_data[];  /* kept for backward compatibility */
+#endif
 } __attribute__((packed));
+
+/* returns the hai variable length field */
+static inline char *hai_data(const struct hsm_action_item *hai)
+{
+	return (char *)hai + sizeof(*hai);
+}
+
+static inline __kernel_size_t hai_data_len(const struct hsm_action_item *hai)
+{
+	if (hai->hai_len <= sizeof(*hai))
+		return 0;
+
+	return (__kernel_size_t)hai->hai_len - sizeof(*hai);
+}
 
 /**
  * helper function which print in hexa the first bytes of
@@ -2675,14 +2692,13 @@ struct hsm_action_item {
 static inline char *hai_dump_data_field(const struct hsm_action_item *hai,
 					char *buffer, __kernel_size_t len)
 {
-	int i;
-	int data_len;
-	char *ptr;
+	__kernel_size_t data_len = hai_data_len(hai);
+	unsigned char *data = (typeof(data))hai_data(hai);
+	char *ptr = buffer;
+	__kernel_size_t i;
 
-	ptr = buffer;
-	data_len = hai->hai_len - sizeof(*hai);
 	for (i = 0; (i < data_len) && (len > 2); i++) {
-		snprintf(ptr, 3, "%02X", (unsigned char)hai->hai_data[i]);
+		snprintf(ptr, 3, "%02X", data[i]);
 		ptr += 2;
 		len -= 2;
 	}

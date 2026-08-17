@@ -485,14 +485,14 @@ static inline struct lu_dirent *lu_dirent_start(struct lu_dirpage *dp)
 
 static inline struct lu_dirent *lu_dirent_next(struct lu_dirent *ent)
 {
-	struct lu_dirent *next;
+	char *buf = (char *)ent;
 
 	if (__le16_to_cpu(ent->lde_reclen) != 0)
-		next = ((void *)ent) + __le16_to_cpu(ent->lde_reclen);
+		buf += __le16_to_cpu(ent->lde_reclen);
 	else
-		next = NULL;
+		buf = NULL;
 
-	return next;
+	return (struct lu_dirent *)buf;
 }
 
 static inline __kernel_size_t lu_dirent_calc_size(size_t namelen, __u16 attr)
@@ -523,7 +523,7 @@ static inline __u16 lu_dirent_type_get(struct lu_dirent *ent)
 
 		len = __le16_to_cpu(ent->lde_namelen);
 		len = (len + align) & ~align;
-		lt = (void *)ent->lde_name + len;
+		lt = (typeof(lt))(ent->lde_name + len);
 		type = __le16_to_cpu(lt->lt_type);
 	}
 
@@ -2441,7 +2441,7 @@ struct lmv_foreign_md {
 static inline __u64 lustre_hash_fnv_1a_64_continue(__u64 hash, const void *buf,
 						  __kernel_size_t size)
 {
-	const unsigned char *p = buf;
+	const unsigned char *p = (typeof(p))buf;
 	__kernel_size_t i;
 
 	for (i = 0; i < size; i++) {
@@ -3156,8 +3156,8 @@ struct llog_agent_req_rec {
 						  */
 	__u64			arr_req_create;	/**< req. creation time */
 	__u64			arr_req_change;	/**< req. status change time */
-	struct hsm_action_item	arr_hai;	/**< req. to the agent */
-	struct llog_rec_tail	arr_tail; /**< record tail for_sizezof_only */
+	struct hsm_action_item	arr_hai;	/**< req. to the agent (variable length) */
+	struct llog_rec_tail	arr_do_not_use; /**< record tail for_sizezof_only */
 } __attribute__((packed));
 
 /* Old llog gen for compatibility */

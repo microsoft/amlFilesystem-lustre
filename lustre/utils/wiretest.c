@@ -2327,6 +2327,8 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct obd_statfs, os_spare9));
 	LASSERTF((int)sizeof(((struct obd_statfs *)0)->os_spare9) == 4, "found %lld\n",
 		 (long long)(int)sizeof(((struct obd_statfs *)0)->os_spare9));
+	LASSERTF(OS_STATFS_NONE == 0x00000000UL, "found 0x%.8xUL\n",
+		 (unsigned)OS_STATFS_NONE);
 	LASSERTF(OS_STATFS_DEGRADED == 0x00000001UL, "found 0x%.8xUL\n",
 		 (unsigned)OS_STATFS_DEGRADED);
 	LASSERTF(OS_STATFS_READONLY == 0x00000002UL, "found 0x%.8xUL\n",

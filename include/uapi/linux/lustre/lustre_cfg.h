@@ -39,7 +39,8 @@
 #define LUSTRE_CFG_ALL_TARGETS "general"
 
 #define LCFG_HDR_SIZE(count) \
-	__ALIGN_KERNEL(offsetof(struct lustre_cfg, lcfg_buflens[(count)]), 8)
+	__ALIGN_KERNEL(offsetof(struct lustre_cfg, lcfg_buflens) + \
+		       sizeof(__u32) * (count), 8)
 
 /** If the LCFG_REQUIRED bit is set in a configuration command,
  * then the client is required to understand this parameter
@@ -165,9 +166,9 @@ struct lustre_cfg {
 };
 
 struct lcfg_type_data {
-	__u32	 ltd_type;
-	char	*ltd_name;
-	char	*ltd_bufs[4];
+	__u32		ltd_type;
+	const char	*ltd_name;
+	const char	*ltd_bufs[4];
 };
 
 static struct lcfg_type_data lcfg_data_table[] = {

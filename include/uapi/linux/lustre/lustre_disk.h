@@ -33,7 +33,7 @@
 #define MOUNT_CONFIGS_DIR	"CONFIGS"
 #define CONFIGS_FILE		"mountdata"
 /** Persistent mount data are stored on the disk in this file. */
-#define MOUNT_DATA_FILE		MOUNT_CONFIGS_DIR"/"CONFIGS_FILE
+#define MOUNT_DATA_FILE		MOUNT_CONFIGS_DIR "/" CONFIGS_FILE
 #define LAST_RCVD		"last_rcvd"
 #define REPLY_DATA		"reply_data"
 #define LOV_OBJID		"lov_objid"

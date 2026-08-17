@@ -150,7 +150,7 @@ static inline void gss_u64_write_string(char **dst, int *dstlen, uint64_t n)
 	if (*dstlen < 0)
 		return;
 
-	ret = snprintf(cp, *dstlen, "%"PRIu64, n);
+	ret = snprintf(cp, *dstlen, "%" PRIu64, n);
 	if (ret >= *dstlen) {
 		cp += *dstlen;
 		*dstlen = -1;
@@ -173,7 +173,7 @@ static inline void gss_u64_write_hex_string(char **dst, int *dstlen, uint64_t n)
 	if (*dstlen < 0)
 		return;
 
-	ret = snprintf(cp, *dstlen, "0x%"PRIx64, n);
+	ret = snprintf(cp, *dstlen, "0x%" PRIx64, n);
 	if (ret >= *dstlen) {
 		cp += *dstlen;
 		*dstlen = -1;
@@ -198,7 +198,7 @@ static inline void gss_buffer_write(char **dst, int *dstlen,
 	if (len < 0)
 		return;
 
-	if (len < sizeof(__u32)) {
+	if (len < (int)sizeof(__u32)) {
 		len = -1;
 		goto out;
 	}
