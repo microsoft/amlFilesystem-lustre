@@ -3449,7 +3449,7 @@ static long llog_last_index(char *logname)
 	return rc;
 }
 
-static char *get_llog_event_name(__u32 cmd)
+static const char *get_llog_event_name(__u32 cmd)
 {
 #ifdef HAVE_SERVER_SUPPORT
 	struct lcfg_type_data *data;
@@ -3463,7 +3463,7 @@ static char *get_llog_event_name(__u32 cmd)
 
 static char *get_event_filter(__u32 cmd)
 {
-	char *event_name;
+	const char *event_name;
 	char *filter = NULL;
 	int len;
 

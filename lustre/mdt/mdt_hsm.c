@@ -681,7 +681,7 @@ int mdt_hsm_request(struct tgt_session_info *tsi)
 		hai->hai_gid = 0;
 		hai->hai_fid = hui[i].hui_fid;
 		hai->hai_extent = hui[i].hui_extent;
-		memcpy(hai->hai_data, data, hr->hr_data_len);
+		memcpy(hai_data(hai), data, hr->hr_data_len);
 		hai->hai_len = sizeof(*hai) + hr->hr_data_len;
 
 		hal->hal_count++;

@@ -12,7 +12,7 @@
 #include <linux/string.h>
 
 struct cfs_crypto_hash_type {
-	char		*cht_name;      /* hash algorithm name, equal to
+	const char	*cht_name;      /* hash algorithm name, equal to
 					 * format name for crypto api
 					 */
 	unsigned int    cht_key;	/* init key by default (vaild for
@@ -22,7 +22,7 @@ struct cfs_crypto_hash_type {
 };
 
 struct cfs_crypto_crypt_type {
-	char	       *cct_name;	  /* crypto algorithm name, equal to
+	const char	*cct_name;	  /* crypto algorithm name, equal to
 					   * format name for crypto api
 					   */
 	unsigned int    cct_size;         /* crypto key size */
@@ -64,12 +64,12 @@ static struct cfs_crypto_hash_type hash_types[] = {
 	},
 	[CFS_HASH_ALG_CRC32] = {
 		.cht_name	= "crc32",
-		.cht_key	= ~0,
+		.cht_key	= ~0U,
 		.cht_size	= 4
 	},
 	[CFS_HASH_ALG_CRC32C] = {
 		.cht_name	= "crc32c",
-		.cht_key	= ~0,
+		.cht_key	= ~0U,
 		.cht_size	= 4
 	},
 	[CFS_HASH_ALG_MD5] = {
@@ -190,7 +190,7 @@ unsigned int cfs_crypto_hash_digestsize(enum cfs_crypto_hash_alg hash_alg)
  */
 static inline unsigned char cfs_crypto_hash_alg(const char *algname)
 {
-	enum cfs_crypto_hash_alg hash_alg;
+	unsigned char hash_alg;
 
 	for (hash_alg = 0; hash_alg < CFS_HASH_ALG_MAX; hash_alg++)
 		if (strcmp(hash_types[hash_alg].cht_name, algname) == 0)
@@ -270,7 +270,7 @@ unsigned int cfs_crypto_crypt_keysize(enum cfs_crypto_crypt_alg crypt_alg)
  */
 static inline unsigned char cfs_crypto_crypt_alg(const char *algname)
 {
-	enum cfs_crypto_crypt_alg crypt_alg;
+	unsigned char crypt_alg;
 
 	for (crypt_alg = 0; crypt_alg < CFS_CRYPT_ALG_MAX; crypt_alg++)
 		if (strcmp(crypt_types[crypt_alg].cct_name, algname) == 0)

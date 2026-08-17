@@ -27,15 +27,13 @@ void dump_llog_agent_req_rec(const char *prefix,
 			     const struct llog_agent_req_rec *larr)
 {
 	char	buf[12];
-	int	sz;
 
-	sz = larr->arr_hai.hai_len - sizeof(larr->arr_hai);
 	CDEBUG(D_HSM, "%slrh=[type=%X len=%d idx=%d] fid="DFID
 	       " dfid="DFID
 	       " cookie=%#llx"
 	       " status=%s action=%s archive#=%d flags=%#llx"
 	       " create=%llu change=%llu"
-	       " extent=%#llx-%#llx gid=%#llx datalen=%d"
+	       " extent=%#llx-%#llx gid=%#llx datalen=%zu"
 	       " data=[%s]\n",
 	       prefix,
 	       larr->arr_hdr.lrh_type,
@@ -50,7 +48,7 @@ void dump_llog_agent_req_rec(const char *prefix,
 	       larr->arr_req_create, larr->arr_req_change,
 	       larr->arr_hai.hai_extent.offset,
 	       larr->arr_hai.hai_extent.length,
-	       larr->arr_hai.hai_gid, sz,
+	       larr->arr_hai.hai_gid, hai_data_len(&larr->arr_hai),
 	       hai_dump_data_field(&larr->arr_hai, buf, sizeof(buf)));
 }
 

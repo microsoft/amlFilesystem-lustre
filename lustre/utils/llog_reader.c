@@ -699,10 +699,8 @@ static void print_lustre_cfg(struct lustre_cfg *lcfg, int *skip)
 static void print_hsm_action(struct llog_agent_req_rec *larr)
 {
 	char buf[12];
-	int sz;
 
-	sz = larr->arr_hai.hai_len - sizeof(larr->arr_hai);
-	printf("lrh=[type=%X len=%d idx=%d] fid="DFID" compound/cookie=%#llx/%#llx status=%s action=%s archive#=%d flags=%#llx create=%llu change=%llu extent=%#llx-%#llx gid=%#llx datalen=%d data=[%s]\n",
+	printf("lrh=[type=%X len=%d idx=%d] fid="DFID" compound/cookie=%#llx/%#llx status=%s action=%s archive#=%d flags=%#llx create=%llu change=%llu extent=%#llx-%#llx gid=%#llx datalen=%zu data=[%s]\n",
 	       larr->arr_hdr.lrh_type,
 	       larr->arr_hdr.lrh_len, larr->arr_hdr.lrh_index,
 	       PFID(&larr->arr_hai.hai_fid),
@@ -716,7 +714,8 @@ static void print_hsm_action(struct llog_agent_req_rec *larr)
 	       (unsigned long long)larr->arr_req_change,
 	       (unsigned long long)larr->arr_hai.hai_extent.offset,
 	       (unsigned long long)larr->arr_hai.hai_extent.length,
-	       (unsigned long long)larr->arr_hai.hai_gid, sz,
+	       (unsigned long long)larr->arr_hai.hai_gid,
+	       hai_data_len(&larr->arr_hai),
 	       hai_dump_data_field(&larr->arr_hai, buf, sizeof(buf)));
 }
 
