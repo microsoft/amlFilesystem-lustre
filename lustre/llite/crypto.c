@@ -263,7 +263,7 @@ out_free:
 }
 
 /**
- * ll_prepare_lookup() - overlay to llcrypt_prepare_lookup
+ * ll_prepare_lookup() - overlay to __llcrypt_prepare_lookup
  * @dir: the directory that will be searched
  * @de: the dentry contain the user-provided filename being searched for
  * @fname: the filename information to be filled in
@@ -274,7 +274,7 @@ out_free:
  * This overlay function is also necessary to handle the case of operations
  * carried out without the key. Normally llcrypt makes use of digested names in
  * that case. Having a digested name works for local file systems that can call
- * llcrypt_match_name(), but Lustre server side is not aware of encryption.
+ * fscrypt_match_name(), but Lustre server side is not aware of encryption.
  * FID and name hash can then easily be extracted and put into the
  * requests sent to servers.
  *
@@ -316,10 +316,10 @@ int ll_prepare_lookup(struct inode *dir, struct dentry *de,
 		fname->disk_name.len = iname.len;
 		rc = 0;
 	} else {
-		 /* We should use ll_prepare_lookup() but Lustre handles the
-		  * digested form its own way, incompatible with llcrypt's
-		  * digested form.
-		  */
+		/* We should use __llcrypt_prepare_lookup() but Lustre handles
+		 * the digested form its own way, incompatible with llcrypt's
+		 * digested form.
+		 */
 		rc = llcrypt_setup_filename(dir, &iname, 1, fname);
 		if ((rc == 0 || rc == -ENOENT) &&
 #if defined(HAVE_FSCRYPT_NOKEY_NAME) && !defined(CONFIG_LL_ENCRYPTION)
@@ -374,7 +374,7 @@ int ll_prepare_lookup(struct inode *dir, struct dentry *de,
  * This overlay function is also necessary to handle the case of operations
  * carried out without the key. Normally llcrypt makes use of digested names in
  * that case. Having a digested name works for local file systems that can call
- * llcrypt_match_name(), but Lustre server side is not aware of encryption.
+ * fscrypt_match_name(), but Lustre server side is not aware of encryption.
  * So for keyless @lookup operations on long names, for Lustre we choose to
  * present to users the encoded struct ll_digest_filename, instead of a digested
  * name. FID and name hash can then easily be extracted and put into the
@@ -518,7 +518,7 @@ const char *ll_get_symlink(struct inode *inode, const void *caddr,
  * This overlay function is also necessary to handle the case of operations
  * carried out without the key. Normally llcrypt makes use of digested names in
  * that case. Having a digested name works for local file systems that can call
- * llcrypt_match_name(), but Lustre server side is not aware of encryption.
+ * fscrypt_match_name(), but Lustre server side is not aware of encryption.
  * So for keyless @lookup operations on long names, for Lustre we choose to
  * present to users the encoded struct ll_digest_filename, instead of a digested
  * name. FID and name hash can then easily be extracted and put into the

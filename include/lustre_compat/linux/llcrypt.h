@@ -646,7 +646,7 @@ static inline int llcrypt_prepare_setattr(struct dentry *dentry,
  *
  * Additionally, @disk_link->name is set to @target if the symlink will be
  * unencrypted, but left NULL if the symlink will be encrypted.  For encrypted
- * symlinks, the filesystem must call llcrypt_encrypt_symlink() to create the
+ * symlinks, the filesystem must call __llcrypt_encrypt_symlink() to create the
  * on-disk target later.  (The reason for the two-step process is that some
  * filesystems need to know the size of the symlink target before creating the
  * inode, e.g. to determine whether it will be a "fast" or "slow" symlink.)
