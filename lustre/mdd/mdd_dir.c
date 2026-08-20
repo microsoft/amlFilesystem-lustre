@@ -2754,6 +2754,23 @@ static int mdd_declare_create_object(const struct lu_env *env,
 		if (rc)
 			GOTO(out, rc);
 	}
+
+	/* Declare job xattr credits for mdd_create_object() below. */
+	if (spec->sp_cr_job_xattr[0] != '\0' &&
+	    (S_ISREG(attr->la_mode) || S_ISDIR(attr->la_mode))) {
+		const struct lu_ucred *uc = lu_ucred(env);
+		const struct lu_buf *job_buf;
+
+		if (uc != NULL && uc->uc_jobid[0] != '\0') {
+			job_buf = mdd_buf_get_const(env, uc->uc_jobid,
+						    LUSTRE_JOBID_SIZE);
+			rc = mdo_declare_xattr_set(env, c, job_buf,
+						   spec->sp_cr_job_xattr, 0,
+						   handle);
+			if (rc)
+				GOTO(out, rc);
+		}
+	}
 out:
 	return rc;
 }
