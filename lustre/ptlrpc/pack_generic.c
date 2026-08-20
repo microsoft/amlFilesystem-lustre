@@ -1683,8 +1683,13 @@ void lustre_msg_set_jobinfo(struct lustre_msg *msg, const struct job_info *ji)
 			pb->pb_flags |= MSG_PACK_UID_GID;
 			pb->pb_uid = ji->ji_uid;
 			pb->pb_gid = ji->ji_gid;
-			memcpy(pb->pb_jobid, ji->ji_jobid,
-			       sizeof(pb->pb_jobid));
+			/* pb_jobid is a fixed-size wire field: NUL-pad it
+			 * rather than copy whatever follows the jobid's
+			 * terminator in the caller's buffer.
+			 */
+			memset(pb->pb_jobid, 0, sizeof(pb->pb_jobid));
+			strscpy(pb->pb_jobid, ji->ji_jobid,
+				sizeof(pb->pb_jobid));
 			return;
 		}
 
@@ -1694,8 +1699,13 @@ void lustre_msg_set_jobinfo(struct lustre_msg *msg, const struct job_info *ji)
 			pb->pb_gid = from_kgid(&init_user_ns, current_gid());
 		}
 
-		if (pb->pb_jobid[0] == '\0')
+		if (pb->pb_jobid[0] == '\0') {
+			/* lustre_get_jobid() may write only the string, or
+			 * nothing at all, so clear the field first.
+			 */
+			memset(pb->pb_jobid, 0, sizeof(pb->pb_jobid));
 			lustre_get_jobid(pb->pb_jobid, sizeof(pb->pb_jobid));
+		}
 
 		return;
 	}
