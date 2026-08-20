@@ -4730,12 +4730,8 @@ void mdt_thread_info_reset(struct mdt_thread_info *info)
 	info->mti_som_strict = 0;
 	info->mti_intent_lock = 0;
 
-	info->mti_spec.no_create = 0;
-	info->mti_spec.sp_rm_entry = 0;
-	info->mti_spec.sp_permitted = 0;
-
-	info->mti_spec.u.sp_ea.eadata = NULL;
-	info->mti_spec.u.sp_ea.eadatalen = 0;
+	/* spec pointers may alias the previous request pill */
+	memset(&info->mti_spec, 0, sizeof(info->mti_spec));
 
 	if (info->mti_batch_env && info->mti_object != NULL) {
 		mdt_object_put(info->mti_env, info->mti_object);
