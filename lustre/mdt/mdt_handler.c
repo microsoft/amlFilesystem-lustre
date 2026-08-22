@@ -8026,7 +8026,7 @@ static int mdt_path_current(struct mdt_thread_info *info,
 		ptr -= tmpname->ln_namelen;
 		if (ptr - 1 <= fp->gf_u.gf_path)
 			GOTO(out, rc = -ENAMETOOLONG);
-		strncpy(ptr, tmpname->ln_name, tmpname->ln_namelen);
+		memcpy(ptr, tmpname->ln_name, tmpname->ln_namelen);
 		if (needsfid) {
 			/* Pack FID before file name, so that client can build
 			 * encoded/digested form.
@@ -8038,7 +8038,7 @@ static int mdt_path_current(struct mdt_thread_info *info,
 			ptr -= strlen(fidstr);
 			if (ptr - 1 <= fp->gf_u.gf_path)
 				GOTO(out, rc = -ENAMETOOLONG);
-			strncpy(ptr, fidstr, strlen(fidstr));
+			memcpy(ptr, fidstr, strlen(fidstr));
 		}
 		*(--ptr) = '/';
 
