@@ -2594,9 +2594,9 @@ static int osd_fallocate_preallocate(const struct lu_env *env,
 		}
 
 		map.m_lblk += rc;
-		*start += rc;
 		map.m_len = blen = blen - rc;
 		epos = (loff_t)map.m_lblk << inode->i_blkbits;
+		*start = min_t(__u64, epos, end);
 		inode_set_ctime_current(inode);
 		if (new_size) {
 			if (epos > end)
@@ -2613,6 +2613,9 @@ static int osd_fallocate_preallocate(const struct lu_env *env,
 		}
 
 		ldiskfs_mark_inode_dirty(handle, inode);
+
+		if (!blen && CFS_FAIL_CHECK(OBD_FAIL_OSD_FALLOCATE_RESTART))
+			GOTO(out, rc = -EAGAIN);
 
 		/* do not attempt to extend an old transaction */
 		if (handle->h_transaction->t_state != T_RUNNING)
