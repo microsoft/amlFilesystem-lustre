@@ -268,7 +268,8 @@ int cb_find_init(char *path, int p, int *dp, struct find_param *param,
 		 struct dirent64 *de);
 int cb_common_fini(char *path, int p, int *dp, struct find_param *param,
 		   struct dirent64 *de);
-int cb_get_dirstripe(char *path, int *d, struct find_param *param);
+/* @d keeps its number, but the ENOTTY retry may reopen what it names */
+int cb_get_dirstripe(char *path, int d, struct find_param *param);
 int common_param_init(struct find_param *param, char *path);
 void find_param_fini(struct find_param *param);
 int parallel_find(char *path, llapi_find_cb_t cb_init, llapi_find_cb_t cb_fini,
