@@ -2310,6 +2310,7 @@ int mdt_reint_migrate(struct mdt_thread_info *info,
 	struct mdt_reint_record *rr = &info->mti_rr;
 	struct lu_ucred *uc = mdt_ucred(info);
 	struct md_attr *ma = &info->mti_attr;
+	struct lu_fid *tmpfid = &info->mti_tmp_fid1;
 	struct mdt_object *pobj;
 	struct mdt_object *spobj;
 	struct mdt_object *tpobj;
@@ -2382,6 +2383,7 @@ int mdt_reint_migrate(struct mdt_thread_info *info,
 			GOTO(put_parent, rc);
 	}
 
+retry:
 	if (!mdt_object_exists(pobj))
 		GOTO(put_parent, rc = -ENOENT);
 
@@ -2457,6 +2459,28 @@ lock_parent:
 			if (rc)
 				GOTO(unlock_parent, rc);
 		}
+	}
+
+	fid_zero(tmpfid);
+	rc = mdo_lookup(env, mdt_object_child(spobj), &rr->rr_name, tmpfid,
+			&info->mti_spec);
+	if (rc || !lu_fid_eq(tmpfid, mdt_object_fid(sobj))) {
+		/*
+		 * as the parent wasn't locked during lookup,
+		 * it might change and something could happen
+		 * to the source name, recheck with the parent
+		 * locked
+		 */
+		CDEBUG(D_INFO, DFID"/%*s: "DFID"->"DFID", rc=%d\n",
+		       PFID(mdt_object_fid(spobj)),
+		       rr->rr_name.ln_namelen, rr->rr_name.ln_name,
+		       PFID(mdt_object_fid(sobj)), PFID(tmpfid), rc);
+		mdt_object_unlock(info, spobj, lhsp, rc);
+		mdt_object_unlock(info, tpobj, lhtp, rc);
+		mdt_object_put(env, sobj);
+		mdt_object_put(env, spobj);
+		mdt_object_put(env, tpobj);
+		goto retry;
 	}
 
 	/* if inode is not migrated, or is dir, no need to lock links */
