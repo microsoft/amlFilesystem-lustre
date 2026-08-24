@@ -6600,6 +6600,64 @@ test_78a()
 }
 run_test 78a "Check fallocate increase projectid usage"
 
+test_78b()
+{
+	local limit=45 # MB
+	local size=$((30 * 1024 * 1024 + 1))
+	local testfile="$DIR/$tdir/$tfile"
+	local cfs_failed=0x40000000
+	local projid=5201
+	local blocks
+	local used
+	local fl
+
+	(( $OST1_VERSION >= $(version_code 2.17.58.39) )) ||
+		skip "need OST >= 2.17.58.39 for fallocate restart offset"
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] ||
+		skip "fallocate restart is ldiskfs only"
+	is_project_quota_supported || skip "project quota is not supported"
+	check_set_fallocate_or_skip
+
+	setup_quota_test || error "setup quota failed with $?"
+
+	set_ost_qtype $QTYPE || error "enable ost quota failed"
+
+	stack_trap "resetquota -p $projid"
+	$LFS setquota -p $projid -b 0 -B ${limit}M -i 0 -I 0 $DIR ||
+		error "set project quota failed"
+
+	$LFS setstripe -i 0 -c 1 $DIR/$tdir || error "setstripe failed"
+	change_project -sp $projid $DIR/$tdir
+
+	wait_quota_synced ost1 OST0000 prj $projid hardlimit $((limit * 1024))
+
+	#define OBD_FAIL_OSD_FALLOCATE_RESTART 0x2304
+	stack_trap "lustre_fail ost 0"
+	lustre_fail ost 0x80002304
+
+	$RUNAS fallocate -l $size $testfile ||
+		quota_error u $TSTUSR "fallocate with a restart failed"
+
+	fl=$(do_facet ost1 "$LCTL get_param -n fail_loc")
+	(( (fl & cfs_failed) != 0 )) ||
+		error "fallocate took no restart, fail_loc=$fl"
+
+	(( $(stat -c %s $testfile) == size )) ||
+		error "size $(stat -c %s $testfile) after restart, want $size"
+
+	blocks=$(stat -c %b $testfile)
+	(( blocks * 512 >= size )) ||
+		error "preallocated $((blocks * 512)) bytes, want $size"
+
+	used=$(getquota -p $projid global curspace)
+	(( used >= size / 1024 && used <= size / 1024 * 105 / 100 )) ||
+		error "project usage $used KB, want $((size / 1024)) KB"
+
+	$LFS quota -u $TSTID $DIR
+	$LFS quota -p $projid $DIR
+}
+run_test 78b "fallocate restart preallocates the whole requested range"
+
 test_79()
 {
 	(( $MDS1_VERSION >= $(version_code 2.14.56.37) )) ||
