@@ -123,12 +123,19 @@ int cb_common_fini(char *path, int p, int *dp, struct find_param *param,
 	return 0;
 }
 
-int cb_get_dirstripe(char *path, int *d, struct find_param *param)
+/*
+ * @d keeps its number but may not keep its open file description: the
+ * ENOTTY retry below reopens the path without O_DIRECTORY and dup2()s the
+ * result onto it.  A caller that wants a DIR stream on @d has to build it
+ * after this returns, as llapi_semantic_traverse() does -- fdopendir()
+ * first would leave the stream on a description this replaced.
+ */
+int cb_get_dirstripe(char *path, int d, struct find_param *param)
 {
 	int ret;
 	bool did_nofollow = false;
 
-	if (!d || *d < 0)
+	if (d < 0)
 		return -ENOTDIR;
 again:
 	param->fp_lmv_md->lum_stripe_count = param->fp_lmv_stripe_count;
@@ -139,11 +146,11 @@ again:
 		/* open() may not fetch LOOKUP lock, statx() to ensure dir depth
 		 * is set.
 		 */
-		statx(*d, "", AT_EMPTY_PATH, STATX_MODE, &stx);
+		statx(d, "", AT_EMPTY_PATH, STATX_MODE, &stx);
 #else
 		struct stat st;
 
-		fstat(*d, &st);
+		fstat(d, &st);
 #endif
 		param->fp_lmv_md->lum_magic = LMV_USER_MAGIC;
 	} else {
@@ -152,7 +159,7 @@ again:
 	if (param->fp_raw)
 		param->fp_lmv_md->lum_type = LMV_TYPE_RAW;
 
-	ret = ioctl(*d, LL_IOC_LMV_GETSTRIPE, param->fp_lmv_md);
+	ret = ioctl(d, LL_IOC_LMV_GETSTRIPE, param->fp_lmv_md);
 
 	/* if ENOTTY likely to be a fake symlink, so try again after
 	 * new open() with O_NOFOLLOW, but only once to prevent any
@@ -176,10 +183,20 @@ again:
 		}
 		if (!S_ISFIFO(st.st_mode))
 			fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
-		/* close original fd and set new */
-		close(*d);
-		*d = fd;
-		ret2 = ioctl(fd, LL_IOC_LMV_GETSTRIPE, param->fp_lmv_md);
+		/*
+		 * Move the reopen onto the number the caller already holds,
+		 * rather than handing back a different one: every caller keeps
+		 * a copy, and the old number must never be free for another
+		 * thread to claim while those copies are still live.
+		 */
+		if (dup2(fd, d) < 0) {
+			close(fd);
+			/* restore original errno */
+			errno = ENOTTY;
+			return ret;
+		}
+		close(fd);
+		ret2 = ioctl(d, LL_IOC_LMV_GETSTRIPE, param->fp_lmv_md);
 		if (ret2 < 0 && errno != E2BIG) {
 			/* restore original errno */
 			errno = ENOTTY;
@@ -2507,7 +2524,7 @@ int cb_find_init(char *path, int p, int *dp, struct find_param *param,
 			struct lmv_user_md *lmv;
 
 			param->fp_get_lmv = 1;
-			ret = cb_get_dirstripe(path, &d, param);
+			ret = cb_get_dirstripe(path, d, param);
 			lmv = param->fp_lmv_md;
 			if (ret != 0) {
 				if (errno == ENODATA) {

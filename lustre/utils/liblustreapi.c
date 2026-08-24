@@ -3754,7 +3754,7 @@ static int cb_getstripe(char *path, int p, int *dp, struct find_param *param,
 		d = fd = open(path, O_RDONLY | O_DIRECTORY);
 
 	if (d != -1 && (param->fp_get_lmv || param->fp_get_default_lmv))
-		ret = cb_get_dirstripe(path, &d, param);
+		ret = cb_get_dirstripe(path, d, param);
 	else if (d != -1)
 		ret = get_lmd_info_fd(path, p, d, &param->fp_lmd->lmd_lmm,
 				      param->fp_lum_size, GET_LMD_STRIPE);
@@ -3780,7 +3780,7 @@ static int cb_getstripe(char *path, int p, int *dp, struct find_param *param,
 		/* clear O_NONBLOCK for non-PIPEs */
 		if (!S_ISFIFO(st.st_mode))
 			fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
-		ret = cb_get_dirstripe(path, &fd, param);
+		ret = cb_get_dirstripe(path, fd, param);
 		if (ret == 0)
 			llapi_lov_dump_user_lmm(param, path, LDF_IS_DIR);
 		close(fd);
