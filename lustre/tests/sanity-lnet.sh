@@ -3153,6 +3153,27 @@ setup_health_test() {
 		LNIDS[1]="${LNIDS[0]}1"
 	fi
 
+	if ${need_mr}; then
+		# The discovery above ran before this function added the
+		# second NI. The local peer record holds one NI. LNet does
+		# not resend a message after a remote failure when the peer
+		# holds one NI. Discover the peer again to collect all NIs.
+		do_lnetctl discover ${RNIDS[0]} || {
+			cleanup_health_test
+			error "Unable to discover ${RNIDS[0]}"
+		}
+
+		local nnis=$($LNETCTL peer show --nid ${RNIDS[0]} |
+			     awk '/^[[:space:]]*-[[:space:]]+nid:/{n++}
+				  END{print n+0}')
+
+		(( nnis == ${#RNIDS[@]} )) || {
+			cleanup_health_test
+			error "Peer ${RNIDS[0]} has $nnis NIs," \
+			      "expected ${#RNIDS[@]}"
+		}
+	fi
+
 	$LNETCTL net show
 
 	$LNETCTL peer show -v 2 | grep -E -e nid -e health
