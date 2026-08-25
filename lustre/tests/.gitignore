@@ -83,6 +83,7 @@
 /ostactive
 /parse_foreign_dir
 /parse_foreign_file
+/pcc_mmap_race
 /reads
 /rename_many
 /rmdirmany

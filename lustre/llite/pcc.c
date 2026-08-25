@@ -2270,10 +2270,22 @@ static inline void pcc_inode_mapping_reset(struct inode *inode)
 	       inode, PFID(ll_inode2fid(inode)), inode->i_mapping);
 }
 
+/*
+ * This is reachable with write mmap_lock held:
+ * ll_vm_close() -> pcc_vm_close() -> pcc_inode_mmap_put()
+ *  -> pcc_inode_mapping_reset() -> pcc_wait_ios_finish()
+ * vm_ops->close() runs from remove_vma(), which is reached with mmap_lock held
+ * for write in MAP_FIXED mmap() and mremap(). A thread in pcc_file_read_iter()
+ * that faults on its user buffer is blocked on mmap_lock while holding
+ * pcci_active_ios, which is exactly a deadlock that should be avoided.
+ * Here add a check of active IOs and skip mapping reset if there are active
+ * IOs.
+ */
 static inline void pcc_inode_mmap_put(struct inode *inode)
 {
 	pcc_inode_lock(inode);
-	if (atomic_dec_and_test(&ll_i2info(inode)->lli_pcc_mapcnt))
+	if (atomic_dec_and_test(&ll_i2info(inode)->lli_pcc_mapcnt) &&
+	    atomic_read(&ll_i2pcci(inode)->pcci_active_ios) == 0)
 		pcc_inode_mapping_reset(inode);
 	pcc_inode_unlock(inode);
 }
@@ -2574,6 +2586,9 @@ ssize_t pcc_file_read_iter(struct kiocb *iocb,
 	pcc_io_init(inode, PIT_READ, file, cached);
 	if (!*cached)
 		RETURN(0);
+
+	/* Pause with an active I/O held to test the race with mmap() */
+	CFS_FAIL_TIMEOUT(OBD_FAIL_LLITE_PCC_READ_PAUSE, cfs_fail_val);
 
 	/* Fake I/O error on PCC-RO */
 	if (CFS_FAIL_CHECK(OBD_FAIL_LLITE_PCC_FAKE_ERROR))
@@ -3174,6 +3189,20 @@ int pcc_file_mmap(struct file *file, struct vm_area_struct *vma,
 		}
 
 		LASSERT(atomic_read(&pcci->pcci_refcount) > 1);
+
+		/*
+		 * To avoid the possible deadlock, we forbid to switch mapping
+		 * between Lustre file and PCC copy when there are active I/Os
+		 * on the PCC copy.
+		 * TODO: However, we can also allocate a private @pccv for this
+		 * vma and switch the mapping later when there is no active I/O
+		 * on the PCC copy.
+		 */
+		if (atomic_read(&pcci->pcci_active_ios) > 0 &&
+		    pcc_inode->i_mapping != inode->i_mapping) {
+			pcc_file_fallback_set(lli, pccf);
+			GOTO(out, rc = -EBUSY);
+		}
 		*cached = true;
 
 		rc = pcc_mmap_mapping_set(inode, pcc_inode);
@@ -3197,10 +3226,13 @@ int pcc_file_mmap(struct file *file, struct vm_area_struct *vma,
 			if (vma->vm_private_data)
 				rc = -EOPNOTSUPP;
 			/*
-			 * If call ->mmap() fails, our caller will put Lustre
-			 * file so we should drop the reference to the PCC file
-			 * copy that we got.
+			 * If call ->mmap() fails, our caller will put the file
+			 * in @vma->vm_file (newer kernels) or the Lustre file
+			 * it passed in (older kernels). Restore @vm_file to the
+			 * Lustre file so both cases put the right reference,
+			 * then drop the reference to the PCC copy that we got.
 			 */
+			vma->vm_file = file;
 			fput(pcc_file);
 			OBD_FREE_PTR(pccv);
 			GOTO(out, rc);

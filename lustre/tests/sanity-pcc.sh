@@ -4833,6 +4833,37 @@ test_102() {
 }
 run_test 102 "PCC-RO should not hange for io_uring I/O engine"
 
+test_103() {
+	$LCTL get_param -n mdc.*.connect_flags | grep -q pcc_ro ||
+		skip "Server does not support PCC-RO"
+
+	local loopfile="$TMP/$tfile"
+	local mntpt="/mnt/pcc.$tdir"
+	local hsm_root="$mntpt/$tdir"
+	local file=$DIR/$tfile
+
+	setup_loopdev $SINGLEAGT $loopfile $mntpt 60
+	do_facet $SINGLEAGT mkdir $hsm_root || error "mkdir $hsm_root failed"
+	setup_pcc_mapping $SINGLEAGT \
+		"projid={0}\ roid=$HSM_ARCHIVE_NUMBER\ pccro=1"
+
+	do_facet $SINGLEAGT dd if=/dev/urandom of=$file bs=1M count=4 ||
+		error "failed to write $file"
+	do_facet $SINGLEAGT $LFS pcc attach -r -i $HSM_ARCHIVE_NUMBER $file ||
+		error "failed to attach $file"
+	check_lpcc_state $file "readonly"
+
+	# Pause a PCC read with an active PCC I/O held, then mmap() the file
+	# which holds mmap_lock for write. The read faults on its user buffer
+	# after the pause and needs mmap_lock.
+	stack_trap "do_facet $SINGLEAGT $LCTL set_param fail_loc=0 fail_val=0"
+	#define OBD_FAIL_LLITE_PCC_READ_PAUSE	0x141b
+	do_facet $SINGLEAGT $LCTL set_param fail_loc=0x8000141b fail_val=3
+	do_facet $SINGLEAGT timeout 60 $LUSTRE/tests/pcc_mmap_race mmap $file ||
+		error "PCC read and mmap() deadlocked"
+}
+run_test 103 "PCC-RO read should not deadlock with mmap()"
+
 test_203() {
 	local loopfile="$TMP/$tfile"
 	local mntpt="/mnt/pcc.$tdir"
