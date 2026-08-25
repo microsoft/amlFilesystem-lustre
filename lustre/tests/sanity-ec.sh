@@ -7998,16 +7998,22 @@ test_49a() {
 
 	local failures=0
 	for i in 1 2 3 4; do
-		if ! wait ${pids[$((i-1))]}; then
-			echo "Reader $i: process failed"
+		local out=$TMP/ec_read_${i}_$tfile
+		wait ${pids[$((i-1))]}
+		local rc=$?
+		if (( rc != 0 )); then
+			echo "Reader $i: process failed (exit $rc)"
+			[[ -s $out ]] && echo "Reader $i output:" &&
+				sed 's/^/  /' $out
 			failures=$((failures + 1))
 			continue
 		fi
 		local sum
-		sum=$(awk '{print $1}' \
-			$TMP/ec_read_${i}_$tfile)
+		sum=$(awk '{print $1}' $out)
 		if [[ "$sum_expected" != "$sum" ]]; then
 			echo "Reader $i: $sum != $sum_expected"
+			[[ -s $out ]] && echo "Reader $i output:" &&
+				sed 's/^/  /' $out
 			failures=$((failures + 1))
 		fi
 	done
@@ -11695,18 +11701,26 @@ test_74a() {
 		ec_deactivate_ost $victim
 
 		for ((j = 0; j < 4; j++)); do
-			if ! wait ${pids[$j]}; then
+			local out=$TMP/ec_race_${j}_$tfile
+			wait ${pids[$j]}
+			local rc=$?
+			if (( rc != 0 )); then
 				echo "round $i reader $j:" \
-					"process failed"
+					"process failed (exit $rc)"
+				[[ -s $out ]] &&
+					echo "round $i reader $j output:" &&
+					sed 's/^/  /' $out
 				failures=$((failures + 1))
 				continue
 			fi
 			local got
-			got=$(awk '{print $1}' \
-				$TMP/ec_race_${j}_$tfile)
+			got=$(awk '{print $1}' $out)
 			if [[ "$sum" != "$got" ]]; then
 				echo "round $i reader $j:" \
 					"$sum != $got"
+				[[ -s $out ]] &&
+					echo "round $i reader $j output:" &&
+					sed 's/^/  /' $out
 				failures=$((failures + 1))
 			fi
 			reads_done=$((reads_done + 1))
