@@ -89,6 +89,7 @@
 #include <linux/file.h>
 #include <lustre_compat/linux/fs.h>
 #include <lustre_compat/linux/dcache.h>
+#include <lustre_compat/linux/xattr.h>
 #ifdef HAVE_FILEATTR_GET
 #include <linux/fileattr.h>
 #endif
@@ -3354,7 +3355,7 @@ static int pcc_inode_remove(struct inode *inode, struct dentry *pcc_dentry)
 	struct dentry *parent = dget_parent(pcc_dentry);
 	int rc;
 
-	rc = vfs_unlink(&nop_mnt_idmap, d_inode(parent), pcc_dentry);
+	rc = vfs_unlink(&nop_mnt_idmap, d_inode(parent), pcc_dentry, NULL);
 	if (rc && rc != -ENOENT)
 		CWARN("%s: failed to unlink PCC file %pd: rc = %d\n",
 		      ll_i2sbi(inode)->ll_fsname, pcc_dentry, rc);
@@ -3676,7 +3677,7 @@ void pcc_create_attach_cleanup(struct super_block *sb,
 		old_cred = override_creds(pcc_super_cred(sb));
 		parent = dget_parent(pca->pca_dentry);
 		i_dir = d_inode(parent);
-		rc = vfs_unlink(&nop_mnt_idmap, i_dir, pca->pca_dentry);
+		rc = vfs_unlink(&nop_mnt_idmap, i_dir, pca->pca_dentry, NULL);
 		dput(parent);
 		if (rc)
 			CWARN("%s: failed to unlink PCC file %pd: rc = %d\n",

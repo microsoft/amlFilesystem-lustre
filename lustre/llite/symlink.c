@@ -11,7 +11,7 @@
  * This file is part of Lustre, http://www.lustre.org/
  */
 
-#include <linux/fs.h>
+#include <lustre_compat/linux/fs.h>
 #include <linux/mm.h>
 #include <linux/stat.h>
 #include <linux/version.h>
@@ -160,7 +160,7 @@ static const char *ll_get_link(struct dentry *dentry,
 /**
  * ll_getattr_link() - link-specific getattr to set the correct st_size
  *		       for encrypted symlinks
- * @map: (if HAVE_USER_NAMESPACE_ARG is defined) pointer to struct mnt_idmap
+ * @map: pointer to struct mnt_idmap
  * @path: pointer to struct path (path to symlink)
  * @stat: pointer to struct kstat (holds STATX_SIZE, STATX_BLOCKS and
  * STATX_MTIME of symlink)
@@ -185,12 +185,9 @@ static const char *ll_get_link(struct dentry *dentry,
  *
  * Return: 0 on success, -errno on failure
  */
-static int ll_getattr_link(
-#if defined(HAVE_USER_NAMESPACE_ARG)
-			   struct mnt_idmap *map,
-#endif
-			   const struct path *path, struct kstat *stat,
-			   u32 request_mask, unsigned int flags)
+static int ll_getattr_link(struct mnt_idmap *map, const struct path *path,
+			   struct kstat *stat, u32 request_mask,
+			   unsigned int flags)
 {
 	struct dentry *dentry = path->dentry;
 	struct inode *inode = d_inode(dentry);

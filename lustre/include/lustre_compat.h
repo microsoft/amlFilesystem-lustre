@@ -59,12 +59,6 @@
 	list_for_each_entry((child), &(dentry)->d_subdirs, d_child)
 #endif
 
-#ifdef HAVE_USER_NAMESPACE_ARG
-#define vfs_unlink(ns, dir, de) vfs_unlink(ns, dir, de, NULL)
-#else
-#define vfs_unlink(ns, dir, de) vfs_unlink(dir, de, NULL)
-#endif
-
 #ifdef HAVE_U64_CAPABILITY
 #define ll_capability_u32(kcap) \
 	((kcap).val & 0xFFFFFFFF)
@@ -87,37 +81,6 @@ static inline struct iovec iov_iter_iovec(const struct iov_iter *iter)
 	};
 }
 #endif
-
-static inline bool ll_security_xattr_wanted(struct inode *in)
-{
-#ifdef CONFIG_SECURITY
-	return in->i_security && in->i_sb->s_security;
-#else
-	return false;
-#endif
-}
-
-static inline int ll_vfs_setxattr(struct dentry *dentry, struct inode *inode,
-				  const char *name,
-				  const void *value, size_t size, int flags)
-{
-#if defined(HAVE_MNT_IDMAP_ARG) || defined(HAVE_USER_NAMESPACE_ARG)
-	return __vfs_setxattr(&nop_mnt_idmap, dentry, inode, name,
-			      VFS_SETXATTR_VALUE(value), size, flags);
-#else
-	return __vfs_setxattr(dentry, inode, name, value, size, flags);
-#endif
-}
-
-static inline int ll_vfs_removexattr(struct dentry *dentry, struct inode *inode,
-				     const char *name)
-{
-#if defined(HAVE_MNT_IDMAP_ARG) || defined(HAVE_USER_NAMESPACE_ARG)
-	return __vfs_removexattr(&nop_mnt_idmap, dentry, name);
-#else
-	return __vfs_removexattr(dentry, name);
-#endif
-}
 
 /* from v4.1-rc2-56-g89e9b9e07a39, until v5.9-rc3-161-gf56753ac2a90 */
 #ifndef BDI_CAP_CGROUP_WRITEBACK
@@ -162,45 +125,6 @@ static inline const char *shrinker_debugfs_path(struct shrinker *shrinker)
 
 #ifndef HAVE_WB_STAT_MOD
 #define wb_stat_mod(wb, item, amount)	__add_wb_stat(wb, item, amount)
-#endif
-
-#ifdef HAVE_SEC_RELEASE_SECCTX_1ARG
-#ifndef HAVE_LSMCONTEXT_INIT
-/* Ubuntu 5.19 */
-static inline void lsmcontext_init(struct lsm_context *cp, char *context,
-				   u32 size, int slot)
-{
-#ifdef HAVE_LSMCONTEXT_HAS_ID
-	cp->id = slot;
-#else
-	cp->slot = slot;
-#endif
-	cp->context = context;
-	cp->len = size;
-}
-#endif
-#endif
-
-static inline void ll_security_release_secctx(char *secdata, u32 seclen,
-					      int slot)
-{
-#ifdef HAVE_SEC_RELEASE_SECCTX_1ARG
-	struct lsm_context context = { };
-
-	lsmcontext_init(&context, secdata, seclen, slot);
-	return security_release_secctx(&context);
-#else
-	return security_release_secctx(secdata, seclen);
-#endif
-}
-
-#if !defined(HAVE_USER_NAMESPACE_ARG) && !defined(HAVE_MNT_IDMAP_ARG)
-#define posix_acl_update_mode(ns, inode, mode, acl) \
-	posix_acl_update_mode(inode, mode, acl)
-#define notify_change(ns, de, attr, inode)	notify_change(de, attr, inode)
-#define inode_owner_or_capable(ns, inode)	inode_owner_or_capable(inode)
-#define vfs_mkdir(ns, dir, de, mode)		vfs_mkdir(dir, de, mode)
-#define ll_set_acl(ns, inode, acl, type)	ll_set_acl(inode, acl, type)
 #endif
 
 #ifdef HAVE_IS_PCI_P2PDMA_PAGE

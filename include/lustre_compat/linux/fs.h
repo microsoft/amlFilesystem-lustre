@@ -11,6 +11,7 @@
 
 #include <linux/fs.h>
 #include <linux/dcache.h>
+#include <linux/posix_acl.h>
 #include <lustre_compat/linux/time64.h>
 
 #ifndef HAVE_D_MAKE_PERSISTENT
@@ -209,5 +210,35 @@ static inline s64 inode_get_ctime_ns(struct inode *inode)
 	ts = inode_get_ctime(inode);
 	return timespec64_to_ns(&ts);
 }
+
+#if !defined(HAVE_USER_NAMESPACE_ARG) && !defined(HAVE_MNT_IDMAP_ARG)
+#define posix_acl_update_mode(ns, inode, mode, acl) \
+	posix_acl_update_mode(inode, mode, acl)
+#define notify_change(ns, de, attr, inode)	notify_change(de, attr, inode)
+#define inode_owner_or_capable(ns, inode)	inode_owner_or_capable(inode)
+#define vfs_mkdir(ns, dir, de, mode)		vfs_mkdir(dir, de, mode)
+#define vfs_unlink(ns, dir, de, delegate)	vfs_unlink(dir, de, delegate)
+#define ll_set_acl(ns, inode, acl, type)	ll_set_acl(inode, acl, type)
+#endif
+
+#ifndef HAVE_USER_NAMESPACE_ARG
+#define ll_create_nd(ns, dir, de, mode, ex)	ll_create_nd(dir, de, mode, ex)
+#define ll_mknod(ns, dir, dch, mode, rd)	ll_mknod(dir, dch, mode, rd)
+#define ll_rename(ns, src, sdc, tgt, tdc, fl)	ll_rename(src, sdc, tgt, tdc, fl)
+#define ll_symlink(nd, dir, dch, old)		ll_symlink(dir, dch, old)
+#define inode_permission(ns, inode, mask)	inode_permission(inode, mask)
+#define generic_permission(ns, inode, mask)	generic_permission(inode, mask)
+#define simple_setattr(ns, de, iattr)		simple_setattr(de, iattr)
+#define ll_setattr(ns, de, attr)		ll_setattr(de, attr)
+#define setattr_prepare(ns, de, at)		setattr_prepare(de, at)
+#define ll_inode_permission(ns, inode, mask)	ll_inode_permission(inode, mask)
+#define ll_getattr(ns, path, stat, mask, fl)	ll_getattr(path, stat, mask, fl)
+
+#define ll_getattr_link(ns, path, stat, request_mask, flags)		\
+	ll_getattr_link(path, stat, request_mask, flags)
+
+#define ll_foreign_symlink_getattr(ns, path, stat, request_mask, flags)	\
+	ll_foreign_symlink_getattr(path, stat, request_mask, flags)
+#endif
 
 #endif /* __LIBCFS_LINUX_CFS_FS_H__ */

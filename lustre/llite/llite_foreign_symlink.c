@@ -717,10 +717,7 @@ failed:
 }
 
 /* foreign fake-symlink version of ll_getattr() */
-static int ll_foreign_symlink_getattr(
-#if defined(HAVE_USER_NAMESPACE_ARG)
-				      struct mnt_idmap *map,
-#endif
+static int ll_foreign_symlink_getattr(struct mnt_idmap *map,
 				      const struct path *path,
 				      struct kstat *stat, u32 request_mask,
 				      unsigned int flags)

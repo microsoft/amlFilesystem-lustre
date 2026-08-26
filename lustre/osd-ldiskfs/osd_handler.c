@@ -28,6 +28,8 @@
 #include <linux/types.h>
 /* prerequisite for linux/xattr.h */
 #include <lustre_compat/linux/fs.h>
+#include <lustre_compat/linux/folio.h>
+#include <lustre_compat/linux/blkdev.h>
 /* XATTR_{REPLACE,CREATE} */
 #include <linux/xattr.h>
 #include <linux/workqueue.h>

@@ -20,6 +20,9 @@
 
 #include <linux/list.h>
 #include <linux/module.h>
+#include <lustre_compat/linux/fs.h>
+#include <lustre_compat/linux/posix_acl_xattr.h>
+#include <lustre_compat/linux/folio.h>
 #include <obd_class.h>
 #include <dt_object.h>
 /* fid_be_to_cpu() */

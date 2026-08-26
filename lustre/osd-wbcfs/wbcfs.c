@@ -13,6 +13,7 @@
 #include <linux/uidgid.h>
 #include <linux/types.h>
 #include <lustre_compat/linux/fs.h>
+#include <lustre_compat/linux/folio.h>
 #include <linux/dirent.h>
 #include <linux/xattr.h>
 #include <linux/swap.h>

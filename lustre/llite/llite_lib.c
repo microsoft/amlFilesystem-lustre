@@ -23,6 +23,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/random.h>
+#include <lustre_compat/linux/security.h>
 #include <linux/statfs.h>
 #include <linux/time.h>
 #include <linux/types.h>
@@ -4176,10 +4177,11 @@ void ll_finish_md_op_data(struct md_op_data *op_data)
 {
 	ll_unlock_md_op_lsm(op_data);
 	/* free selinux context */
-	if (!(op_data->op_flags & MF_SERVER_SECCTX))
+	if (!(op_data->op_flags & MF_SERVER_SECCTX)) {
 		ll_security_release_secctx(op_data->op_file_secctx,
 					   op_data->op_file_secctx_size,
 					   op_data->op_file_secctx_slot);
+	}
 	op_data->op_file_secctx_size = 0;
 	op_data->op_file_secctx_slot = 0;
 	op_data->op_file_secctx = NULL;

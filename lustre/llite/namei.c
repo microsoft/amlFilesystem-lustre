@@ -11,7 +11,7 @@
  * This file is part of Lustre, http://www.lustre.org/
  */
 
-#include <linux/fs.h>
+#include <lustre_compat/linux/fs.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/iversion.h>
@@ -28,13 +28,6 @@
 #include <lustre_fid.h>
 #include <lustre_dlm.h>
 #include "llite_internal.h"
-
-#ifndef HAVE_USER_NAMESPACE_ARG
-#define ll_create_nd(ns, dir, de, mode, ex)	ll_create_nd(dir, de, mode, ex)
-#define ll_mknod(ns, dir, dch, mode, rd)	ll_mknod(dir, dch, mode, rd)
-#define ll_rename(ns, src, sdc, tgt, tdc, fl)	ll_rename(src, sdc, tgt, tdc, fl)
-#define ll_symlink(nd, dir, dch, old)		ll_symlink(dir, dch, old)
-#endif
 
 static int ll_create_it(struct inode *dir, struct dentry *dentry,
 			struct lookup_intent *it, struct md_op_data *op_data,

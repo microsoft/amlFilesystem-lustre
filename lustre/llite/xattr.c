@@ -14,7 +14,9 @@
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
-#include <linux/xattr.h>
+#include <lustre_compat/linux/xattr.h>
+#include <lustre_compat/linux/posix_acl_xattr.h>
+
 
 #define DEBUG_SUBSYSTEM S_LLITE
 
@@ -61,11 +63,6 @@ static int xattr_type_filter(struct ll_sb_info *sbi,
 
 	return 0;
 }
-
-#ifndef HAVE_USER_NAMESPACE_ARG
-#define ll_xattr_set_common(hd, ns, de, inode, name, value, size, flags) \
-	ll_xattr_set_common(hd, de, inode, name, value, size, flags)
-#endif
 
 static int ll_xattr_set_common(const struct xattr_handler *handler,
 			       struct mnt_idmap *map,
@@ -389,11 +386,6 @@ static int ll_setstripe_ea(struct dentry *dentry, struct lov_user_md *lump,
 
 	return rc;
 }
-
-#ifndef HAVE_USER_NAMESPACE_ARG
-#define ll_xattr_set(hd, ns, de, inode, name, value, size, flags) \
-	ll_xattr_set(hd, de, inode, name, value, size, flags)
-#endif
 
 static int ll_xattr_set(const struct xattr_handler *handler,
 			struct mnt_idmap *map,

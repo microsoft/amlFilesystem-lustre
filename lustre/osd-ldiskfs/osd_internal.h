@@ -28,6 +28,8 @@
 /* struct dirent64 */
 #include <linux/dirent.h>
 #include <lustre_compat/linux/security.h>
+#include <lustre_compat/linux/xattr.h>
+#include <lustre_compat/linux/posix_acl_xattr.h>
 #include <linux/statfs.h>
 #include <linux/bio.h>
 #include <linux/file.h>

@@ -30,6 +30,7 @@
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/types.h>
+#include <lustre_compat/linux/folio.h>
 #include <uapi/linux/lnet/lnet-types.h>
 #include <uapi/linux/lustre/lustre_idl.h>
 #include <uapi/linux/lustre/lustre_ioctl.h>

@@ -18,9 +18,9 @@
 /* prerequisite for linux/xattr.h */
 #include <linux/types.h>
 /* prerequisite for linux/xattr.h */
-#include <linux/fs.h>
+#include <lustre_compat/linux/fs.h>
 /* XATTR_{REPLACE,CREATE} */
-#include <linux/xattr.h>
+#include <lustre_compat/linux/xattr.h>
 #include <lustre_compat/linux/dcache.h>
 /*
  * struct OBD_{ALLOC,FREE}*()
@@ -1295,7 +1295,8 @@ int osd_obj_map_recover(struct osd_thread_info *info,
 		/* If the src object has never been modified, then remove it. */
 		if (inode->i_size == 0 && inode->i_mode & S_ISUID &&
 		    inode->i_mode & S_ISGID) {
-			rc = vfs_unlink(&nop_mnt_idmap, src_parent, src_child);
+			rc = vfs_unlink(&nop_mnt_idmap, src_parent, src_child,
+					NULL);
 			if (unlikely(rc == -ENOENT))
 				rc = 0;
 		}
