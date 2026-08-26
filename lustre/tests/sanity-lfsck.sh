@@ -160,6 +160,21 @@ wait_all_targets_blocked() {
 
 		error "($err) only $count of $MDSCOUNT MDTs are in ${status}"
 	}
+
+	if [[ "$com" == "layout" ]]; then
+		wait_update_facet --quiet mds1 \
+			"$lfsck_query | awk '/^${com}_osts_$status/ { print \\\$2 }'" \
+			"$OSTCOUNT" $timeout || {
+			local count=$(do_facet mds1 "$lfsck_query" |
+				      awk "/^${com}_osts_${status}/ { print \$2 }")
+
+			do_facet mds1 "$lfsck_query"
+			echo "==== OST LOGS ===="
+			do_nodes $osts "$LCTL get_param obdfilter.*.lfsck_$com osd*.*.oi_scrub"
+
+			error "($err) only $count of $OSTCOUNT OSTs are in ${status}"
+		}
+	fi
 }
 
 wait_all_targets() {
@@ -173,6 +188,15 @@ wait_all_targets() {
 		do_facet mds1 "$LCTL lfsck_query -t $com -M ${FSNAME}-MDT0000"
 		error "($err) some MDTs are not in ${status}"
 	}
+
+	if [[ "$com" == "layout" ]]; then
+		wait_update_facet mds1 "$LCTL lfsck_query -t $com -M ${FSNAME}-MDT0000 |
+			awk '/^${com}_osts_${status}/ { print \\\$2 }'" \
+			"$OSTCOUNT" $LTIME || {
+			do_facet mds1 "$LCTL lfsck_query -t $com -M ${FSNAME}-MDT0000"
+			error "($err) some OSTs are not in ${status}"
+		}
+	fi
 }
 
 test_0() {
