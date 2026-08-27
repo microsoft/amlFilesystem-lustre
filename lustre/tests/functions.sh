@@ -249,13 +249,74 @@ lst_setup_all () {
 }
 
 ###
+# ip_is_v4
+#
+# True if the argument is a dotted-quad IPv4 address, each octet in range.
+ip_is_v4() {
+	local ipv4_re='^([0-9]{1,3}\.){3,3}[0-9]{1,3}$'
+
+	if ! [[ $1 =~ $ipv4_re ]]; then
+		return 1
+	fi
+
+	local quads=(${1//\./ })
+
+	(( ${#quads[@]} == 4)) || return 1
+
+	(( quads[0] < 256 && quads[1] < 256 &&
+	   quads[2] < 256 && quads[3] < 256 )) || return 1
+
+	return 0
+}
+
+###
+# ip_is_v6
+#
+# True if the argument is an IPv6 address, including the IPv4-mapped forms.
+ip_is_v6() {
+	local ipv6_re='^([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}$'
+	local addr=$1
+	local segment
+
+	# An IPv4-mapped address ends in a dotted quad standing in for the
+	# last two groups: ::ffff:10.1.2.3. Check the quad, then swap it for
+	# two groups so the hex part can be checked as usual. NB match a
+	# colon too: a bare dotted quad is not IPv6, and without it the
+	# substitutions below are no-ops that only the regex rejects.
+	if [[ $addr == *:*.* ]]; then
+		ip_is_v4 "${addr##*:}" || return 1
+		addr="${addr%:*}:0:0"
+	fi
+
+	if ! [[ $addr =~ $ipv6_re ]]; then
+		return 1
+	fi
+
+	for segment in ${addr//:/ }; do
+		((0x$segment <= 0xFFFF)) || return 1
+	done
+
+	return 0
+}
+
+###
 # short_hostname
 #
 # Passed a single argument, strips everything off following
 # and includes the first period.
 # client-20.lab.whamcloud.com becomes client-20
+#
+# An address is returned unchanged: it has no domain to strip, and cutting
+# at the first period would turn 10.1.2.3 into 10, collapsing every node on
+# a subnet onto one name. Both callers need that -- yml_entities() keys its
+# per-node file on it, and short_nodename() its per-node check_file -- so
+# neither can afford the collision.
 short_hostname() {
-	echo $(sed 's/\..*//' <<< $1)
+	if ip_is_v4 "$1" || ip_is_v6 "$1"; then
+		echo "$1"
+	else
+		echo "${1%%.*}"
+	fi
 }
 
 ###
