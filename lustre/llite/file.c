@@ -634,7 +634,7 @@ void ll_dom_finish_open(struct inode *inode, struct ptlrpc_request *req)
 	 */
 	body = req_capsule_server_get(&req->rq_pill, &RMF_MDT_BODY);
 	if (rnb->rnb_offset + rnb->rnb_len != body->mbo_dom_size &&
-	    !(inode && IS_ENCRYPTED(inode))) {
+	    !IS_ENCRYPTED(inode)) {
 		CERROR("%s: server returns off/len %llu/%u but size %llu\n",
 		       ll_i2sbi(inode)->ll_fsname, rnb->rnb_offset,
 		       rnb->rnb_len, body->mbo_dom_size);
