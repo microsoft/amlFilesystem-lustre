@@ -1852,6 +1852,8 @@ static int ll_rmfid(struct file *file, void __user *arg)
 	/* Only need to get the buflen */
 	if (get_user(nr, &ufa->fa_nr))
 		RETURN(-EFAULT);
+	if (nr == 0)
+		RETURN(-EINVAL);
 	/* DoS protection */
 	if (nr > OBD_MAX_FIDS_IN_ARRAY)
 		RETURN(-E2BIG);
