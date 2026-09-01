@@ -754,7 +754,7 @@ static const char *const obd_connect_names[] = {
 	"initial_transno",		/* 0x800 */
 	"inode_bit_locks",		/* 0x1000 */
 	"barrier",			/* 0x2000 */
-	"getattr_by_fid",		/* 0x4000 */
+	"attrfid_ftm",			/* 0x4000 */
 	"no_oh_for_devices",		/* 0x8000 */
 	"remote_client",		/* 0x10000 */
 	"remote_client_by_force",	/* 0x20000 */
