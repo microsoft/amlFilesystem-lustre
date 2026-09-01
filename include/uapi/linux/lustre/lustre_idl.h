@@ -750,7 +750,16 @@ struct ptlrpc_body_v2 {
 #define OBD_CONNECT_TRANSNO		      0x800ULL /* replay send transno */
 #define OBD_CONNECT_IBITS		     0x1000ULL /* not checked 2.11+ */
 #define OBD_CONNECT_BARRIER		     0x2000ULL /* write barrier */
-#define OBD_CONNECT_ATTRFID		     0x4000ULL /* Server GetAttr FID */
+/* was OBD_CONNECT_ATTRFID "Server GetAttr FID", which every MDS has supported
+ * since before Lustre 1.6 and clients have assumed since 2.11 (LU-8402), so
+ * nothing reads it any more.  Until 3.1.53 an MDT still grants it back to a
+ * peer that asked for it, since pre-2.18 clients list it in their
+ * CLIENT_CONNECT_MDT_REQD and will not mount without it; no other peer ever
+ * sees it on an MDT connection.  So the bit only means "fault tolerant
+ * MGS" on an MGC/MGS connection, which never carried ATTRFID: on an MDT
+ * connection it is still a pre-2.18 client's ATTRFID and must not be tested.
+ */
+#define OBD_CONNECT_FTM			     0x4000ULL /* fault tolerant MGS */
 #define OBD_CONNECT_NODEVOH		     0x8000ULL /* No open handle spec */
 #define OBD_CONNECT_RMT_CLIENT		    0x10000ULL /* Never used, gone 2.9*/
 #define OBD_CONNECT_RMT_CLIENT_FORCE	    0x20000ULL /* Never used, gone 2.9*/
@@ -875,7 +884,7 @@ struct ptlrpc_body_v2 {
 #define MDT_CONNECT_SUPPORTED  (OBD_CONNECT_RDONLY | OBD_CONNECT_VERSION | \
 				OBD_CONNECT_ACL | OBD_CONNECT_XATTR | \
 				OBD_CONNECT_IBITS | OBD_CONNECT_NODEVOH | \
-				OBD_CONNECT_ATTRFID | OBD_CONNECT_CANCELSET | \
+				OBD_CONNECT_CANCELSET | \
 				OBD_CONNECT_AT | OBD_CONNECT_BRW_SIZE | \
 				OBD_CONNECT_MDS_MDS | OBD_CONNECT_FID | \
 				OBD_CONNECT_LRU_RESIZE | OBD_CONNECT_VBR | \
@@ -966,7 +975,6 @@ struct ptlrpc_body_v2 {
 
 /* Features required for this version of the client to work with server */
 #define CLIENT_CONNECT_MDT_REQD (OBD_CONNECT_FID |	\
-				 OBD_CONNECT_ATTRFID |	\
 				 OBD_CONNECT_FULL20)
 
 /* INODE LOCK PARTS */
