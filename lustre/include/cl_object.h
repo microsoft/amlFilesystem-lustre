@@ -70,7 +70,8 @@
  * super-class definitions.
  */
 #include <linux/aio.h>
-#include <linux/fs.h>
+#include <lustre_compat/linux/fs.h>
+#include <lustre_compat/linux/folio.h>
 
 #include <linux/atomic.h>
 #include <linux/mutex.h>

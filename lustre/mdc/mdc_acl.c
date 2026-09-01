@@ -5,6 +5,7 @@
  */
 
 #include <lustre_acl.h>
+#include <obd_support.h>
 
 #include "mdc_internal.h"
 
