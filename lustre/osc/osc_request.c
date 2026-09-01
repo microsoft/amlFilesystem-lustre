@@ -4225,6 +4225,7 @@ static int __init osc_init(void)
 	unsigned int reqpool_size;
 	struct obd_type *type;
 	unsigned int reqsize;
+	const char *shpath = NULL;
 	int rc;
 
 	ENTRY;
@@ -4286,8 +4287,11 @@ static int __init osc_init(void)
 		GOTO(out_stop_grant, rc);
 
 	type = class_search_type(LUSTRE_OSC_NAME);
-	ldebugfs_add_symlink("osc_cache", type->typ_name, "../../shrinker/%s",
-			     shrinker_debugfs_path(osc_cache_shrinker));
+
+	shpath = shrinker_debugfs_path(osc_cache_shrinker);
+	if (shpath)
+		ldebugfs_add_symlink("osc_cache", type->typ_name,
+				     "../../shrinker/%s", shpath);
 	kobject_put(&type->typ_kobj);
 	RETURN(rc);
 

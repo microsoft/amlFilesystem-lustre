@@ -2238,6 +2238,7 @@ static struct shrinker *lu_site_shrinker;
 int __init lu_global_init(void)
 {
 	char path[MAX_OBD_NAME];
+	const char *shpath = NULL;
 	int result;
 
 	CDEBUG(D_INFO, "Lustre LU module (%p).\n", &lu_keys);
@@ -2284,9 +2285,11 @@ int __init lu_global_init(void)
 
 	ll_shrinker_register(lu_site_shrinker);
 
-	scnprintf(path, sizeof(path), "../shrinker/%s",
-		  shrinker_debugfs_path(lu_site_shrinker));
-	debugfs_create_symlink("lu_site", debugfs_lustre_root, path);
+	shpath = shrinker_debugfs_path(lu_site_shrinker);
+	if (shpath) {
+		scnprintf(path, sizeof(path), "../shrinker/%s", shpath);
+		debugfs_create_symlink("lu_site", debugfs_lustre_root, path);
+	}
 
 	result = rhashtable_init(&lu_env_rhash, &lu_env_rhash_params);
 

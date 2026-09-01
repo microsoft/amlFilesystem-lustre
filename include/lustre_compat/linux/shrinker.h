@@ -38,4 +38,20 @@ struct shrinker *ll_shrinker_alloc(unsigned int flags,
 void ll_shrinker_register(struct shrinker *shrinker);
 void ll_shrinker_free(struct shrinker *shrinker);
 
+static inline const char *shrinker_debugfs_path(struct shrinker *shrinker)
+{
+#ifndef CONFIG_SHRINKER_DEBUG
+ #ifndef HAVE_SHRINKER_ALLOC
+	struct ll_shrinker *s = container_of(shrinker, struct ll_shrinker,
+					     ll_shrinker);
+ #else
+	struct ll_shrinker *s = shrinker->private_data;
+ #endif
+#else /* !CONFIG_SHRINKER_DEBUG */
+	struct shrinker *s = shrinker;
+#endif /* CONFIG_SHRINKER_DEBUG */
+
+	return s->debugfs_entry->d_name.name;
+}
+
 #endif /* _LINUX_SHRINKER_LUSTRE_H */

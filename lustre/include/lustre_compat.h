@@ -71,22 +71,6 @@ static inline struct iovec iov_iter_iovec(const struct iov_iter *iter)
 #define migrate_folio	migratepage
 #endif
 
-static inline const char *shrinker_debugfs_path(struct shrinker *shrinker)
-{
-#ifndef CONFIG_SHRINKER_DEBUG
- #ifndef HAVE_SHRINKER_ALLOC
-	struct ll_shrinker *s = container_of(shrinker, struct ll_shrinker,
-					     ll_shrinker);
- #else
-	struct ll_shrinker *s = shrinker->private_data;
- #endif
-#else /* !CONFIG_SHRINKER_DEBUG */
-	struct shrinker *s = shrinker;
-#endif /* CONFIG_SHRINKER_DEBUG */
-
-	return s->debugfs_entry->d_name.name;
-}
-
 #ifndef HAVE_WB_STAT_MOD
 #define wb_stat_mod(wb, item, amount)	__add_wb_stat(wb, item, amount)
 #endif

@@ -1143,12 +1143,16 @@ int obd_pool_init(void)
 
 		if (parent) {
 			char path[MAX_OBD_NAME];
+			const char *shpath = NULL;
 
-			scnprintf(path, sizeof(path), "obd_pool-%d",
-				  pool_order);
-			ldebugfs_add_symlink(path, parent->d_name.name,
-					     "../../shrinker/%s",
-					     shrinker_debugfs_path(pool->pool_shrinker));
+			shpath = shrinker_debugfs_path(pool->pool_shrinker);
+			if (shpath) {
+				scnprintf(path, sizeof(path), "obd_pool-%d",
+					  pool_order);
+				ldebugfs_add_symlink(path, parent->d_name.name,
+						     "../../shrinker/%s",
+						     shpath);
+			}
 		}
 		pool_shrinkers[pool_order] = pool->pool_shrinker;
 		mutex_init(&pool->add_pages_mutex);
