@@ -7158,10 +7158,15 @@ static int mdt_connect_internal(const struct lu_env *env,
 				struct obd_connect_data *data, bool reconnect)
 {
 	const char *obd_name = mdt_obd_name(mdt);
+	__u64 connect_supported = MDT_CONNECT_SUPPORTED;
 
 	LASSERT(data != NULL);
 
-	data->ocd_connect_flags &= MDT_CONNECT_SUPPORTED;
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(3, 1, 53, 0)
+	/* was OBD_CONNECT_ATTRFID until 2.17.58, for old client compat */
+	connect_supported |= OBD_CONNECT_FTM;
+#endif
+	data->ocd_connect_flags &= connect_supported;
 
 	if (mdt->mdt_bottom->dd_rdonly &&
 	    !(data->ocd_connect_flags & OBD_CONNECT_MDS_MDS) &&
