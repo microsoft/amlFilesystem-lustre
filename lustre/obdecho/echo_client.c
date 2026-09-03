@@ -106,6 +106,9 @@ static struct cl_device *echo_dev2cl(struct echo_device *d)
 
 static struct echo_device *obd2echo_dev(const struct obd_device *obd)
 {
+	if (!obd->obd_lu_dev)
+		return NULL;
+
 	return cl2echo_dev(lu2cl_dev(obd->obd_lu_dev));
 }
 

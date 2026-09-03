@@ -926,10 +926,9 @@ static int lustre_index_backup_one(const struct lu_env *env,
 
 	ENTRY;
 
-	tgt_obj = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
-					     &libu->libu_fid, NULL));
-	if (IS_ERR_OR_NULL(tgt_obj))
-		GOTO(out, rc = tgt_obj ? PTR_ERR(tgt_obj) : -ENOENT);
+	tgt_obj = dt_object_find_slice(env, dev, &libu->libu_fid, NULL);
+	if (IS_ERR(tgt_obj))
+		GOTO(out, rc = PTR_ERR(tgt_obj));
 
 	if (!dt_object_exists(tgt_obj))
 		GOTO(out, rc = 0);
@@ -1058,11 +1057,10 @@ void lustre_index_backup(const struct lu_env *env, struct dt_device *dev,
 		}
 
 		lu_local_obj_fid(&fid, INDEX_BACKUP_OID);
-		parent = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
-						    &fid, NULL));
-		if (IS_ERR_OR_NULL(parent)) {
+		parent = dt_object_find_slice(env, dev, &fid, NULL);
+		if (IS_ERR(parent)) {
 			CERROR("%s: failed to locate backup dir: rc = %ld\n",
-			       devname, parent ? PTR_ERR(parent) : -ENOENT);
+			       devname, PTR_ERR(parent));
 			parent = NULL;
 			backup = false;
 			goto scan;
@@ -1149,23 +1147,20 @@ int lustre_index_restore(const struct lu_env *env, struct dt_device *dev,
 	lbuf.lb_buf = header;
 	lbuf.lb_len = sizeof(*header);
 
-	tgt_obj = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
-					     tgt_fid, NULL));
-	if (IS_ERR_OR_NULL(tgt_obj))
-		GOTO(out, rc = tgt_obj ? PTR_ERR(tgt_obj) : -ENOENT);
+	tgt_obj = dt_object_find_slice(env, dev, tgt_fid, NULL);
+	if (IS_ERR(tgt_obj))
+		GOTO(out, rc = PTR_ERR(tgt_obj));
 
-	bak_obj = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
-					     bak_fid, NULL));
-	if (IS_ERR_OR_NULL(bak_obj))
-		GOTO(out, rc = bak_obj ? PTR_ERR(bak_obj) : -ENOENT);
+	bak_obj = dt_object_find_slice(env, dev, bak_fid, NULL);
+	if (IS_ERR(bak_obj))
+		GOTO(out, rc = PTR_ERR(bak_obj));
 
 	if (!dt_object_exists(bak_obj))
 		GOTO(out, rc = -ENOENT);
 
-	parent_obj = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
-						parent_fid, NULL));
-	if (IS_ERR_OR_NULL(parent_obj))
-		GOTO(out, rc = parent_obj ? PTR_ERR(parent_obj) : -ENOENT);
+	parent_obj = dt_object_find_slice(env, dev, parent_fid, NULL);
+	if (IS_ERR(parent_obj))
+		GOTO(out, rc = PTR_ERR(parent_obj));
 
 	LASSERT(dt_object_exists(parent_obj));
 
@@ -1244,10 +1239,9 @@ int lustre_index_restore(const struct lu_env *env, struct dt_device *dev,
 
 	/* Drop cache before re-create it. */
 	dt_object_put_nocache(env, tgt_obj);
-	tgt_obj = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
-					     tgt_fid, &conf));
-	if (IS_ERR_OR_NULL(tgt_obj))
-		GOTO(out, rc = tgt_obj ? PTR_ERR(tgt_obj) : -ENOENT);
+	tgt_obj = dt_object_find_slice(env, dev, tgt_fid, &conf);
+	if (IS_ERR(tgt_obj))
+		GOTO(out, rc = PTR_ERR(tgt_obj));
 
 	LASSERT(!dt_object_exists(tgt_obj));
 

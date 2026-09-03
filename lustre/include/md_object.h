@@ -416,7 +416,12 @@ static inline struct md_object *md_object_find_slice(const struct lu_env *env,
 						     struct md_device *md,
 						     const struct lu_fid *f)
 {
-	return lu2md(lu_object_find_slice(env, md2lu_dev(md), f, NULL));
+	struct lu_object *o = lu_object_find_slice(env, md2lu_dev(md), f, NULL);
+
+	if (IS_ERR(o))
+		return ERR_CAST(o);
+
+	return lu2md(o);
 }
 
 

@@ -1980,6 +1980,19 @@ static inline struct dt_object *lu2dt(struct lu_object *l)
 	return container_of_safe(l, struct dt_object, do_lu);
 }
 
+static inline struct dt_object *
+dt_object_find_slice(const struct lu_env *env, struct dt_device *dev,
+		     const struct lu_fid *f, const struct lu_object_conf *conf)
+{
+	struct lu_object *o;
+
+	o = lu_object_find_slice(env, dt2lu_dev(dev), f, conf);
+	if (IS_ERR(o))
+		return ERR_CAST(o);
+
+	return lu2dt(o);
+}
+
 int  dt_object_init(struct dt_object *obj,
 		    struct lu_object_header *h, struct lu_device *d);
 

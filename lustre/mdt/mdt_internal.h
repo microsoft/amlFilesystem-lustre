@@ -1085,6 +1085,8 @@ static inline struct dt_object *mdt_obj2dt(struct mdt_object *mo)
 
 	lo = lu_object_locate(mo->mot_obj.lo_header,
 			      mdt->mdt_bottom->dd_lu_dev.ld_type);
+	if (!lo)
+		return NULL;
 
 	return lu2dt(lo);
 }

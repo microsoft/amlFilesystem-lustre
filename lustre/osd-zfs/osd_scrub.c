@@ -1405,9 +1405,9 @@ int osd_scrub_setup(const struct lu_env *env, struct osd_device *dev,
 	if (rc)
 		RETURN(rc);
 
-	obj = lu2dt(lu_object_find_slice(env, osd2lu_dev(dev), fid, NULL));
-	if (IS_ERR_OR_NULL(obj))
-		RETURN(obj ? PTR_ERR(obj) : -ENOENT);
+	obj = dt_object_find_slice(env, &dev->od_dt_dev, fid, NULL);
+	if (IS_ERR(obj))
+		RETURN(PTR_ERR(obj));
 
 	obj->do_body_ops = &osd_body_scrub_ops;
 	scrub->os_obj = obj;
@@ -1966,7 +1966,7 @@ static int osd_remove_ml_file(const struct lu_env *env, struct osd_device *dev,
 	if (rc)
 		RETURN(rc);
 
-	dt = lu2dt(lu_object_find_slice(env, osd2lu_dev(dev), fid, NULL));
+	dt = dt_object_find_slice(env, &dev->od_dt_dev, fid, NULL);
 	if (IS_ERR(dt))
 		RETURN(PTR_ERR(dt));
 

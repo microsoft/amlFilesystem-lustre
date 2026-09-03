@@ -2797,9 +2797,9 @@ int osd_scrub_setup(const struct lu_env *env, struct osd_device *dev,
 	filp_close(filp, NULL);
 	pop_ctxt(&saved, ctxt);
 
-	obj = lu2dt(lu_object_find_slice(env, osd2lu_dev(dev), fid, NULL));
-	if (IS_ERR_OR_NULL(obj))
-		RETURN(obj ? PTR_ERR(obj) : -ENOENT);
+	obj = dt_object_find_slice(env, &dev->od_dt_dev, fid, NULL);
+	if (IS_ERR(obj))
+		RETURN(PTR_ERR(obj));
 
 	guid_copy(&dev->od_uuid, (guid_t *)&sb->s_uuid);
 	scrub->os_obj = obj;

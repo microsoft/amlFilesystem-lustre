@@ -89,8 +89,14 @@ struct cl_object *cl_object_find(const struct lu_env *env,
 				 struct cl_device *cd, const struct lu_fid *fid,
 				 const struct cl_object_conf *c)
 {
+	struct lu_object *o;
+
 	might_sleep();
-	return lu2cl(lu_object_find_slice(env, cl2lu_dev(cd), fid, &c->coc_lu));
+	o = lu_object_find_slice(env, cl2lu_dev(cd), fid, &c->coc_lu);
+	if (IS_ERR(o))
+		return ERR_CAST(o);
+
+	return lu2cl(o);
 }
 EXPORT_SYMBOL(cl_object_find);
 
@@ -1099,10 +1105,11 @@ struct cl_device *cl_type_setup(const struct lu_env *env, struct lu_site *site,
 		} else {
 			ldto_device_free(env, d);
 			CERROR("can't init device '%s', %d\n", typename, rc);
-			d = ERR_PTR(rc);
+			return ERR_PTR(rc);
 		}
 	} else {
 		CERROR("Cannot allocate device: '%s'\n", typename);
+		return ERR_CAST(d);
 	}
 
 	return lu2cl_dev(d);

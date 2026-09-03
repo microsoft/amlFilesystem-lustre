@@ -3666,10 +3666,11 @@ static int llog_test_device_init(const struct lu_env *env, struct lu_device *lu,
 	CWARN("Setup llog-test device over %s device\n",
 	      lldev->llog_target_name);
 
+	if (!tgt->obd_lu_dev)
+		GOTO(cleanup_env, rc = -ENODEV);
+
 	OBD_SET_CTXT_MAGIC(&obd->obd_lvfs_ctxt);
 	dt = lu2dt_dev(tgt->obd_lu_dev);
-	if (IS_ERR(dt))
-		GOTO(cleanup_env, rc = PTR_ERR(dt));
 	obd->obd_lvfs_ctxt.dt = dt;
 
 	rc = llog_setup(&_env, tgt, &tgt->obd_olg, LLOG_TEST_ORIG_CTXT, tgt,

@@ -1267,11 +1267,13 @@ LUSTRE_WO_ATTR(force_sync);
 static int osp_sync_error_list_seq_show(struct seq_file *m, void *data)
 {
 	struct obd_device	*dev = m->private;
-	struct osp_device	*osp = lu2osp_dev(dev->obd_lu_dev);
+	struct osp_device	*osp;
 	struct osp_job_args	*ja;
 
-	if (osp == NULL)
+	if (!dev->obd_lu_dev)
 		return -EINVAL;
+
+	osp = lu2osp_dev(dev->obd_lu_dev);
 
 	if (list_empty(&osp->opd_sync_error_list))
 		return 0;

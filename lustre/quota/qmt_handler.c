@@ -1711,8 +1711,8 @@ int qmt_iocontrol(unsigned int cmd, struct obd_export *exp, int len,
 		  void *karg, void __user *uarg)
 {
 	struct obd_device *obd = exp->exp_obd;
-	struct qmt_device *qmt = lu2qmt_dev(obd->obd_lu_dev);
 	struct obd_ioctl_data *data;
+	struct qmt_device *qmt;
 	char *lqa = NULL;
 	__u32 start, end;
 	int rc = 0;
@@ -1722,11 +1722,13 @@ int qmt_iocontrol(unsigned int cmd, struct obd_export *exp, int len,
 	       obd->obd_name, cmd, len, karg, uarg);
 	data = karg;
 
-	if (IS_ERR_OR_NULL(qmt)) {
-		rc = PTR_ERR_OR_ZERO(qmt) ?: -EFAULT;
+	if (!obd->obd_lu_dev) {
+		rc = -ENODEV;
 		CERROR("%s: qmt addr is unset: rc = %d\n", obd->obd_name, rc);
 		RETURN(rc);
 	}
+
+	qmt = lu2qmt_dev(obd->obd_lu_dev);
 
 	/* qmt only supports LQA ioctls, for now */
 	if (cmd != OBD_IOC_LQACTL)

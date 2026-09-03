@@ -202,9 +202,10 @@ static int last_id_seq_show(struct seq_file *m, void *data)
 	if (obd == NULL)
 		return 0;
 
-	ofd = ofd_dev(obd->obd_lu_dev);
-	if (IS_ERR_OR_NULL(ofd))
+	if (!obd->obd_lu_dev)
 		return -ENODEV;
+
+	ofd = ofd_dev(obd->obd_lu_dev);
 
 	read_lock(&ofd->ofd_seq_list_lock);
 	list_for_each_entry(oseq, &ofd->ofd_seq_list, os_list) {
@@ -759,11 +760,12 @@ static ssize_t brw_size_show(struct kobject *kobj, struct attribute *attr,
 {
 	struct obd_device *obd = container_of(kobj, struct obd_device,
 					      obd_kset.kobj);
-	struct ofd_device *ofd = ofd_dev(obd->obd_lu_dev);
+	struct ofd_device *ofd;
 
-	if (IS_ERR_OR_NULL(ofd))
+	if (!obd->obd_lu_dev)
 		return -ENODEV;
 
+	ofd = ofd_dev(obd->obd_lu_dev);
 	return  scnprintf(buf, PAGE_SIZE, "%u\n",
 			  ofd->ofd_brw_size / ONE_MB_BRW_SIZE);
 }
@@ -773,13 +775,14 @@ static ssize_t brw_size_store(struct kobject *kobj, struct attribute *attr,
 {
 	struct obd_device *obd = container_of(kobj, struct obd_device,
 					      obd_kset.kobj);
-	struct ofd_device *ofd = ofd_dev(obd->obd_lu_dev);
+	struct ofd_device *ofd;
 	u64 val;
 	int rc;
 
-	if (IS_ERR_OR_NULL(ofd))
+	if (!obd->obd_lu_dev)
 		return -ENODEV;
 
+	ofd = ofd_dev(obd->obd_lu_dev);
 	rc = sysfs_memparse(buffer, count, &val, "MiB");
 	if (rc < 0)
 		return rc;
@@ -923,11 +926,12 @@ LUSTRE_RW_ATTR(lfsck_speed_limit);
 static int lfsck_layout_seq_show(struct seq_file *m, void *data)
 {
 	struct obd_device *obd = m->private;
-	struct ofd_device *ofd = ofd_dev(obd->obd_lu_dev);
+	struct ofd_device *ofd;
 
-	if (IS_ERR_OR_NULL(ofd))
+	if (!obd->obd_lu_dev)
 		return -ENODEV;
 
+	ofd = ofd_dev(obd->obd_lu_dev);
 	return lfsck_dump(m, ofd->ofd_osd, LFSCK_TYPE_LAYOUT);
 }
 
@@ -946,11 +950,12 @@ LDEBUGFS_SEQ_FOPS_RO(lfsck_layout);
 static int lfsck_verify_pfid_seq_show(struct seq_file *m, void *data)
 {
 	struct obd_device *obd = m->private;
-	struct ofd_device *ofd = ofd_dev(obd->obd_lu_dev);
+	struct ofd_device *ofd;
 
-	if (IS_ERR_OR_NULL(ofd))
+	if (!obd->obd_lu_dev)
 		return -ENODEV;
 
+	ofd = ofd_dev(obd->obd_lu_dev);
 	seq_printf(m, "switch: %s\ndetected: %llu\nrepaired: %llu\n",
 		   ofd->ofd_lfsck_verify_pfid ? "on" : "off",
 		   ofd->ofd_inconsistency_self_detected,
@@ -981,13 +986,14 @@ lfsck_verify_pfid_seq_write(struct file *file, const char __user *buffer,
 {
 	struct seq_file *m = file->private_data;
 	struct obd_device *obd = m->private;
-	struct ofd_device *ofd = ofd_dev(obd->obd_lu_dev);
+	struct ofd_device *ofd;
 	bool val;
 	int rc;
 
-	if (IS_ERR_OR_NULL(ofd))
+	if (!obd->obd_lu_dev)
 		return -ENODEV;
 
+	ofd = ofd_dev(obd->obd_lu_dev);
 	rc = kstrtobool_from_user(buffer, count, &val);
 	if (rc)
 		return rc;

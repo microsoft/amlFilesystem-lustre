@@ -78,7 +78,10 @@ struct cl_object *lov_sub_find(const struct lu_env *env,
 	ENTRY;
 
 	o = lu_object_find_at(env, cl2lu_dev(dev), fid, &conf->coc_lu);
-	LASSERT(ergo(!IS_ERR(o), o->lo_dev->ld_type == &lovsub_device_type));
+	if (IS_ERR(o))
+		RETURN(ERR_CAST(o));
+
+	LASSERT(o->lo_dev->ld_type == &lovsub_device_type);
 	RETURN(lu2cl(o));
 }
 

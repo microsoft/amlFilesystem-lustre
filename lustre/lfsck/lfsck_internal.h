@@ -1266,14 +1266,14 @@ lfsck_object_find_by_dev_new(const struct lu_env *env, struct dt_device *dev,
 	struct lu_object_conf	*conf = &lfsck_env_info(env)->lti_conf;
 
 	conf->loc_flags = LOC_F_NEW;
-	return lu2dt(lu_object_find_slice(env, dt2lu_dev(dev), fid, conf));
+	return dt_object_find_slice(env, dev, fid, conf);
 }
 
 static inline struct dt_object *
 lfsck_object_find_by_dev(const struct lu_env *env, struct dt_device *dev,
 			 const struct lu_fid *fid)
 {
-	return lu2dt(lu_object_find_slice(env, dt2lu_dev(dev), fid, NULL));
+	return dt_object_find_slice(env, dev, fid, NULL);
 }
 
 static inline struct dt_device *

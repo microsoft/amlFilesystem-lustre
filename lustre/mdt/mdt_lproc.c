@@ -694,10 +694,12 @@ static ssize_t name##_show(struct kobject *kobj, struct attribute *attr,\
 {									\
 	struct obd_device *obd = container_of(kobj, struct obd_device,	\
 					      obd_kset.kobj);		\
-	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);		\
+	struct mdt_device *mdt;						\
 									\
-	if (IS_ERR_OR_NULL(mdt))					\
+	if (!obd->obd_lu_dev)						\
 		return -ENOENT;						\
+									\
+	mdt = mdt_dev(obd->obd_lu_dev);					\
 	if (mdt->mdt_##name == MDT_INVALID_GID)				\
 		return scnprintf(buf, PAGE_SIZE, "-1\n");		\
 									\
@@ -708,12 +710,14 @@ static ssize_t name##_store(struct kobject *kobj, struct attribute *attr,\
 {									\
 	struct obd_device *obd = container_of(kobj, struct obd_device,	\
 					      obd_kset.kobj);		\
-	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);		\
+	struct mdt_device *mdt;						\
 	int val;							\
 	int rc;								\
 									\
-	if (IS_ERR_OR_NULL(mdt))					\
+	if (!obd->obd_lu_dev)						\
 		return -ENOENT;						\
+									\
+	mdt = mdt_dev(obd->obd_lu_dev);					\
 	rc = kstrtoint(buffer, 0, &val);				\
 	if (rc)								\
 		return rc;						\
@@ -734,9 +738,12 @@ static ssize_t name##_show(struct kobject *kobj, struct attribute *attr,\
 {									\
 	struct obd_device *obd = container_of(kobj, struct obd_device,	\
 					      obd_kset.kobj);		\
-	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);		\
-	if (IS_ERR_OR_NULL(mdt))					\
+	struct mdt_device *mdt;						\
+									\
+	if (!obd->obd_lu_dev)						\
 		return -ENOENT;						\
+									\
+	mdt = mdt_dev(obd->obd_lu_dev);					\
 	return scnprintf(buf, PAGE_SIZE, "%u\n", mdt->mdt_##name);	\
 }									\
 static ssize_t name##_store(struct kobject *kobj, struct attribute *attr,\
@@ -744,11 +751,14 @@ static ssize_t name##_store(struct kobject *kobj, struct attribute *attr,\
 {									\
 	struct obd_device *obd = container_of(kobj, struct obd_device,	\
 					      obd_kset.kobj);		\
-	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);		\
+	struct mdt_device *mdt;						\
 	bool val;							\
 	int rc;								\
-	if (IS_ERR_OR_NULL(mdt))					\
+									\
+	if (!obd->obd_lu_dev)						\
 		return -ENOENT;						\
+									\
+	mdt = mdt_dev(obd->obd_lu_dev);					\
 	rc = kstrtobool(buffer, &val);					\
 	if (rc)								\
 		return rc;						\

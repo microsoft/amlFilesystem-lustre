@@ -348,7 +348,12 @@ struct mdd_object *mdd_object_find(const struct lu_env *env,
 				   struct mdd_device *d,
 				   const struct lu_fid *f)
 {
-	return md2mdd_obj(md_object_find_slice(env, &d->mdd_md_dev, f));
+	struct md_object *o = md_object_find_slice(env, &d->mdd_md_dev, f);
+
+	if (IS_ERR(o))
+		return ERR_CAST(o);
+
+	return md2mdd_obj(o);
 }
 
 /*

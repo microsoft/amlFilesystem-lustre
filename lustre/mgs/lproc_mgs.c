@@ -209,10 +209,14 @@ static ssize_t fstype_show(struct kobject *kobj, struct attribute *attr,
 {
 	struct obd_device *obd = container_of(kobj, struct obd_device,
 					      obd_kset.kobj);
-	struct mgs_device *mgs = lu2mgs_dev(obd->obd_lu_dev);
+	struct mgs_device *mgs;
 	struct kobject *osd_kobj;
 
-	if (!mgs || !mgs->mgs_fstype || !mgs->mgs_bottom)
+	if (!obd->obd_lu_dev)
+		return -ENODEV;
+
+	mgs = lu2mgs_dev(obd->obd_lu_dev);
+	if (!mgs->mgs_fstype || !mgs->mgs_bottom)
 		return -ENODEV;
 
 	osd_kobj = &mgs->mgs_bottom->dd_kobj;
@@ -225,10 +229,14 @@ static ssize_t mntdev_show(struct kobject *kobj, struct attribute *attr,
 {
 	struct obd_device *obd = container_of(kobj, struct obd_device,
 					      obd_kset.kobj);
-	struct mgs_device *mgs = lu2mgs_dev(obd->obd_lu_dev);
+	struct mgs_device *mgs;
 	struct kobject *osd_kobj;
 
-	if (!mgs || !mgs->mgs_mntdev || !mgs->mgs_bottom)
+	if (!obd->obd_lu_dev)
+		return -ENODEV;
+
+	mgs = lu2mgs_dev(obd->obd_lu_dev);
+	if (!mgs->mgs_mntdev || !mgs->mgs_bottom)
 		return -ENODEV;
 
 	osd_kobj = &mgs->mgs_bottom->dd_kobj;
