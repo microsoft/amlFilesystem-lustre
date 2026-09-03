@@ -508,8 +508,9 @@ sub process {
 	my $avail_has_inclusion = 0;
 	$prefix = '';
 
-	my $llapi = ($filename =~ /llapi/i)? 1 : 0;
+	my $llapi = ($filename =~ /l(?:l|ustre)api/i)? 1 : 0;
 	my $see_also_done_refs = 0;
+	my $see_also_preamble = 0;
 
 	my $curr_header = '';
 	my @remaining_headers = @standard_headers;
@@ -729,6 +730,7 @@ sub process {
 
 # check that only proper sections are used with .SH
 		if ($line =~ /^\.(S[HS])\s\"?(.*)\"?/) {
+			my $macro = $1;
 			my $header = $2;
 			if ($prevline =~ /^\.([TPL]?P|br|sp)/) {
 				WARN("MACRO_BEFORE_HEADER",
@@ -739,7 +741,22 @@ sub process {
 				WARN("SECTION_HEADER_QUOTED",
 				     "Remove the quotes the section header\n" . $herecurr);
 			}
-			next if ($1 =~ /SS/);
+# A .SS inside SEE ALSO starts its own run of references, which may be
+# introduced by a description line and a .PP (or .P, or .LP).
+			if ($macro =~ /SS/) {
+				if ($curr_header =~ /SEE ALSO/) {
+# The .SS ends the previous run, so its last reference takes
+# the same no-trailing-comma test as the last of the section.
+					if ($prevline =~ /^\.BR \b.*\b \([1-8]\),$/) {
+						$prevline =~ /(.*)$/;
+						WARN("SEE_ALSO_FORMAT_COMMA",
+						     "'$1' should NOT end with ',' if it is the last reference\n" . $hereprev);
+					}
+					$see_also_preamble = 1;
+					$see_also_done_refs = 0;
+				}
+				next;
+			}
 
 # check ending of last section
 			for ($curr_header) {
@@ -981,6 +998,11 @@ EOM
 		}
 		if (/SEE ALSO/) {
 			if ($line !~ /^\.BR \b.*\b \([1-8]\),?$/) {
+				if ($see_also_preamble && $line =~ /^\.(?:P|PP|LP)$/) {
+					$see_also_preamble = 0;
+					next;
+				}
+				next if ($see_also_preamble && $line !~ /^\./);
 				next if ($see_also_done_refs);
 				if ($prevline =~ /^\.BR \b.*\b \([1-8]\)(,)?$/) {
 					$see_also_done_refs = 1;
@@ -1000,7 +1022,8 @@ EOM
 					 "All non-reference information must be at the end of this section (all man page references must be sequential).\n" . $hereprev);
 				next;
 			}
-			if ($prevline !~ /SEE ALSO/) {
+			$see_also_preamble = 0;
+			if ($prevline =~ /^\.BR \b.*\b \([1-8]\),?$/) {
 # The list should be ordered by section number and then alphabetically by name.
 				$prevline =~ /.BR \b(.*)\b \(([1-8])\)/;
 				my $prevfile = $1;
