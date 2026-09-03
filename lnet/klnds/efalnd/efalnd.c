@@ -3144,7 +3144,7 @@ kefalnd_startup(struct lnet_ni *ni)
 	efa_ni->efa_dev = efa_dev;
 	ni->ni_dev_cpt = efa_dev->cpt;
 
-#ifdef IN_KERNEL_HAVE_OFED_IB_DMA_PCI_P2P_DMA_SUPPORTED
+#ifdef HAVE_EFA_IB_DMA_PCI_P2P_DMA_SUPPORTED
 	ni->ni_p2pdma = ib_dma_pci_p2p_dma_supported(efa_dev->ib_dev);
 #endif
 

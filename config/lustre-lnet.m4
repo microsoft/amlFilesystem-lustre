@@ -679,6 +679,16 @@ AS_IF([test $ENABLE_EFA = "no"], [
 			[ibdev_to_node() is defined])
 	])
 
+	LB_CHECK_COMPILE([if 'ib_dma_pci_p2p_dma_supported' exists],
+	efa_ib_dma_pci_p2p_dma_supported, [
+		#include <rdma/ib_verbs.h>
+	],[
+		ib_dma_pci_p2p_dma_supported(NULL);
+	],[
+		AC_DEFINE(HAVE_EFA_IB_DMA_PCI_P2P_DMA_SUPPORTED, 1,
+			[ib_dma_pci_p2p_dma_supported() is defined])
+	])
+
 	EFALND="efalnd"
 	AC_SUBST(EFALND)
 	AC_SUBST(EFA_INCLUDE_PATH)

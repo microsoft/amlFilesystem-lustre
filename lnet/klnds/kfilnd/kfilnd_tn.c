@@ -458,7 +458,7 @@ static void kfilnd_tn_finalize(struct kfilnd_transaction *tn, bool *tn_released)
 			dma_unmap_sgtable(device, &tn->tn_sgt, dmadir, 0);
 
 		CDEBUG(D_NET,
-		       "tn %p tn_sgt %p sgl %p dir %u orig_nents %u nents %u device %s rc %d\n",
+		       "tn %p tn_sgt %p sgl %p dir %u orig_nents %u nents %u p2p %s rc %d\n",
 		       tn, &tn->tn_sgt, tn->tn_sgt.sgl, tn->tn_dmadir,
 		       tn->tn_sgt.orig_nents, tn->tn_sgt.nents,
 		       tn->tn_p2p ? "y" : "n", rc);
@@ -1999,7 +1999,7 @@ static int kfilnd_tn_set_sgl_buf(struct lnet_ni *ni,
 	tn->tn_sgt_mapped = true;
 
 	CDEBUG(D_NET,
-	       "tn %p tn_sgt %p sgl %p dir %u nob %d alloc_nents %u orig_nents %u nents %u device %s\n",
+	       "tn %p tn_sgt %p sgl %p dir %u nob %d alloc_nents %u orig_nents %u nents %u p2p %s\n",
 	       tn, &tn->tn_sgt, tn->tn_sgt.sgl, tn->tn_dmadir, tn->tn_nob,
 	       tn->tn_sgt_alloc_nents, tn->tn_sgt.orig_nents, tn->tn_sgt.nents,
 	       tn->tn_p2p ? "y" : "n");
