@@ -1,4 +1,4 @@
-.TH LUSTREAPI 7 2024-08-28 Lustre "The Lustre API library"
+.TH LUSTREAPI 7 2026-09-03 "Lustre User API" "The Lustre API library"
 .SH NAME
 lustreapi \- The Lustre API library
 .SH SYNOPSIS
@@ -14,9 +14,9 @@ Lustre contributors
 .SH AVAILABILITY
 .B lustreapi
 is part of the
-.B lustre (8)
-filesystem package since release 0.10.0
-.\" Added in release 0.9.1
+.BR lustre (7)
+user application interface library since release 0.10.0
+.\" Added in commit 0.9.1
 .SH SEE ALSO
 .SS Changelogs
 Functions for accessing and managing Lustre changelogs.
@@ -41,11 +41,11 @@ Functions for working with Lustre File Identifiers (FIDs).
 .PP
 .BR llapi_fd2fid (3),
 .BR llapi_fd2parent (3),
-.BR llapi_fid2path (3),
-.BR llapi_fid2path_at (3),
 .BR llapi_fid_hash (3),
 .BR llapi_fid_parse (3),
 .BR llapi_fid_to_handle (3),
+.BR llapi_fid2path (3),
+.BR llapi_fid2path_at (3),
 .BR llapi_path2fid (3),
 .BR llapi_path2parent (3),
 .BR llapi_rmfid (3),
@@ -141,10 +141,10 @@ Functions for managing Persistent Client Cache operations.
 .BR llapi_pcc_detach_fid_fd (3),
 .BR llapi_pcc_detach_fid_str (3),
 .BR llapi_pcc_detach_file (3),
-.BR llapi_pccdev_get (3),
-.BR llapi_pccdev_set (3),
 .BR llapi_pcc_state_get (3),
-.BR llapi_pcc_state_get_fd (3)
+.BR llapi_pcc_state_get_fd (3),
+.BR llapi_pccdev_get (3),
+.BR llapi_pccdev_set (3)
 .SS Pool Operations
 Functions for managing OST pools.
 .PP
