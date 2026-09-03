@@ -791,6 +791,7 @@ static int lst_sessions_show_dump(struct sk_buff *msg,
 	const struct ln_key_list *all[] = {
 		&lst_session_keys, NULL
 	};
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
 	int seq = cb->nlh->nlmsg_seq;
@@ -809,6 +810,7 @@ static int lst_sessions_show_dump(struct sk_buff *msg,
 		node_count++;
 
 	rc = lnet_genl_send_scalar_list(msg, portid, seq, &lst_family,
+					gnlh->version,
 					NLM_F_CREATE | NLM_F_MULTI,
 					LNET_SELFTEST_CMD_SESSIONS, all);
 	if (rc < 0) {
@@ -940,6 +942,7 @@ err_conf:
 
 		rc = lnet_genl_send_scalar_list(msg, info->snd_portid,
 						info->snd_seq, &lst_family,
+						gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_SELFTEST_CMD_SESSIONS,
 						all);
@@ -1228,6 +1231,7 @@ static int lst_groups_show_dump(struct sk_buff *msg,
 				struct netlink_callback *cb)
 {
 	struct lst_genl_group_list *glist = lst_group_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
 	int seq = cb->nlh->nlmsg_seq;
@@ -1239,6 +1243,7 @@ static int lst_groups_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq, &lst_family,
+						gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_SELFTEST_CMD_GROUPS, all);
 		if (rc < 0) {

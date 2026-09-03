@@ -3121,9 +3121,11 @@ static int lnet_genl_parse_list(struct sk_buff *msg,
 }
 
 int lnet_genl_send_scalar_list(struct sk_buff *msg, u32 portid, u32 seq,
-			       const struct genl_family *family, int flags,
-			       u8 cmd, const struct ln_key_list *data[])
+			       const struct genl_family *family,
+			       u8 version, int flags, u8 cmd,
+			       const struct ln_key_list *data[])
 {
+	struct genlmsghdr *gnlh;
 	int rc = 0;
 	void *hdr;
 
@@ -3133,6 +3135,9 @@ int lnet_genl_send_scalar_list(struct sk_buff *msg, u32 portid, u32 seq,
 	hdr = genlmsg_put(msg, portid, seq, family, flags, cmd);
 	if (!hdr)
 		GOTO(canceled, rc = -EMSGSIZE);
+
+	gnlh = (struct genlmsghdr *)((char *)hdr - GENL_HDRLEN);
+	gnlh->version = min_t(u8, version, family->version);
 
 	rc = lnet_genl_parse_list(msg, data, 0);
 	if (rc < 0)
@@ -5443,6 +5448,7 @@ static const struct ln_key_list cpt_of_nid_props_list = {
 static int lnet_cpt_of_nid_show_dump(struct sk_buff *msg,
 				     struct netlink_callback *cb)
 {
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct lnet_genl_nid_cpt_list *lgncl;
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
@@ -5466,6 +5472,7 @@ static int lnet_cpt_of_nid_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq, &lnet_family,
+						gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_CPT_OF_NID, all);
 		if (rc < 0) {
@@ -6145,7 +6152,8 @@ static int lnet_net_show_dump(struct sk_buff *msg,
 			}
 
 			rc = lnet_genl_send_scalar_list(msg, portid, seq,
-							&lnet_family, flags,
+							&lnet_family,
+							gnlh->version, flags,
 							LNET_CMD_NETS, all);
 			if (rc < 0) {
 				NL_SET_ERR_MSG(extack, "failed to send key table");
@@ -7616,7 +7624,7 @@ static int lnet_route_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lnet_family,
+						&lnet_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_ROUTES, all);
 		if (rc < 0) {
@@ -8062,7 +8070,7 @@ static int lnet_peer_ni_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lnet_family,
+						&lnet_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_PEERS, all);
 		if (rc < 0) {
@@ -8773,6 +8781,7 @@ static int lnet_ping_show_dump(struct sk_buff *msg,
 			       struct netlink_callback *cb)
 {
 	struct lnet_genl_ping_list *plist = lnet_ping_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
 	int seq = cb->nlh->nlmsg_seq;
@@ -8785,7 +8794,7 @@ static int lnet_ping_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lnet_family,
+						&lnet_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_PING, all);
 		if (rc < 0) {
@@ -8890,7 +8899,8 @@ cant_reach:
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq, &lnet_family,
-						flags, LNET_CMD_PING, fail);
+						gnlh->version, flags,
+						LNET_CMD_PING, fail);
 		if (rc < 0) {
 			NL_SET_ERR_MSG(extack,
 				       "failed to send new key table");
@@ -9022,6 +9032,7 @@ static int lnet_ping_cmd(struct sk_buff *skb, struct genl_info *info)
 
 	rc = lnet_genl_send_scalar_list(reply, info->snd_portid,
 					info->snd_seq, &lnet_family,
+					gnlh->version,
 					NLM_F_CREATE | NLM_F_MULTI,
 					LNET_CMD_PING, all);
 	if (rc < 0) {
@@ -9157,7 +9168,8 @@ static int lnet_ping_cmd(struct sk_buff *skb, struct genl_info *info)
 
 		rc = lnet_genl_send_scalar_list(reply, info->snd_portid,
 						info->snd_seq, &lnet_family,
-						flags, LNET_CMD_PING, fail);
+						gnlh->version, flags,
+						LNET_CMD_PING, fail);
 		if (rc < 0) {
 			GENL_SET_ERR_MSG(info,
 					 "failed to send new key table");
@@ -9323,6 +9335,7 @@ static int lnet_peer_dist_show_dump(struct sk_buff *msg,
 				    struct netlink_callback *cb)
 {
 	struct lnet_genl_processid_list *plist = lnet_peer_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
 	int seq = cb->nlh->nlmsg_seq;
@@ -9335,7 +9348,7 @@ static int lnet_peer_dist_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lnet_family,
+						&lnet_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_PEER_DIST, all);
 		if (rc < 0) {
@@ -9622,6 +9635,7 @@ static const struct ln_key_list debug_recovery_attr_list = {
 static int lnet_debug_recovery_show_dump(struct sk_buff *msg,
 					 struct netlink_callback *cb)
 {
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct lnet_genl_debug_recovery_list *drlist;
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
@@ -9676,7 +9690,7 @@ static int lnet_debug_recovery_show_dump(struct sk_buff *msg,
 
 		all[0] = keys;
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lnet_family,
+						&lnet_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_DBG_RECOV, all);
 		if (rc < 0) {
@@ -9880,6 +9894,7 @@ static int lnet_fault_show_dump(struct sk_buff *msg,
 				struct netlink_callback *cb)
 {
 	struct lnet_genl_fault_rule_list *rlist = lnet_fault_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
 	int seq = cb->nlh->nlmsg_seq;
@@ -9899,7 +9914,7 @@ static int lnet_fault_show_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lnet_family,
+						&lnet_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LNET_CMD_FAULT, all);
 		if (rc < 0) {
@@ -10420,6 +10435,7 @@ static int lnet_stats_show_dump(struct sk_buff *msg,
 				struct netlink_callback *cb)
 {
 	const struct ln_key_list *all[] = { &lnet_stats_list, NULL };
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct netlink_ext_ack *extack = cb->extack;
 	int portid = NETLINK_CB(cb->skb).portid;
 	int seq = cb->nlh->nlmsg_seq;
@@ -10443,6 +10459,7 @@ static int lnet_stats_show_dump(struct sk_buff *msg,
 	health = &counters.lct_health;
 
 	rc = lnet_genl_send_scalar_list(msg, portid, seq, &lnet_family,
+					gnlh->version,
 					NLM_F_CREATE | NLM_F_MULTI,
 					LNET_CMD_STATS, all);
 	if (rc < 0) {
