@@ -2644,8 +2644,9 @@ EXPORT_SYMBOL(tgt_brw_read);
 static int tgt_shortio2pages(struct niobuf_local *local, int npages,
 			     unsigned char *buf, unsigned int size)
 {
-	int	i, off, len;
-	char	*ptr;
+	unsigned int off, len;
+	char *ptr;
+	int i;
 
 	for (i = 0; i < npages; i++) {
 		off = local[i].lnb_page_offset & ~PAGE_MASK;
@@ -2654,10 +2655,13 @@ static int tgt_shortio2pages(struct niobuf_local *local, int npages,
 		if (len == 0)
 			continue;
 
-		CDEBUG(D_PAGE, "index %d offset = %d len = %d left = %d\n",
+		CDEBUG(D_PAGE, "index %d offset = %u len = %u left = %u\n",
 		       i, off, len, size);
 		ptr = lnb_kmap_local(&local[i]);
-		memcpy(ptr + off, buf, len < size ? len : size);
+		if (len > size)
+			return -EINVAL;
+
+		memcpy(ptr + off, buf, len);
 		kunmap_local(ptr);
 		buf += len;
 		size -= len;
@@ -2881,13 +2885,28 @@ int tgt_brw_write(struct tgt_session_info *tsi)
 						     RCL_CLIENT);
 		short_io_buf = req_capsule_client_get(&req->rq_pill,
 						      &RMF_SHORT_IO);
-		CDEBUG(D_INFO, "Client use short io for data transfer, size = %d\n",
+		CDEBUG(D_INFO, "Client use short io for data transfer, size = %u\n",
 			       short_io_size);
 
 		/* Copy short io buf to pages */
 		rc = tgt_shortio2pages(local_nb, npages, short_io_buf,
 				       short_io_size);
 		desc = NULL;
+		if (rc < 0) {
+			unsigned int declared = 0;
+
+			for (i = 0; i < niocount; i++)
+				declared += remote_nb[i].rnb_len;
+
+			CDEBUG_LIMIT(D_ERROR,
+				     "%s: short IO write from %s declares %u bytes but sends %u: rc = %d\n",
+				     obd_name, obd_export_nid2str(exp),
+				     declared, short_io_size, rc);
+			/* resending cannot fix a malformed request, so reply
+			 * with the error instead of dropping the reply
+			 */
+			GOTO(out_commitrw, rc);
+		}
 	} else {
 		desc = ptlrpc_prep_bulk_exp(req, npages, ioobj_max_brw_get(ioo),
 					    PTLRPC_BULK_GET_SINK,
