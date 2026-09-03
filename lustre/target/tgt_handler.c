@@ -2121,16 +2121,17 @@ static int check_read_checksum(struct niobuf_local *local_nb, int npages,
 }
 
 static int tgt_pages2shortio(struct niobuf_local *local, int npages,
-			     unsigned char *buf, int size)
+			     unsigned char *buf, unsigned int size)
 {
-	int	i, off, len, copied = size;
-	char	*ptr;
+	unsigned int off, len, copied = size;
+	char *ptr;
+	int i;
 
 	for (i = 0; i < npages; i++) {
 		off = local[i].lnb_page_offset & ~PAGE_MASK;
 		len = local[i].lnb_len;
 
-		CDEBUG(D_PAGE, "index %d offset = %d len = %d left = %d\n",
+		CDEBUG(D_PAGE, "index %d offset = %u len = %u left = %u\n",
 		       i, off, len, size);
 		if (len > size)
 			return -EINVAL;
@@ -2578,7 +2579,7 @@ int tgt_brw_read(struct tgt_session_info *tsi)
 		if (body->oa.o_valid & OBD_MD_FLFLAGS &&
 		    body->oa.o_flags & OBD_FL_SHORT_IO) {
 			unsigned char *short_io_buf;
-			int short_io_size;
+			unsigned int short_io_size;
 
 			short_io_buf = req_capsule_server_get(&req->rq_pill,
 							      &RMF_SHORT_IO);
@@ -2587,11 +2588,36 @@ int tgt_brw_read(struct tgt_session_info *tsi)
 							     RCL_SERVER);
 			rc = tgt_pages2shortio(local_nb, npages_read,
 					       short_io_buf, short_io_size);
-			if (rc >= 0)
+			if (rc < 0) {
+				unsigned int declared = 0;
+				int niocount;
+
+				/* ioo_bufcnt is not checked against the
+				 * niobuf array size on this path, so bound
+				 * the sum by what the client actually sent
+				 */
+				niocount = req_capsule_get_size(&req->rq_pill,
+						&RMF_NIOBUF_REMOTE, RCL_CLIENT)
+					   / sizeof(*remote_nb);
+				for (i = 0; i < niocount; i++)
+					declared += remote_nb[i].rnb_len;
+
 				req_capsule_shrink(&req->rq_pill,
-						   &RMF_SHORT_IO, rc,
+						   &RMF_SHORT_IO, 0,
 						   RCL_SERVER);
-			rc = rc > 0 ? 0 : rc;
+				CDEBUG_LIMIT(D_ERROR,
+					     "%s: short IO read from %s declares %u bytes but the reply holds %u: rc = %d\n",
+					     obd_name, obd_export_nid2str(exp),
+					     declared, short_io_size, rc);
+				/* resending cannot fix a malformed request, so
+				 * reply with the error instead of dropping the
+				 * reply
+				 */
+				GOTO(out_commitrw, rc);
+			}
+			req_capsule_shrink(&req->rq_pill, &RMF_SHORT_IO, rc,
+					   RCL_SERVER);
+			rc = 0;
 		} else if (!CFS_FAIL_PRECHECK(OBD_FAIL_PTLRPC_CLIENT_BULK_CB2)) {
 			rc = target_bulk_io(exp, desc);
 		}
@@ -2658,8 +2684,9 @@ EXPORT_SYMBOL(tgt_brw_read);
 static int tgt_shortio2pages(struct niobuf_local *local, int npages,
 			     unsigned char *buf, unsigned int size)
 {
-	int	i, off, len;
-	char	*ptr;
+	unsigned int off, len;
+	char *ptr;
+	int i;
 
 	for (i = 0; i < npages; i++) {
 		off = local[i].lnb_page_offset & ~PAGE_MASK;
@@ -2668,10 +2695,13 @@ static int tgt_shortio2pages(struct niobuf_local *local, int npages,
 		if (len == 0)
 			continue;
 
-		CDEBUG(D_PAGE, "index %d offset = %d len = %d left = %d\n",
+		CDEBUG(D_PAGE, "index %d offset = %u len = %u left = %u\n",
 		       i, off, len, size);
+		if (len > size)
+			return -EINVAL;
+
 		ptr = lnb_kmap_local(&local[i]);
-		memcpy(ptr + off, buf, len < size ? len : size);
+		memcpy(ptr + off, buf, len);
 		kunmap_local(ptr);
 		buf += len;
 		size -= len;
@@ -2895,13 +2925,28 @@ int tgt_brw_write(struct tgt_session_info *tsi)
 						     RCL_CLIENT);
 		short_io_buf = req_capsule_client_get(&req->rq_pill,
 						      &RMF_SHORT_IO);
-		CDEBUG(D_INFO, "Client use short io for data transfer, size = %d\n",
+		CDEBUG(D_INFO, "Client use short io for data transfer, size = %u\n",
 			       short_io_size);
 
 		/* Copy short io buf to pages */
 		rc = tgt_shortio2pages(local_nb, npages, short_io_buf,
 				       short_io_size);
 		desc = NULL;
+		if (rc < 0) {
+			unsigned int declared = 0;
+
+			for (i = 0; i < niocount; i++)
+				declared += remote_nb[i].rnb_len;
+
+			CDEBUG_LIMIT(D_ERROR,
+				     "%s: short IO write from %s declares %u bytes but sends %u: rc = %d\n",
+				     obd_name, obd_export_nid2str(exp),
+				     declared, short_io_size, rc);
+			/* resending cannot fix a malformed request, so reply
+			 * with the error instead of dropping the reply
+			 */
+			GOTO(out_commitrw, rc);
+		}
 	} else {
 		desc = ptlrpc_prep_bulk_exp(req, npages, ioobj_max_brw_get(ioo),
 					    PTLRPC_BULK_GET_SINK,
