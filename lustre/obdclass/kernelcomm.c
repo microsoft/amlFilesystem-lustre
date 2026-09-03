@@ -169,6 +169,7 @@ static int lustre_device_list_dump(struct sk_buff *msg,
 				   struct netlink_callback *cb)
 {
 	struct genl_dev_list *glist = device_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
 	struct obd_device *filter = glist->gdl_target;
 	struct obd_device *obd = NULL;
 	struct netlink_ext_ack *extack = cb->extack;
@@ -183,7 +184,7 @@ static int lustre_device_list_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lustre_family,
+						&lustre_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LUSTRE_CMD_DEVICES, all);
 		if (rc < 0) {
@@ -496,7 +497,7 @@ static int lustre_targets_dump(struct sk_buff *msg,
 		};
 
 		rc = lnet_genl_send_scalar_list(msg, portid, seq,
-						&lustre_family,
+						&lustre_family, gnlh->version,
 						NLM_F_CREATE | NLM_F_MULTI,
 						LUSTRE_CMD_TARGETS, all);
 		if (rc < 0) {
@@ -849,7 +850,8 @@ int lustre_stats_dump(struct sk_buff *msg, struct netlink_callback *cb)
 			if (idx)
 				flags |= NLM_F_REPLACE;
 			rc = lnet_genl_send_scalar_list(msg, portid, seq,
-							info->family, flags,
+							info->family,
+							gnlh->version, flags,
 							gnlh->cmd, all);
 			OBD_FREE_PTR_ARRAY(all, stats->ls_num + 2);
 			OBD_FREE(start, len);
@@ -866,6 +868,7 @@ int lustre_stats_dump(struct sk_buff *msg, struct netlink_callback *cb)
 
 			rc = lnet_genl_send_scalar_list(msg, portid, seq,
 							info->family,
+							gnlh->version,
 							NLM_F_CREATE | NLM_F_MULTI,
 							gnlh->cmd, all);
 			if (rc < 0) {
