@@ -1530,6 +1530,56 @@ static inline void osc_release_bounce_pages(struct brw_page **pga,
 #endif
 }
 
+/* Bulk MD packing changed in 2.16.60 ("LU-19180 ptlrpc: virtual 4k bulk
+ * alignment").  Older servers split MD0 by fragment count rather than by the
+ * 4KiB virtual byte count, so a 64KiB-page server ends MD0 short by the unused
+ * head of the first page.  The client must end MD0 there too, and send the
+ * offset so that a 4KiB-page server does the same.  Later servers pack by
+ * bd_iop_len, so MD0 must not shrink for them.
+ */
+#define OSC_MD_INTEROP_FIXED_VERSION	OBD_OCD_VERSION(2, 16, 60, 0)
+#define OSC_MD_INTEROP_MAX_PAGE_SIZE	65536
+
+/**
+ * osc_interop_md_offset() - MD0 shrink needed by a pre-2.16.60 server
+ * @cli: client obd of the server import
+ * @npgs: number of pages in the bulk
+ * @pga: pages of the bulk, in offset order
+ *
+ * Return: number of PTLRPC_BULK_INTEROP_PAGE_SIZE pages MD0 must give up so
+ * that a pre-2.16.60 server ends MD0 at the same byte this client does.  Zero
+ * when the server packs MD0 the same way we do, which is the common case.
+ */
+static u32 osc_interop_md_offset(struct client_obd *cli, u32 npgs,
+				 struct brw_page **pga)
+{
+	struct obd_connect_data *ocd = &cli->cl_import->imp_connect_data;
+	u64 foffset = pga[0]->bp_off;
+	u32 off0, nob;
+
+	/* pre-2.16 servers do not read the offset, so cannot be fixed here */
+	if (!OCD_HAS_FLAG2(ocd, UNALIGNED_DIO))
+		return 0;
+
+	if (ocd->ocd_version >= OSC_MD_INTEROP_FIXED_VERSION)
+		return 0;
+
+	/* fewer than 15 pages of up to 64KiB cannot reach LNET_MTU, and the
+	 * nob calculation below needs npgs >= 2
+	 */
+	if (foffset == 0 || npgs < 15)
+		return 0;
+
+	off0 = foffset & (OSC_MD_INTEROP_MAX_PAGE_SIZE - 1);
+	nob = ((npgs - 2) << PAGE_SHIFT) + pga[0]->bp_count +
+	      pga[npgs - 1]->bp_count;
+
+	if ((nob + off0) < LNET_MTU)
+		return 0;
+
+	return off0 / PTLRPC_BULK_INTEROP_PAGE_SIZE;
+}
+
 static int
 osc_brw_prep_request(int cmd, struct client_obd *cli, struct obdo *oa,
 		     u32 page_count, struct brw_page **pga,
@@ -1805,6 +1855,7 @@ retry_encrypt:
 		GOTO(out, rc = -ENOMEM);
 	/* NB request now owns desc and will free it when it gets freed */
 	desc->bd_is_rdma = gpu;
+	desc->bd_md_offset = osc_interop_md_offset(cli, page_count, pga);
 no_bulk:
 	body = osc_pack_req_body(req, oa);
 	ioobj = req_capsule_client_get(pill, &RMF_OBD_IOOBJ);
@@ -1908,11 +1959,12 @@ no_bulk:
 	 * "max - 1" for old client compatibility sending "0", and also so the
 	 * actual maximum is a power-of-two number, not one less. LU-1431
 	 *
-	 * The low bits are reserved for md flags used for interopability, Ex:
-	 *  - OBD_IOOBJ_INTEROP_PAGE_ALIGNMENT
+	 * The low bits carry bd_md_offset for pre-2.16.60 servers, see
+	 * osc_interop_md_offset().
 	 */
 	if (desc)
-		ioobj_max_brw_set(ioobj, desc->bd_md_max_brw, 0);
+		ioobj_max_brw_set(ioobj, desc->bd_md_max_brw,
+				  desc->bd_md_offset);
 	else
 		ioobj_max_brw_set(ioobj, 0, 0); /* short io */
 
