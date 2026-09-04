@@ -335,7 +335,77 @@ static int gssiam_verify_target(struct obd_device *target,
 }
 
 /**
- * gssiam_extract_h_exp() - Extract existing export from request body
+ * gssiam_extract_inner_handle() - Extract connection handle from inner request
+ * @req: The PTLRPC request containing the outer GSS wire message
+ * @handle_out: Output pointer for the extracted connection handle
+ *
+ * During security context renewal or renegotiation, the client's inner RPC
+ * request (packed in buffer 1 of the outer request buffer) may contain an
+ * existing connection handle in its ptlrpc_body (buffer 0 of the inner msg).
+ *
+ * In order to avoid mutating the inner message header (@lm_magic) in-place
+ * before ptlrpc_server_handle_req_in() unpacks it, we inspect the inner
+ * message and read @pb_handle directly without calling __lustre_unpack_msg().
+ * This preserves the byte-swapped indicator (LUSTRE_MSG_MAGIC_V2_SWABBED)
+ * so that opposite-endian clients can be properly detected and swabbed
+ * by the standard PTLRPC service request handler.
+ *
+ * Return: 0 on success, with @handle_out populated, or cleared if there is no
+ * inner message; -EINVAL or -EPROTO if the inner message is malformed.
+ */
+static int gssiam_extract_inner_handle(struct ptlrpc_request *req,
+				       struct lustre_handle *handle_out)
+{
+	struct lustre_msg_v2 *msg;
+	__u32 bufcount, buflen0;
+	__u32 msg_len, body_off;
+	bool swabbed;
+
+	handle_out->cookie = 0;
+	if (!req->rq_reqbuf || req->rq_reqbuf->lm_bufcount < 2)
+		return 0;
+
+	/* buffer 1 exists, so lustre_msg_buf() cannot fail */
+	msg_len = req->rq_reqbuf->lm_buflens[1];
+	if (msg_len < sizeof(*msg))
+		return -EINVAL;
+
+	msg = lustre_msg_buf(req->rq_reqbuf, 1, 0);
+
+	if (msg->lm_magic == LUSTRE_MSG_MAGIC_V2) {
+		swabbed = false;
+		bufcount = msg->lm_bufcount;
+	} else if (msg->lm_magic == LUSTRE_MSG_MAGIC_V2_SWABBED) {
+		swabbed = true;
+		bufcount = __swab32(msg->lm_bufcount);
+	} else {
+		return -EPROTO;
+	}
+
+	if (bufcount == 0 || bufcount > PTLRPC_MAX_BUFCOUNT)
+		return -EINVAL;
+
+	if (msg_len < offsetof(struct lustre_msg_v2, lm_buflens[bufcount]))
+		return -EINVAL;
+
+	buflen0 = swabbed ? __swab32(msg->lm_buflens[0]) : msg->lm_buflens[0];
+	if (buflen0 < sizeof(*handle_out))
+		return -EINVAL;
+
+	body_off = lustre_msg_hdr_size(LUSTRE_MSG_MAGIC_V2, bufcount);
+	if (msg_len < body_off + sizeof(*handle_out))
+		return -EINVAL;
+
+	/* pb_handle is at offset 0 of ptlrpc_body */
+	memcpy(handle_out, (char *)msg + body_off, sizeof(*handle_out));
+	if (swabbed)
+		__swab64s(&handle_out->cookie);
+
+	return 0;
+}
+
+/**
+ * gssiam_extract_h_exp() - Look up existing export from request handle
  * @req: The PTLRPC request
  * @target: The target OBD device
  * @h_exp_out: Pointer to return the obd_export reference
@@ -347,9 +417,9 @@ static int gssiam_verify_target(struct obd_device *target,
  * policy change, or during reconnection/recovery), the RPC request body
  * will contain a valid connection handle.
  *
- * This function attempts to unpack the request body and look up the existing
- * export associated with that connection handle so the new GSSIAM context
- * can be bound to the live connection.
+ * This function extracts the connection handle from the inner request body
+ * and looks up the existing export associated with that handle so the new
+ * GSSIAM context can be bound to the live connection.
  *
  * Return: 0 on success (including when no export is found), or negative error.
  */
@@ -358,42 +428,34 @@ static int gssiam_extract_h_exp(struct ptlrpc_request *req,
 				struct obd_export **h_exp_out)
 {
 	struct obd_export *h_exp = NULL;
-	struct ptlrpc_body *body;
+	struct lustre_handle handle;
 	int rc;
 
 	*h_exp_out = NULL;
 
-	if (!req->rq_reqbuf || req->rq_reqbuf->lm_bufcount < 2)
+	rc = gssiam_extract_inner_handle(req, &handle);
+	if (rc) {
+		CDEBUG(D_SEC, "%s: bad inner request from %s: rc = %d\n",
+		       target->obd_name, libcfs_nidstr(&req->rq_peer.nid), rc);
+		return rc;
+	}
+
+	if (!lustre_handle_is_used(&handle))
 		return 0;
 
-	req->rq_reqmsg = lustre_msg_buf(req->rq_reqbuf, 1, 0);
-	rc = __lustre_unpack_msg(req->rq_reqmsg,
-				 req->rq_reqbuf->lm_buflens[1]);
-	if (rc < 0)
-		return rc;
-
-	body = lustre_msg_buf(req->rq_reqmsg, MSG_PTLRPC_BODY_OFF,
-			      sizeof(*body));
-	if (body) {
-		struct lustre_handle handle = body->pb_handle;
-
-		if (req_capsule_req_need_swab(&req->rq_pill))
-			__swab64s(&handle.cookie);
-
-		h_exp = class_conn2export(&handle);
-		if (h_exp) {
-			if (h_exp->exp_obd == target &&
-			    h_exp->exp_connection &&
-			    nid_same(&h_exp->exp_connection->c_peer.nid,
-				     &req->rq_peer.nid)) {
-				CDEBUG(D_SEC,
-				       "%s: found export %p from handle %llx\n",
-				       target->obd_name, h_exp, handle.cookie);
-				*h_exp_out = h_exp;
-			} else {
-				class_export_put(h_exp);
-				h_exp = NULL;
-			}
+	h_exp = class_conn2export(&handle);
+	if (h_exp) {
+		if (h_exp->exp_obd == target &&
+		    h_exp->exp_connection &&
+		    nid_same(&h_exp->exp_connection->c_peer.nid,
+			     &req->rq_peer.nid)) {
+			CDEBUG(D_SEC,
+			       "%s: found export %p from handle %llx\n",
+			       target->obd_name, h_exp, handle.cookie);
+			*h_exp_out = h_exp;
+		} else {
+			class_export_put(h_exp);
+			h_exp = NULL;
 		}
 	}
 

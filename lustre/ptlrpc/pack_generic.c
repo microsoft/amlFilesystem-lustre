@@ -51,6 +51,7 @@ __u32 lustre_msg_hdr_size(__u32 magic, __u32 count)
 		return 0;
 	}
 }
+EXPORT_SYMBOL(lustre_msg_hdr_size);
 
 static inline int lustre_msg_check_version_v2(struct lustre_msg_v2 *msg,
 					      enum lustre_msg_version version)
