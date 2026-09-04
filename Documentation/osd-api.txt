@@ -680,7 +680,11 @@ do_write_locked
 do_attr_get
 	The method is called to get regular attributes an object stores.
 	The lu_attr fields maps the usual unix file attributes, like ownership
-	or size. The object must exist.
+	or size. The object must exist. la_valid is also an input for one
+	attribute: la_dirent_count is filled only if the caller sets
+	LA_DIRENT_CNT in la_valid on entry, and most OSDs clear the bit
+	again if the count was not taken. See the do_attr_get() comment in
+	dt_object.h for which OSDs do, and what a caller can rely on.
 do_declare_attr_set
 	the method is called to notify OSD the caller is going to modify regular
 	attributes of an object in specified transaction. OSD should use this

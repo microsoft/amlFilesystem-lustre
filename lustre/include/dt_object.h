@@ -538,13 +538,24 @@ struct dt_object_operations {
 	 *
 	 * @env: execution environment for this thread
 	 * @dt: object to lock for reading
-	 * @attr: attributes to fill
+	 * @attr: attributes to fill; la_valid is also an input, see below
 	 *
 	 * The object must exist. Currently all the attributes should be
 	 * returned, but in the future this can be improved so that only
 	 * a selected set is returned. This can improve performance as in
 	 * some cases attributes are stored in different places and
 	 * getting them all can be an iterative and expensive process.
+	 *
+	 * LA_DIRENT_CNT is the exception, because counting a directory's
+	 * entries is expensive: a caller that wants la_dirent_count sets
+	 * LA_DIRENT_CNT in la_valid on entry and tests it again on return -
+	 * osd-ldiskfs and osd-zfs clear the bit when they did not fill the
+	 * count, while osd-wbcfs implements neither and leaves the bit and
+	 * la_dirent_count as the caller passed them.  Testing
+	 * la_dirent_count against LU_DIRENT_COUNT_UNSET is not equivalent:
+	 * osd-zfs alone writes that sentinel on a successful return, even
+	 * though mdt_getattr_internal(), the one in-tree consumer of
+	 * la_dirent_count, tests against it rather than against the bit.
 	 *
 	 * Return: 0 on success, negative on error
 	 */
