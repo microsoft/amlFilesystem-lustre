@@ -986,8 +986,9 @@ static int osd_attr_get(const struct lu_env *env, struct dt_object *dt,
 		 * This is what dmu_object_info_from_dnode() computes for
 		 * doi_max_offset, read directly because that helper also takes
 		 * dn_mtx and sums the block pointers on every getattr.
+		 * blksize is dn_datablksz, as read by sa_object_size() above.
 		 */
-		attr->la_size = (dn->dn_maxblkid + 1) * dn->dn_datablksz;
+		attr->la_size = (dn->dn_maxblkid + 1) * blksize;
 		if (dirent_cnt) {
 			rc = -zap_count(osd->od_os, dn->dn_object,
 					&attr->la_dirent_count);
