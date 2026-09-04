@@ -512,8 +512,9 @@ struct osd_obj_declare {
 enum {
         LPROC_OSD_READ_BYTES    = 0,
         LPROC_OSD_WRITE_BYTES   = 1,
-        LPROC_OSD_GET_FOLIO     = 2,
-        LPROC_OSD_NO_FOLIO      = 3,
+	/* *_PAGE are the pre-folio names of *_FOLIO, sampled together */
+	LPROC_OSD_GET_PAGE	= 2,
+	LPROC_OSD_NO_PAGE	= 3,
         LPROC_OSD_CACHE_ACCESS  = 4,
         LPROC_OSD_CACHE_HIT     = 5,
         LPROC_OSD_CACHE_MISS    = 6,
@@ -524,6 +525,8 @@ enum {
         LPROC_OSD_THANDLE_CLOSING,
 #endif
 	LPROC_OSD_TOO_MANY_CREDITS,
+	LPROC_OSD_GET_FOLIO,
+	LPROC_OSD_NO_FOLIO,
         LPROC_OSD_LAST,
 };
 #endif

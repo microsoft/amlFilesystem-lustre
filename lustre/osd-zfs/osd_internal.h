@@ -612,14 +612,17 @@ static inline struct osd_oi *osd_fid2oi(struct osd_device *osd,
 enum {
 	LPROC_OSD_READ_BYTES = 0,
 	LPROC_OSD_WRITE_BYTES = 1,
-	LPROC_OSD_GET_FOLIO = 2,
-	LPROC_OSD_NO_FOLIO = 3,
+	/* *_PAGE are the pre-folio names of *_FOLIO; osd-zfs samples neither */
+	LPROC_OSD_GET_PAGE = 2,
+	LPROC_OSD_NO_PAGE = 3,
 	LPROC_OSD_CACHE_ACCESS = 4,
 	LPROC_OSD_CACHE_HIT = 5,
 	LPROC_OSD_CACHE_MISS = 6,
 	LPROC_OSD_COPY_IO = 7,
 	LPROC_OSD_ZEROCOPY_IO = 8,
 	LPROC_OSD_TAIL_IO = 9,
+	LPROC_OSD_GET_FOLIO = 10,
+	LPROC_OSD_NO_FOLIO = 11,
 	LPROC_OSD_LAST,
 };
 

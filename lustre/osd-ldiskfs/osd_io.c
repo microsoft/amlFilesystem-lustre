@@ -618,7 +618,9 @@ static struct folio *osd_get_folio(const struct lu_env *env,
 			LASSERT(!folio_test_private_2(folio));
 			folio_wait_writeback(folio);
 		} else {
+			/* order-0 folio: one failed folio is one failed page */
 			lprocfs_counter_add(d->od_stats, LPROC_OSD_NO_FOLIO, 1);
+			lprocfs_counter_add(d->od_stats, LPROC_OSD_NO_PAGE, 1);
 			folio = NULL;
 		}
 		return folio;
@@ -1224,6 +1226,7 @@ static int osd_write_prep(const struct lu_env *env, struct dt_object *dt,
 	end = ktime_get();
 	timediff = ktime_us_delta(end, start);
 	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_FOLIO, timediff);
+	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_PAGE, timediff);
 
 	if (iobuf->dr_npages) {
 		rc = osd_ldiskfs_map_inode_pages(inode, iobuf, osd, 0,
@@ -1626,6 +1629,7 @@ static int osd_read_prep(const struct lu_env *env, struct dt_object *dt,
 	end = ktime_get();
 	timediff = ktime_us_delta(end, start);
 	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_FOLIO, timediff);
+	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_PAGE, timediff);
 
 	if (cache_hits != 0)
 		lprocfs_counter_add(osd->od_stats, LPROC_OSD_CACHE_HIT,
