@@ -305,6 +305,7 @@ test_0a() {
 	local tf=$td/$tfile
 	local mirror_count=16 # LUSTRE_MIRROR_COUNT_DEF
 	local mirror_cmd="$LFS mirror create"
+	local max_count
 	local id
 	local ids
 	local i
@@ -319,8 +320,15 @@ test_0a() {
 	verify_comp_extent $tf $id 0 EOF
 
 	$mirror_cmd -N0 $tf-1 &> /dev/null && error "invalid mirror count 0"
-	$mirror_cmd -N$((mirror_count + 1)) $tf-1 &> /dev/null &&
-		error "invalid mirror count $((mirror_count + 1))"
+
+	# the MDS only enforces the mirror count at create since 2.17.53
+	if (( MDS1_VERSION >= $(version_code 2.17.53) )); then
+		max_count=$(do_facet mds1 $LCTL get_param -n \
+			    lod.$FSNAME-MDT0000-mdtlov.mirror_count_max) ||
+			error "cannot get mirror_count_max"
+		$mirror_cmd -N$((max_count + 1)) $tf-1 &> /dev/null &&
+			error "invalid mirror count $((max_count + 1))"
+	fi
 
 	$mirror_cmd -N$mirror_count $tf-1 ||
 		error "create mirrored file $tf-1 failed"
