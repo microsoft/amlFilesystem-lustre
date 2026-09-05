@@ -1160,12 +1160,14 @@ int main(int argc, char *const argv[])
 						mop.mo_retry - i);
 				}
 
-#if LUSTRE_VERSION_CODE > OBD_OCD_VERSION(2, 18, 53, 0)
-				/* Pre-2.13 Lustre without 'lustre_tgt' type?
-				 * Try with 'lustre' instead.  Eventually this
-				 * can be removed (e.g. 2.18 or whenever).
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 20, 53, 0)
+				/* Pre-2.13 Lustre without 'lustre_tgt' type,
+				 * or no [/usr]/sbin/mount.lustre_tgt installed
+				 * between 2_16_53-7-g6493d8997 through
+				 * v2_17_57-80-g58adf0b4aa?
+				 * Fall back to 'lustre' until this is removed.
 				 */
-				if (errno == ENODEV &&
+				if (errno == ENODEV && !client &&
 				    strcmp(fstype, "lustre_tgt") == 0) {
 					fstype = "lustre";
 					i--;
@@ -1270,7 +1272,7 @@ int main(int argc, char *const argv[])
 		}
 		if (!mop.mo_nomtab) {
 			rc = update_mtab_entry(mop.mo_usource, mop.mo_target,
-					       "lustre", mop.mo_orig_options,
+					       fstype, mop.mo_orig_options,
 					       0, 0, 0);
 		}
 	}

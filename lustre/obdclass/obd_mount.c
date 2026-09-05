@@ -1351,14 +1351,14 @@ int lustre_parse_monolithic(struct fs_context *fc, void *lmd2_data)
 
 	ENTRY;
 	LASSERT(lmd);
-	if (!options) {
-		LCONSOLE_ERROR("Missing mount data: check /sbin/mount.lustre_tgt is installed.\n");
-		RETURN(-EINVAL);
+	if (!options || !options[0]) {
+		LCONSOLE_ERROR("Missing mount data: check /usr/sbin/mount.lustre[_tgt] is installed.\n");
+		RETURN(-ENODEV);
 	}
 
 	/* Options should be a string - try to detect old lmd data */
 	if ((raw->lmd_magic & 0xffffff00) == (LMD_MAGIC & 0xffffff00)) {
-		LCONSOLE_ERROR("Using an old version of /sbin/mount.lustre. Please install version %s\n",
+		LCONSOLE_ERROR("Using an old version of /sbin/mount.lustre. Upgrade to lustre[-client,-server][-utils]-%s package for /usr/sbin/mount.lustre[_tgt]\n",
 			       LUSTRE_VERSION_STRING);
 		RETURN(-EINVAL);
 	}
@@ -1614,7 +1614,7 @@ bad_string:
 		GOTO(invalid, rc);
 
 	if (!devname) {
-		LCONSOLE_ERROR("Can't find device name (need mount option 'device=...')\n");
+		LCONSOLE_ERROR("Can't find device name (need mount option 'device=...'), is /usr/sbin/mount.lustre[_tgt] installed?\n");
 		GOTO(invalid, rc = -ENODEV);
 	}
 
@@ -1666,7 +1666,7 @@ bad_string:
 	lmd_print(lmd);
 invalid:
 	if (rc < 0)
-		CERROR("Bad mount options %s\n", options);
+		CERROR("Bad mount options: '%s'\n", options);
 	kfree(orig_opts);
 
 	RETURN(rc);
