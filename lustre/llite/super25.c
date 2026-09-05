@@ -145,7 +145,7 @@ static int lustre_fill_super(struct super_block *sb, struct fs_context *fc)
 		static bool printed;
 
 		if (!printed) {
-			LCONSOLE_WARN("%s: mounting server target with '-t lustre' deprecated, use '-t lustre_tgt'\n",
+			LCONSOLE_WARN("%s: mounting server target with '-t lustre' deprecated, use '-t lustre_tgt' or install '{/usr}/sbin/mount.lustre_tgt'\n",
 				      lmd->lmd_profile);
 			printed = true;
 		}
