@@ -1271,17 +1271,6 @@ static int man_path(char *param)
 	char *dot;
 	char *dot2;
 
-	tmp = strstr(param, "llite");
-	if (tmp) {
-		dot = strchr(tmp, '.');
-		if (!dot) {
-			*tmp = '\0';
-			return 0;
-		}
-		if (tmp == param)
-			param = dot + 1;
-	}
-
 	dot = strchr(param, '.');
 	while (dot) {
 		dot2 = strchr(dot + 1, '.');
