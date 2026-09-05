@@ -1,6 +1,6 @@
-.TH MAX_PAGES_PER_RPC 4 2026-03-13 "Lustre" "Lustre Kernel Interfaces"
+.TH MDC.MAX_PAGES_PER_RPC 4 2026-09-04 "Lustre" "Lustre Kernel Interfaces"
 .SH NAME
-max_pages_per_rpc, max_mb_per_rpc_read, max_mb_per_rpc_write \- configure RPC size limits for Lustre clients
+mdc.max_pages_per_rpc, mdc.max_mb_per_rpc_read, mdc.max_mb_per_rpc_write, osc.max_pages_per_rpc, osc.max_mb_per_rpc_read, osc.max_mb_per_rpc_write \- configure RPC size limits for Lustre clients
 .SH SYNOPSIS
 .nf
 lctl set_param \fIobd_type\fR.\fIobd_name\fR.max_pages_per_rpc=\fIPAGE_COUNT\fR
@@ -25,6 +25,14 @@ metadata and object storage targets. Each RPC may transfer multiple
 memory pages of data. These parameters limit the size of those RPC
 requests and therefore influence the amount of data transmitted in a
 single network operation.
+.sp
+On an
+.B osc
+device these parameters bound the file data RPCs sent to an OST. An
+.B mdc
+device uses them for two kinds of bulk transfer: the readdir RPCs that
+fetch directory pages from the MDT, and the file data RPCs for files
+with a Data-on-MDT layout.
 .sp
 The
 .B max_pages_per_rpc
@@ -74,7 +82,9 @@ parameter reports the value in pages, while
 .B max_mb_per_rpc_read
 and
 .B max_mb_per_rpc_write
-report the RPC size in megabytes.
+report the RPC size in megabytes. Where the read and write limits differ,
+.B max_pages_per_rpc
+reports the smaller of the two.
 .SH EXAMPLES
 Display the current value:
 .EX
@@ -91,18 +101,32 @@ Set the parameter:
 .B # lctl set_param osc.lustre-OST0001-osc-ffffa010de31f000.max_mb_per_rpc_read=2M
 .B # lctl set_param osc.lustre-OST0001-osc-ffffa010de31f000.max_mb_per_rpc_write=512K
 .EE
+.sp
+Tune the read RPC size for every MDT connection on the client, which bounds
+readdir and Data-on-MDT reads:
+.EX
+.B # lctl set_param mdc.*.max_mb_per_rpc_read=512K
+.EE
 .SH AVAILABILITY
-.B max_pages_per_rpc
+.B osc.max_pages_per_rpc
 is part of the
 .BR lustre (7)
 filesystem package since release 1.0.0
 .\" Added in commit 0.0.0-3210-gc5050e4125
 .br
-.B max_mb_per_rpc_read and max_mb_per_rpc_write
+.B mdc.max_pages_per_rpc
+is part of the
+.BR lustre (7)
+filesystem package since release 2.1.0, and settable since release 2.10.0
+.\" Added in commit v2_0_65_0-9-g58f3eb928f
+.\" Made settable in commit v2_9_56_0-68-g664bad91b5
+.br
+.B mdc.max_mb_per_rpc_read, osc.max_mb_per_rpc_read,
+.B mdc.max_mb_per_rpc_write, osc.max_mb_per_rpc_write
 are part of the
 .BR lustre (7)
 filesystem package since release 2.18.0
-.\" Added in commit v2_17_50
+.\" Added in commit v2_17_51-55-g04f6831096
 .SH SEE ALSO
 .BR lctl (8),
 .BR lctl-get_param (8),
