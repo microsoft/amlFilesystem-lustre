@@ -2211,16 +2211,15 @@ int lfsck_async_interpret_common(const struct lu_env *env,
 		case LS_SCANNING_PHASE2:
 			spin_lock(&ltds->ltd_lock);
 			list_del_init(phase_list);
-			if (ltd->ltd_dead) {
-				spin_unlock(&ltds->ltd_lock);
-				break;
-			}
+			if (ltd->ltd_dead)
+				goto out_unlock;
 
 			if (com->lc_type == LFSCK_TYPE_LAYOUT) {
-				if (ltd->ltd_layout_done) {
-					spin_unlock(&ltds->ltd_lock);
-					break;
-				}
+				if (ltd->ltd_layout_done)
+					goto out_unlock;
+
+				if (ltd->ltd_layout_phase2_scanned)
+					goto out_unlock;
 
 				if (lr->lr_flags & LEF_TO_OST)
 					list_add_tail(phase_list,
@@ -2229,14 +2228,13 @@ int lfsck_async_interpret_common(const struct lu_env *env,
 					list_add_tail(phase_list,
 						&lad->lad_mdt_phase2_list);
 			} else {
-				if (ltd->ltd_namespace_done) {
-					spin_unlock(&ltds->ltd_lock);
-					break;
-				}
+				if (ltd->ltd_namespace_done)
+					goto out_unlock;
 
 				list_add_tail(phase_list,
 					      &lad->lad_mdt_phase2_list);
 			}
+out_unlock:
 			spin_unlock(&ltds->ltd_lock);
 			break;
 		default:
@@ -3005,6 +3003,7 @@ again:
 		laia->laia_ltd = ltd;
 		ltd->ltd_retry_start = 0;
 		ltd->ltd_layout_done = 0;
+		ltd->ltd_layout_phase2_scanned = 0;
 		ltd->ltd_namespace_done = 0;
 		ltd->ltd_synced_failures = 0;
 		rc = lfsck_async_request(env, ltd->ltd_exp, lr, set,
@@ -3229,6 +3228,7 @@ int lfsck_start(const struct lu_env *env, struct dt_device *key,
 		LASSERT(ltd != NULL);
 
 		ltd->ltd_layout_done = 0;
+		ltd->ltd_layout_phase2_scanned = 0;
 		ltd->ltd_namespace_done = 0;
 		ltd->ltd_synced_failures = 0;
 		lfsck_reset_ltd_status(ltd, LFSCK_TYPE_NAMESPACE);
@@ -3247,6 +3247,7 @@ int lfsck_start(const struct lu_env *env, struct dt_device *key,
 		LASSERT(ltd != NULL);
 
 		ltd->ltd_layout_done = 0;
+		ltd->ltd_layout_phase2_scanned = 0;
 		ltd->ltd_synced_failures = 0;
 		lfsck_reset_ltd_status(ltd, LFSCK_TYPE_LAYOUT);
 		list_del_init(&ltd->ltd_layout_phase_list);

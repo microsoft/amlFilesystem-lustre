@@ -2715,6 +2715,12 @@ test_18e() {
 
 	wait_osts_up
 
+	# This also holds the OSTs' LE_PHASE1_DONE notifications back, so the
+	# MDT learns that they left phase1 from its own LE_QUERY instead and
+	# has already dequeued and scanned them for orphans by the time the
+	# notifications are handled. A late notification must not queue an OST
+	# for a second scan, which would re-attach the same orphans to another
+	# pair of stub files under .lustre/lost+found.
 	#define OBD_FAIL_LFSCK_DELAY3		0x1602
 	do_facet $SINGLEMDS $LCTL set_param fail_val=10 fail_loc=0x1602
 

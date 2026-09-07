@@ -459,6 +459,7 @@ struct lfsck_tgt_desc {
 	unsigned int	   ltd_dead:1,
 			   ltd_retry_start:1,
 			   ltd_layout_done:1,
+			   ltd_layout_phase2_scanned:1,
 			   ltd_namespace_done:1,
 			   ltd_synced_failures:1;
 };
