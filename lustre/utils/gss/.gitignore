@@ -4,3 +4,5 @@
 /lgss_keyring
 /lgss_sk
 /l_getauth
+/l_gssiam_auth
+/l_gssiam_upcall
