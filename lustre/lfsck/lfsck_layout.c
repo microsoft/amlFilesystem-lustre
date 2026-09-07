@@ -4850,6 +4850,8 @@ static int lfsck_layout_assistant_handler_p2(const struct lu_env *env,
 				       struct lfsck_tgt_desc,
 				       ltd_layout_phase_list);
 		list_del_init(&ltd->ltd_layout_phase_list);
+		/* Only start one scan per OST */
+		ltd->ltd_layout_phase2_scanned = 1;
 		if (bk->lb_param & LPF_OST_ORPHAN) {
 			spin_unlock(&ltds->ltd_lock);
 			rc = lfsck_layout_scan_orphan(env, com, ltd);
@@ -6689,6 +6691,15 @@ static int lfsck_layout_master_in_notify(const struct lu_env *env,
 	    lr->lr_event != LE_PEER_EXIT)
 		RETURN(-EINVAL);
 
+	/* Hold this notification back, so that the assistant learns about the
+	 * phase change from its own LE_QUERY instead and has already dequeued
+	 * the target for orphan scanning by the time the notification is
+	 * handled below. Delaying here rather than on the slave side leaves
+	 * the target's own LFSCK running.
+	 */
+	if (lr->lr_event == LE_PHASE1_DONE && (lr->lr_flags & LEF_FROM_OST))
+		LFSCK_FAIL_TIMEOUT(lfsck, OBD_FAIL_LFSCK_DELAY3, cfs_fail_val);
+
 	if (lr->lr_flags & LEF_FROM_OST)
 		ltds = &lfsck->li_ost_descs;
 	else
@@ -6722,8 +6733,15 @@ static int lfsck_layout_master_in_notify(const struct lu_env *env,
 			if (list_empty(&ltd->ltd_layout_list))
 				list_add_tail(&ltd->ltd_layout_list,
 					      &lad->lad_ost_list);
-			list_add_tail(&ltd->ltd_layout_phase_list,
-				      &lad->lad_ost_phase2_list);
+			/* The assistant may have already scanned this target
+			 * for orphans, i.e. it was queued by a LE_QUERY reply
+			 * and dequeued before this notify arrived. Do not
+			 * queue it again, the scanning is not idempotent: it
+			 * would re-attach the same orphans to new stub files.
+			 */
+			if (!ltd->ltd_layout_phase2_scanned)
+				list_add_tail(&ltd->ltd_layout_phase_list,
+					      &lad->lad_ost_phase2_list);
 		} else {
 			if (list_empty(&ltd->ltd_layout_list))
 				list_add_tail(&ltd->ltd_layout_list,
