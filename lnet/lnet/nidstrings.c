@@ -305,7 +305,7 @@ cfs_expr_list_values(struct cfs_expr_list *expr_list, int max, u32 **valpp)
 
 	if (count > max) {
 		CERROR("Number of values %d exceeds max allowed %d\n",
-		       max, count);
+		       count, max);
 		return -EINVAL;
 	}
 
