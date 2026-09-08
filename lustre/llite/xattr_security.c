@@ -15,21 +15,9 @@
  */
 
 #include <linux/types.h>
-#include <linux/security.h>
-#include <linux/xattr.h>
+#include <lustre_compat/linux/security.h>
+#include <lustre_compat/linux/xattr.h>
 #include "llite_internal.h"
-
-#ifndef XATTR_SELINUX_SUFFIX
-# define XATTR_SELINUX_SUFFIX "selinux"
-#endif
-
-#ifndef XATTR_NAME_SELINUX
-# define XATTR_NAME_SELINUX XATTR_SECURITY_PREFIX XATTR_SELINUX_SUFFIX
-#endif
-
-#ifdef HAVE_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
-#define HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG 1
-#endif
 
 /*
  * Check for LL_SBI_FILE_SECCTX before calling.

@@ -25,6 +25,7 @@
 
 #include <linux/module.h>
 #include <linux/pagemap.h>
+#include <lustre_compat/linux/folio.h>
 
 #include <dt_object.h>
 #include <lustre_acl.h>

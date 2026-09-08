@@ -27,6 +27,8 @@
 #include <linux/aio.h>
 #include <linux/parser.h>
 #include <linux/seqlock.h>
+#include <lustre_compat/linux/xattr.h>
+#include <lustre_compat/linux/posix_acl_xattr.h>
 #include <lustre_compat.h>
 #include <lustre_crypto.h>
 #include <range_lock.h>
@@ -344,16 +346,6 @@ static inline void lli_jobinfo_cpy(const struct ll_inode_info *lli,
 	} while (read_seqretry(&lli->lli_jobinfo_seqlock, seq));
 }
 
-#ifndef HAVE_USER_NAMESPACE_ARG
-#define inode_permission(ns, inode, mask)	inode_permission(inode, mask)
-#define generic_permission(ns, inode, mask)	generic_permission(inode, mask)
-#define simple_setattr(ns, de, iattr)		simple_setattr(de, iattr)
-#define ll_setattr(ns, de, attr)		ll_setattr(de, attr)
-#define setattr_prepare(ns, de, at)		setattr_prepare(de, at)
-#define ll_inode_permission(ns, inode, mask)	ll_inode_permission(inode, mask)
-#define ll_getattr(ns, path, stat, mask, fl)	ll_getattr(path, stat, mask, fl)
-#endif
-
 /* This function checks if any flag is set, not all the flags are set */
 static inline bool iocb_ki_flags_check(const struct kiocb *iocb,
 				       unsigned int flags)
@@ -561,6 +553,15 @@ static inline void obd_connect_set_secctx(struct obd_connect_data *data)
 {
 #ifdef CONFIG_SECURITY
 	data->ocd_connect_flags2 |= OBD_CONNECT2_FILE_SECCTX;
+#endif
+}
+
+static inline bool ll_security_xattr_wanted(struct inode *in)
+{
+#ifdef CONFIG_SECURITY
+	return in->i_security && in->i_sb->s_security;
+#else
+	return false;
 #endif
 }
 
