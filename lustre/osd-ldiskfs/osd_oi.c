@@ -18,6 +18,7 @@
 #define DEBUG_SUBSYSTEM S_OSD
 
 #include <linux/module.h>
+#include <lustre_compat/linux/fs.h>
 #include <lustre_compat/linux/dcache.h>
 
 /*
@@ -330,7 +331,7 @@ static int osd_remove_oi_one(struct osd_device *osd, struct dentry *parent,
 	if (IS_ERR(child)) {
 		rc = PTR_ERR(child);
 	} else {
-		rc = vfs_unlink(&nop_mnt_idmap, parent->d_inode, child);
+		rc = vfs_unlink(&nop_mnt_idmap, parent->d_inode, child, NULL);
 		dput(child);
 	}
 
