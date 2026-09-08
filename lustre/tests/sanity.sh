@@ -944,7 +944,7 @@ test_17p() {
 		fi
 	fi
 
-	strace ln -sf $DIR/$tfile $DIR/$tdir/ ||
+	ln -sf $DIR/$tfile $DIR/$tdir/ ||
 		error "Failed to create symlink $DIR/$tfile under $DIR/$tdir/"
 }
 run_test 17p "symlink overwrite directory error message"
