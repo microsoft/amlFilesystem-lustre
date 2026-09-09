@@ -1968,9 +1968,14 @@ static void osd_trans_register_callback(struct osd_device *osd,
 	oh->ot_transaction = transaction;
 	node = rb_find_add(&oh->ot_node, &sbi->s_txn_cb_map, cmp_node_txn);
 	if (node) {
-		/* found existing: add additional osd to be notified */
+		/* found existing: add this handle to be notified too.
+		 * newest registration first, so osd_trans_txn_cb() (which
+		 * runs the list from the head, holder last) sees the highest
+		 * transno first -- only the common case, as the transno is
+		 * assigned later, in dt_txn_hook_stop()
+		 */
 		top = container_of(node, struct osd_thandle, ot_node);
-		list_add_tail(&oh->ot_cblist, &top->ot_cblist);
+		list_add(&oh->ot_cblist, &top->ot_cblist);
 	}
 	spin_unlock(&sbi->s_txn_cb_lock);
 }
