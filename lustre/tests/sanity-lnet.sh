@@ -5062,9 +5062,14 @@ test_236() {
 	check_remote_peer_ni_status "$router" "$nid1" "up" || return $?
 	check_remote_peer_ni_status "$router" "$nid2" "up" || return $?
 
-	# Drop traffic on nid1
-	$LCTL net_drop_add -s $nid1 -d $nid1 -r 1 -e local_timeout ||
-		error "Failed to add drop rule"
+	# Drop outbound traffic to prevent local NI recovery and prevent any
+	# traffic from nid1 reaching the router and flipping the NI back to UP.
+	$LCTL net_drop_add -s $nid1 -d "*@${LOCAL_NET}" -r 1 -e local_timeout ||
+		error "Failed to add drop rule for traffic from $nid1"
+	# The router pings nid1 after it learns that nid1 is down. Drop inbound
+	# traffic to prevent health recovery from the router's pings.
+	$LCTL net_drop_add -s "*@${LOCAL_NET}" -d $nid1 -r 1 ||
+		error "Failed to add drop rule for traffic to $nid1"
 
 	# Set health to 0
 	do_lnetctl net set --health 0 --nid $nid1 ||
