@@ -584,7 +584,7 @@ test_1_check_write() {
 	sleep 5
 	$RUNAS $DD of=$testfile count=1 seek=$limit &&
 		quota_error $short_qtype $TSTUSR \
-			"user write success, but expect EDQUOT"
+			"$qtype write success, but expect EDQUOT"
 	return 0
 }
 
@@ -1487,11 +1487,13 @@ test_1k() {
 	setup_quota_test || error "setup quota failed with $?"
 	set_ost_qtype $QTYPE || error "enable ost quota failed"
 
-
+	# Cover TSTID and TSTPRJID with ±100 slack. Do not use min/2:
+	# TSTPRJID defaults to 1000, so /2 includes RUNAS_ID/sanityusr (500)
+	# and sanityusr1 (501), which can occupy the 20MB LQA hardlimit.
 	((TSTID > TSTPRJID)) || range_max=$TSTPRJID
 	((TSTID < TSTPRJID)) || range_min=$TSTPRJID
-	range_min=$((range_min/2))
-	range_max=$((range_max+100))
+	((range_min > 100)) && range_min=$((range_min - 100))
+	range_max=$((range_max + 100))
 	echo "range_min $range_min, range_max $range_max"
 
 	$LQA_NEW --name $lqa || error "cannot create $lqa"
@@ -1510,6 +1512,7 @@ test_1k() {
 	$LFS setquota -U --lqa $lqa -B ${hard}M $DIR ||
 		error "set user quota failed for lqa:$lqa"
 	$LFS quota -U --lqa $lqa $DIR
+	$LFS quota -a -u -s $range_min -e $range_max $DIR || true
 
 	$LFS setstripe $tfile1 -i 0 -c 1 || error "1: setstripe $tfile1 failed"
 	chown $TSTUSR.$TSTUSR $tfile1 || error "1: chown $tfile1 failed"
@@ -1525,10 +1528,12 @@ test_1k() {
 
 	$LFS setquota -g $TSTID -B ${glbl_limit}M $DIR ||
 		error "set hard block limit to group $TSTID failed"
-	wait_quota_synced ost1 OST0000 usr $TSTID hardlimit $((glbl_limit*1024))
+	wait_quota_synced ost1 OST0000 grp $TSTID hardlimit $((glbl_limit*1024))
 
 	$LFS setquota -G --lqa $lqa -B ${hard}M $DIR ||
 		error "set grp quota failed for lqa:$lqa"
+	$LFS quota -G --lqa $lqa $DIR
+	$LFS quota -a -g -s $range_min -e $range_max $DIR || true
 	$LFS setstripe $tfile1 -i 0 -c 1 || error "2: setstripe $tfile1 failed"
 	chown $TSTUSR.$TSTUSR $tfile1 || error "2: chown $tfile1 failed"
 
@@ -1544,12 +1549,14 @@ test_1k() {
 		error "set group quota failed for lqa:$lqa"
 
 	$LFS setquota -p $TSTPRJID -B ${glbl_limit}M $DIR ||
-		error "set hard block limit to group $TSTID failed"
+		error "set hard block limit to project $TSTPRJID failed"
 	wait_quota_synced ost1 OST0000 prj $TSTPRJID hardlimit \
 		$((glbl_limit*1024))
 
 	$LFS setquota -P --lqa $lqa -B ${hard}M $DIR ||
 		error "set project quota failed for lqa:$lqa"
+	$LFS quota -P --lqa $lqa $DIR
+	$LFS quota -a -p -s $range_min -e $range_max $DIR || true
 
 	$LFS setstripe $tfile1 -i 0 -c 1 || error "3: setstripe $tfile1 failed"
 	chown $TSTUSR:$TSTUSR $tfile1 || error "3: chown $tfile1 failed"
