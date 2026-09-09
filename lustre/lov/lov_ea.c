@@ -485,6 +485,13 @@ lsme_unpack_foreign(struct lov_obd *lov, void *buf, size_t buf_size,
 
 	ENTRY;
 
+	if (buf_size < offsetof(struct lov_foreign_md, lfm_value)) {
+		CDEBUG(D_LAYOUT,
+		       "LOV EA foreign header does not fit in %zu bytes\n",
+		       buf_size);
+		RETURN(ERR_PTR(-EINVAL));
+	}
+
 	magic = le32_to_cpu(lfm->lfm_magic);
 	if (magic != LOV_MAGIC_FOREIGN)
 		RETURN(ERR_PTR(-EINVAL));
@@ -693,10 +700,25 @@ static struct
 lov_stripe_md *lsm_unpackmd_foreign(struct lov_obd *lov, void *buf,
 				    size_t buf_size)
 {
+	size_t hdr_size = offsetof(struct lov_foreign_md, lfm_value);
 	struct lov_foreign_md *lfm = buf;
 	struct lov_stripe_md *lsm;
 	size_t lsm_size;
 	struct lov_stripe_md_entry *lsme;
+
+	if (buf_size < hdr_size) {
+		CDEBUG(D_LAYOUT,
+		       "LOV EA foreign header of %zu bytes does not fit in %zu bytes\n",
+		       hdr_size, buf_size);
+		RETURN(ERR_PTR(-EINVAL));
+	}
+
+	if (le32_to_cpu(lfm->lfm_length) > buf_size - hdr_size) {
+		CDEBUG(D_LAYOUT,
+		       "LOV EA foreign value of %u bytes does not fit in %zu bytes\n",
+		       le32_to_cpu(lfm->lfm_length), buf_size - hdr_size);
+		RETURN(ERR_PTR(-EINVAL));
+	}
 
 	lsm_size = offsetof(typeof(*lsm), lsm_entries[1]);
 	OBD_ALLOC(lsm, lsm_size);
