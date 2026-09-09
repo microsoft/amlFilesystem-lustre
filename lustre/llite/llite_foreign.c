@@ -65,7 +65,9 @@ int ll_manage_foreign(struct inode *inode, struct lustre_md *lmd)
 		if (lmd->layout.lb_buf != NULL && lmd->layout.lb_len != 0) {
 			struct lov_foreign_md *lfm = lmd->layout.lb_buf;
 
-			if (lfm->lfm_magic == LOV_MAGIC_FOREIGN)
+			if (lmd->layout.lb_len >=
+			    offsetof(struct lov_foreign_md, lfm_value) &&
+			    lfm->lfm_magic == LOV_MAGIC_FOREIGN)
 				ll_manage_foreign_file(inode, lfm);
 			GOTO(out, rc);
 		}
