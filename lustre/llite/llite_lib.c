@@ -4218,8 +4218,10 @@ int ll_show_options(struct seq_file *seq, struct dentry *dentry)
 		    strncmp(ll_sbi_flags_name[i].pattern, "no", 2)) {
 			if (ll_sbi_flags_name[i].token ==
 			    LL_SBI_FOREIGN_SYMLINK) {
+				down_read(&sbi->ll_foreign_symlink_sem);
 				seq_show_option(seq, "foreign_symlink",
 						sbi->ll_foreign_symlink_prefix);
+				up_read(&sbi->ll_foreign_symlink_sem);
 			} else if (ll_sbi_flags_name[i].token ==
 				   LL_SBI_USER_PRINCIPAL) {
 				seq_show_option(seq, "user_principal",
