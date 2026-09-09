@@ -635,6 +635,8 @@ enum lustre_msg_version {
 #define MSG_CLIENT_BANNED	0x0100 /* client is banned by nodemap */
 #define MSG_PACK_UID_GID	0x0200 /* thread UID/GID in ptlrpc_body */
 #define MSG_PACK_PROJID		0x0400 /* thread PROJID in ptlrpc_body */
+#define MSG_MAINT_DRAINED	0x0800 /* client drained after maint SYNC */
+#define MSG_MAINT_HINT_CAPABLE	0x1000 /* SYNC ACK: decodes LDLM_MAINT_HINT */
 
 /* pb_op_flags for connect opcodes: MDS_CONNECT, OST_CONNECT, MGS_CONNECT */
 #define MSG_CONNECT_RECOVERING	0x00000001 /* target is in recovery */
@@ -2585,6 +2587,8 @@ enum ldlm_cmd {
 	LDLM_CP_CALLBACK = 105,
 	LDLM_GL_CALLBACK = 106,
 	LDLM_SET_INFO    = 107,
+	LDLM_MAINTENANCE = 108, /* quiesce client to minimize recovery time */
+	LDLM_MAINT_HINT  = 109, /* server notification to client of liveness */
 	LDLM_LAST_OPC
 };
 #define LDLM_FIRST_OPC LDLM_ENQUEUE

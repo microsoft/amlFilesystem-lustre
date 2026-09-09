@@ -84,7 +84,7 @@ do {								\
 do {								\
 	printf("	LASSERTF("#a				\
 		" == 0x%.8xUL, \"found 0x%%.8xUL\\n\",\n	"\
-		"	 (unsigned)"#a");\n", (unsigned)a);	\
+		"	 (unsigned int)"#a");\n", (unsigned int)a);\
 } while(0)
 
 #define CHECK_VALUE_O(a)					\
@@ -530,6 +530,11 @@ check_ptlrpc_body(void)
 	CHECK_VALUE_X(MSG_REPLAY);
 	CHECK_VALUE_X(MSG_REQ_REPLAY_DONE);
 	CHECK_VALUE_X(MSG_LOCK_REPLAY_DONE);
+	CHECK_VALUE_X(MSG_CLIENT_BANNED);
+	CHECK_VALUE_X(MSG_PACK_UID_GID);
+	CHECK_VALUE_X(MSG_PACK_PROJID);
+	CHECK_VALUE_X(MSG_MAINT_DRAINED);
+	CHECK_VALUE_X(MSG_MAINT_HINT_CAPABLE);
 
 	CHECK_VALUE_X(MSG_CONNECT_RECOVERING);
 	CHECK_VALUE_X(MSG_CONNECT_RECONNECT);
@@ -3653,6 +3658,8 @@ main(int argc, char **argv)
 	CHECK_VALUE(LDLM_CP_CALLBACK);
 	CHECK_VALUE(LDLM_GL_CALLBACK);
 	CHECK_VALUE(LDLM_SET_INFO);
+	CHECK_VALUE(LDLM_MAINTENANCE);
+	CHECK_VALUE(LDLM_MAINT_HINT);
 	CHECK_VALUE(LDLM_LAST_OPC);
 
 	COMMENT("LDLM wire-visible request flags");
