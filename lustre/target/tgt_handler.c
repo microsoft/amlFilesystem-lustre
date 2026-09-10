@@ -173,6 +173,7 @@ static int tgt_io_data_unpack(struct tgt_session_info *tsi, struct ost_id *oi)
 	unsigned int max_brw;
 	struct niobuf_remote	*rnb;
 	struct obd_ioobj	*ioo;
+	unsigned int		 niocount;
 	int			 obj_count;
 
 	ENTRY;
@@ -215,6 +216,19 @@ static int tgt_io_data_unpack(struct tgt_session_info *tsi, struct ost_id *oi)
 		DEBUG_REQ(D_RPCTRACE, tgt_ses_req(tsi),
 			  "bulk has too many pages (%d)",
 			  ioo->ioo_bufcnt);
+		RETURN(-EPROTO);
+	}
+
+	/* every caller walks rnb[0 .. ioo_bufcnt), so it must not claim
+	 * more niobufs than the client actually sent
+	 */
+	niocount = req_capsule_get_size(tsi->tsi_pill, &RMF_NIOBUF_REMOTE,
+					RCL_CLIENT) / sizeof(*rnb);
+	if (ioo->ioo_bufcnt != niocount) {
+		CERROR("%s: client %s sent %u niobufs for bufcnt %u: rc = %d\n",
+		       tgt_name(tsi->tsi_tgt),
+		       obd_export_nid2str(tsi->tsi_exp),
+		       niocount, ioo->ioo_bufcnt, -EPROTO);
 		RETURN(-EPROTO);
 	}
 
