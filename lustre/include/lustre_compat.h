@@ -35,42 +35,6 @@
 #include <lustre_compat/linux/posix_acl_xattr.h>
 #include <obd_support.h>
 
-#ifdef HAVE_STRUCT_FILE_LOCK_CORE
-#define C_FLC_TYPE	c.flc_type
-#define C_FLC_PID	c.flc_pid
-#define C_FLC_FILE	c.flc_file
-#define C_FLC_FLAGS	c.flc_flags
-#define C_FLC_OWNER	c.flc_owner
-#else
-#define C_FLC_TYPE	fl_type
-#define C_FLC_PID	fl_pid
-#define C_FLC_FILE	fl_file
-#define C_FLC_FLAGS	fl_flags
-#define C_FLC_OWNER	fl_owner
-#endif
-
-#ifdef HAVE_DENTRY_D_CHILDREN
-#define d_no_children(dentry)	(hlist_empty(&(dentry)->d_children))
-#define d_for_each_child(child, dentry) \
-	hlist_for_each_entry((child), &(dentry)->d_children, d_sib)
-#else
-#define d_no_children(dentry)	(list_empty(&(dentry)->d_subdirs))
-#define d_for_each_child(child, dentry) \
-	list_for_each_entry((child), &(dentry)->d_subdirs, d_child)
-#endif
-
-#ifdef HAVE_U64_CAPABILITY
-#define ll_capability_u32(kcap) \
-	((kcap).val & 0xFFFFFFFF)
-#define ll_set_capability_u32(kcap, val32) \
-	((kcap)->val = ((kcap)->val & 0xffffffff00000000ull) | (val32))
-#else
-#define ll_capability_u32(kcap) \
-	((kcap).cap[0])
-#define ll_set_capability_u32(kcap, val32) \
-	((kcap)->cap[0] = val32)
-#endif
-
 #ifndef HAVE_IOV_ITER_IOVEC
 static inline struct iovec iov_iter_iovec(const struct iov_iter *iter)
 {
