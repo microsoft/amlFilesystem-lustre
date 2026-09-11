@@ -872,15 +872,19 @@ static int get_acl_from_req(struct ptlrpc_request *req, struct posix_acl **acl)
 	return 0;
 }
 
-static inline int accmode_from_openflags(u64 open_flags)
+/* Build the access mode an intent asks for from its open flags.
+ * ll_file_open() fills it_open_flags in the enum mds_open_flags encoding,
+ * but ll_atomic_open() stores the kernel open flags as they are.
+ */
+static inline int accmode_from_openflags(enum mds_open_flags open_flags)
 {
 	unsigned int may_mask = 0;
 
-	if (open_flags & (FMODE_READ | FMODE_PREAD))
+	if (open_flags & MDS_FMODE_READ)
 		may_mask |= MAY_READ;
-	if (open_flags & (FMODE_WRITE | FMODE_PWRITE))
+	if (open_flags & MDS_FMODE_WRITE)
 		may_mask |= MAY_WRITE;
-	if (open_flags & FMODE_EXEC)
+	if (open_flags & (MDS_FMODE_EXECUTE | __FMODE_EXEC))
 		may_mask = MAY_EXEC;
 
 	return may_mask;
