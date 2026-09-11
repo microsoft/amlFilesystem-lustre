@@ -112,7 +112,7 @@ static int mdt_root_squash(struct mdt_thread_info *info,
 
 	CDEBUG(D_OTHER, "squash req from %s, (%d:%d/%x)=>(%d:%d/%x)\n",
 	       libcfs_nidstr(peernid), ucred->uc_fsuid, ucred->uc_fsgid,
-	       (u32)ll_capability_u32(ucred->uc_cap),
+	       (u32)compat_capability_u32(ucred->uc_cap),
 	       squash->rsi_uid, squash->rsi_gid, 0);
 
 	ucred->uc_fsuid = squash->rsi_uid;
@@ -246,7 +246,7 @@ static int new_init_ucred(struct mdt_thread_info *info, ucred_init_type_t type,
 	ucred->uc_fsgid = pud->pud_fsgid;
 
 	ucred->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&ucred->uc_cap, pud->pud_cap);
+	compat_set_capability_u32(&ucred->uc_cap, pud->pud_cap);
 
 	if (type == BODY_INIT) {
 		struct mdt_body *body = (struct mdt_body *)buf;
@@ -677,7 +677,7 @@ static int old_init_ucred(struct mdt_thread_info *info,
 	uc->uc_suppgids[1] = -1;
 	uc->uc_ginfo = NULL;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, body->mbo_capability);
+	compat_set_capability_u32(&uc->uc_cap, body->mbo_capability);
 
 	rc = old_init_ucred_common(info, nodemap);
 	nodemap_putref(nodemap);
@@ -1359,7 +1359,7 @@ static int mdt_setattr_unpack_rec(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->sa_fsuid;
 	uc->uc_fsgid = rec->sa_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->sa_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->sa_cap);
 
 	rr->rr_fid1 = &rec->sa_fid;
 	la->la_valid = mdt_attr_valid_xlate(rec->sa_valid, rr, ma);
@@ -1530,7 +1530,7 @@ static int mdt_create_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->cr_fsuid;
 	uc->uc_fsgid = rec->cr_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->cr_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->cr_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -1641,7 +1641,7 @@ static int mdt_link_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->lk_fsuid;
 	uc->uc_fsgid = rec->lk_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->lk_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->lk_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -1690,7 +1690,7 @@ static int mdt_unlink_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->ul_fsuid;
 	uc->uc_fsgid = rec->ul_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->ul_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->ul_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -1752,7 +1752,7 @@ static int mdt_rename_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->rn_fsuid;
 	uc->uc_fsgid = rec->rn_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->rn_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->rn_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -1810,7 +1810,7 @@ static int mdt_migrate_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->rn_fsuid;
 	uc->uc_fsgid = rec->rn_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->rn_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->rn_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -1919,7 +1919,7 @@ static int mdt_open_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->cr_fsuid;
 	uc->uc_fsgid = rec->cr_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->cr_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->cr_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -2014,7 +2014,7 @@ static int mdt_setxattr_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid  = rec->sx_fsuid;
 	uc->uc_fsgid  = rec->sx_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->sx_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->sx_cap);
 	nodemap = nodemap_get_from_exp(info->mti_exp);
 	if (IS_ERR(nodemap))
 		RETURN(PTR_ERR(nodemap));
@@ -2081,7 +2081,7 @@ static int mdt_resync_unpack(struct mdt_thread_info *info)
 	uc->uc_fsuid = rec->rs_fsuid;
 	uc->uc_fsgid = rec->rs_fsgid;
 	uc->uc_cap = CAP_EMPTY_SET;
-	ll_set_capability_u32(&uc->uc_cap, rec->rs_cap);
+	compat_set_capability_u32(&uc->uc_cap, rec->rs_cap);
 
 	rr->rr_fid1 = &rec->rs_fid;
 	if (exp_connect_mirror_id_fix(exp))

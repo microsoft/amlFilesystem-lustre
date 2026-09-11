@@ -2190,8 +2190,17 @@ AC_DEFUN([LC_SRC_HAVE_U64_CAPABILITY], [
 AC_DEFUN([LC_HAVE_U64_CAPABILITY], [
 	LB2_MSG_LINUX_TEST_RESULT([if 'kernel_cap_t' has u64 val],
 	[kernel_cap_t_has_u64_value], [
-		AC_DEFINE(HAVE_U64_CAPABILITY, 1,
-			['kernel_cap_t' has u64 val])
+		AC_DEFINE([compat_capability_u32(kcap)], [(kcap).val & 0xffffffff],
+			  [compat_capability_u32() is using u64])
+		AC_DEFINE([compat_set_capability_u32(kcap, val32)],
+			  [(kcap)->val = ((kcap)->val & 0xffffffff00000000ull) | (val32)],
+			  [compat_set_capability_u32() is using u64])
+	],[
+		AC_DEFINE([compat_capability_u32(kcap)], [(kcap).cap@<:@0@:>@],
+			  [compat_capability_u32() is using u32 array])
+		AC_DEFINE([compat_set_capability_u32(kcap, val32)],
+			  [(kcap)->cap@<:@0@:>@ = val32],
+			  [compat_set_capability_u32() is using u32 array])
 	])
 ]) # LC_HAVE_U64_CAPABILITY
 
@@ -2729,7 +2738,20 @@ AC_DEFUN([LC_HAVE_DENTRY_D_CHILDREN], [
 	LB2_MSG_LINUX_TEST_RESULT([if sruct dentry has d_children member],
 	[dentry_d_children], [
 		AC_DEFINE(HAVE_DENTRY_D_CHILDREN, 1,
-			[sruct dentry has d_children member])
+			  [struct dentry has d_children member])
+		AC_DEFINE([d_no_children(dentry)],
+			  [hlist_empty(&(dentry)->d_children)],
+			  [struct dentry d_children uses hlist])
+		AC_DEFINE([d_for_each_child(child, dentry)],
+			  [hlist_for_each_entry((child), &(dentry)->d_children, d_sib)],
+			  [struct dentry d_children scans using hlist])
+	],[
+		AC_DEFINE([d_no_children(dentry)],
+			  [list_empty(&(dentry)->d_subdirs)],
+			  [struct dentry d_children uses list])
+		AC_DEFINE([d_for_each_child(child, dentry)],
+			  [list_for_each_entry((child), &(dentry)->d_subdirs, d_child)],
+			  [struct dentry d_children scans using list])
 	])
 ]) # LC_HAVE_DENTRY_D_CHILDREN
 
@@ -2776,8 +2798,27 @@ AC_DEFUN([LC_SRC_HAVE_STRUCT_FILE_LOCK_CORE], [
 AC_DEFUN([LC_HAVE_STRUCT_FILE_LOCK_CORE], [
 	LB2_MSG_LINUX_TEST_RESULT([if struct file_lock_core exists],
 	[struct_file_lock_core], [
-		AC_DEFINE(HAVE_STRUCT_FILE_LOCK_CORE, 1,
-			[struct file_lock_core exists])
+		AC_DEFINE([C_FLC_TYPE], [c.flc_type],
+			[c.flc_type exists])
+		AC_DEFINE([C_FLC_PID], [c.flc_pid],
+			[c.flc_pid exists])
+		AC_DEFINE([C_FLC_FILE], [c.flc_file],
+			[c.flc_file exists])
+		AC_DEFINE([C_FLC_FLAGS], [c.flc_flags],
+			[c.flc_flags exists])
+		AC_DEFINE([C_FLC_OWNER], [c.flc_owner],
+			[c.flc_owner exists])
+	],[
+		AC_DEFINE([C_FLC_TYPE], [fl_type],
+			[c.flc_type is missing])
+		AC_DEFINE([C_FLC_PID], [fl_pid],
+			[fl_pid exists])
+		AC_DEFINE([C_FLC_FILE], [fl_file],
+			[fl_file exists])
+		AC_DEFINE([C_FLC_FLAGS], [fl_flags],
+			[fl_flags exists])
+		AC_DEFINE([C_FLC_OWNER], [fl_owner],
+			[fl_owner exists])
 	])
 ]) # LC_HAVE_STRUCT_FILE_LOCK_CORE
 
