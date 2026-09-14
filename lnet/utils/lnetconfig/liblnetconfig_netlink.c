@@ -220,6 +220,7 @@ struct yaml_netlink_input {
 	bool			async;
 	unsigned int		indent;
 	unsigned int		version;
+	unsigned int		key_expansion;
 	struct yaml_nl_node	*cur;
 	struct yaml_nl_node	*root;
 };
@@ -799,9 +800,9 @@ static int yaml_netlink_msg_parse(struct nl_msg *msg, void *arg)
 	yaml_parser_t *parser = arg;
 	struct yaml_netlink_input *data = parser->read_handler_data;
 	struct nlmsghdr *nlh = nlmsg_hdr(msg);
+	struct genlmsghdr *ghdr = genlmsg_hdr(nlh);
 
 	if (nlh->nlmsg_flags & NLM_F_CREATE) {
-		struct genlmsghdr *ghdr = genlmsg_hdr(nlh);
 		struct nlattr *attrs[LN_SCALAR_MAX + 1];
 
 		if (genlmsg_parse(nlh, 0, attrs, LN_SCALAR_MAX,
@@ -841,9 +842,10 @@ static int yaml_netlink_msg_parse(struct nl_msg *msg, void *arg)
 		data->version = ghdr->version;
 	} else {
 		uint16_t maxtype = data->cur->keys.lkl_maxattr;
+		/* unpacked Netlink message is much larger in YAML buffer */
+		int msg_len = genlmsg_len(ghdr), size, i;
 		struct nla_policy policy[maxtype];
 		struct nlattr *attrs[maxtype];
-		int size, i;
 
 		memset(policy, 0, sizeof(struct nla_policy) * maxtype);
 		for (i = 1; i < maxtype; i++)
@@ -852,18 +854,30 @@ static int yaml_netlink_msg_parse(struct nl_msg *msg, void *arg)
 		if (genlmsg_parse(nlh, 0, attrs, maxtype, policy))
 			return NL_SKIP;
 
+		msg_len *= data->key_expansion;
 		size = data->end - data->buffer;
-		if (size < 1024) {
-			size_t len = (data->end - data->start) * 2;
+		if (msg_len > size || size < 1024) {
 			size_t off = data->buffer - data->start;
+			size_t read = data->read - data->start;
+			size_t len = data->end - data->start;
+			char *tmp;
 
-			data->start = realloc(data->start, len);
-			if (!data->start)
+			/* Handle if Netlink message is really big */
+			do {
+				len *= 2;
+			} while (len - off < msg_len);
+
+			tmp = realloc(data->start, len);
+			if (!tmp) {
+				data->errmsg = nl_geterror(NLE_NOMEM);
+				data->error = -ENOMEM;
 				return NL_STOP;
-			data->end = data->start + len;
+			}
 
+			data->start = tmp;
 			data->buffer = data->start + off;
-			data->read = data->start;
+			data->read = data->start + read;
+			data->end = data->start + len;
 
 			size = data->end - data->buffer;
 		}
@@ -886,7 +900,9 @@ static int yaml_netlink_parse_msg_error(struct nlmsgerr *errmsg,
 	if ((nlh->nlmsg_type == NLMSG_ERROR ||
 	     nlh->nlmsg_flags & NLM_F_ACK_TLVS) && errmsg->error) {
 		/* libyaml stomps on the reader error so we need to
-		 * cache the source of the error.
+		 * cache the source of the error. This error is based
+		 * on what libnl3 reports. If the user wants strerror
+		 * a errno is provided.
 		 */
 		const char *errstr = nl_geterror(nl_syserr2nlerr(errmsg->error));
 		struct yaml_netlink_input *data = parser->read_handler_data;
@@ -968,6 +984,77 @@ static int yaml_netlink_msg_complete(struct nl_msg *msg, void *arg)
 	return data->async ? NL_OK : NL_STOP;
 }
 
+static int nlerr2syserr(int error)
+{
+	int rc;
+
+	switch (abs(error)) {
+	case NLE_BAD_SOCK:
+		rc = EBADF;
+		break;
+	case NLE_EXIST:
+		rc = EEXIST;
+		break;
+	case NLE_NOADDR:
+		rc = EADDRNOTAVAIL;
+		break;
+	case NLE_OBJ_NOTFOUND:
+		rc = ENOENT;
+		break;
+	case NLE_INTR:
+		rc = EINTR;
+		break;
+	case NLE_AGAIN:
+		rc = EAGAIN;
+		break;
+	case NLE_NOACCESS:
+		rc = EACCES;
+		break;
+	case NLE_INVAL:
+		rc = EINVAL;
+		break;
+	case NLE_NOMEM:
+		rc = ENOMEM;
+		break;
+	case NLE_AF_NOSUPPORT:
+		rc = EAFNOSUPPORT;
+		break;
+	case NLE_PROTO_MISMATCH:
+		rc = EPROTONOSUPPORT;
+		break;
+	case NLE_OPNOTSUPP:
+		rc = EOPNOTSUPP;
+		break;
+	case NLE_SEQ_MISMATCH:
+		rc = EILSEQ;
+		break;
+	case NLE_PERM:
+		rc = EPERM;
+		break;
+	case NLE_BUSY:
+		rc = EBUSY;
+		break;
+	case NLE_RANGE:
+		rc = ERANGE;
+		break;
+	case NLE_NODEV:
+		rc = ENODEV;
+		break;
+	case NLE_MSG_TRUNC:
+		rc = EMSGSIZE;
+		break;
+	case NLE_MSG_OVERFLOW:
+		rc = ENOBUFS;
+		break;
+	case NLE_FAILURE:
+	default:
+		rc = ENETDOWN;
+		break;
+	}
+
+	return rc;
+}
+
 /**
  * In order for yaml_parser_set_input_netlink() to work we have to
  * register a yaml_read_handler_t callback. This is that call back
@@ -992,6 +1079,7 @@ static int yaml_netlink_read_handler(void *arg, unsigned char *buffer,
 			return 1;
 		} else if (!data->errmsg && rc < 0) {
 			data->errmsg = nl_geterror(rc);
+			data->error = -nlerr2syserr(rc);
 			return 0;
 		} else if (data->parser->error) {
 			/* data->errmsg is set in NL_CB_FINISH */
@@ -1003,6 +1091,7 @@ static int yaml_netlink_read_handler(void *arg, unsigned char *buffer,
 		size = rc;
 
 	if (size) {
+		/* copy from our buffer to libyaml buffer */
 		memcpy(buffer, data->read, size);
 		data->read += size;
 	} else if (data->complete) {
@@ -1040,6 +1129,14 @@ yaml_parser_get_reader_proto_version(yaml_parser_t *parser)
 	return buf->version;
 }
 
+/* When unpacking Netlink messages they get placed into an internal
+ * buffer that includes white spaces created by the indentation levels
+ * which matches the Netlink nested levels. This is a guess based on
+ * profiling of various messages but in the future we can examine the
+ * levels created with the key tables.
+ */
+#define YAML_KEY_EXPANSION	4
+
 /* yaml_parser_set_input_netlink() mirrors the libyaml function
  * yaml_parser_set_input_file(). Internally it does setup of the
  * libnl socket callbacks to parse the Netlink messages received
@@ -1071,6 +1168,7 @@ yaml_parser_set_input_netlink(yaml_parser_t *reply, struct nl_sock *nl,
 	buf->end = buf->start + 65536;
 	buf->buffer = buf->start;
 	buf->read = buf->start;
+	buf->key_expansion = YAML_KEY_EXPANSION;
 	buf->nl = nl;
 	buf->async = stream;
 	buf->parser = reply;
