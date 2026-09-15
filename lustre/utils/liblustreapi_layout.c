@@ -2561,6 +2561,45 @@ static int layout_ec_verify_stripes(__u64 stripe_count, __u8 k, __u8 p)
 }
 
 /**
+ * __llapi_layout_find_parity_comp_by_data() - Find parity comp for data comp
+ * @layout: layout structure
+ * @data_comp: data component
+ *
+ * A non-zero link id alone is not proof of a parity comp: before EC was
+ * introduced, servers left the field stale.
+ *
+ * Return:
+ * * pointer to parity component on success
+ * * NULL if not found
+ */
+static struct llapi_layout_comp *
+__llapi_layout_find_parity_comp_by_data(struct llapi_layout *layout,
+					struct llapi_layout_comp *data_comp)
+{
+	bool is_link_id = data_comp->llc_flags & LCME_FL_IS_LINK_ID;
+	struct llapi_layout_comp *comp;
+
+	if (data_comp->llc_mirror_link_id == LLAPI_MIRROR_LINK_NONE)
+		return NULL;
+
+	list_for_each_entry(comp, &layout->llot_comp_list, llc_list) {
+		uint16_t comp_link_id;
+
+		if (!(comp->llc_flags & LCME_FL_PARITY))
+			continue;
+
+		comp_link_id = is_link_id ? comp->llc_mirror_link_id :
+					    comp->llc_mirror_id;
+		if (comp_link_id == data_comp->llc_mirror_link_id &&
+		    comp->llc_extent.e_start == data_comp->llc_extent.e_start &&
+		    comp->llc_extent.e_end == data_comp->llc_extent.e_end)
+			return comp;
+	}
+
+	return NULL;
+}
+
+/**
  * llapi_layout_comp_add_ec() - Adds a EC component to @layout
  * @layout:	existing composite or plain layout
  * @mirror_id:	mirror id of the data component to be protected by the EC
@@ -2641,8 +2680,8 @@ int llapi_layout_comp_add_ec(struct llapi_layout *layout, uint32_t mirror_id,
 		if (comp->llc_extent.e_start == start &&
 		    comp->llc_extent.e_end == end) {
 			/* Data comp is already protected by a parity comp */
-			if (comp->llc_mirror_link_id !=
-			    LLAPI_MIRROR_LINK_NONE) {
+			if (__llapi_layout_find_parity_comp_by_data(layout,
+								   comp)) {
 				errno = EINVAL;
 				return -1;
 			}
@@ -2883,7 +2922,7 @@ int llapi_layout_comp_del(struct llapi_layout *layout)
 		/* A data comp that is protected by a parity comp can't be
 		 * deleted until the parity comp is deleted.
 		 */
-		if (comp->llc_mirror_link_id != LLAPI_MIRROR_LINK_NONE) {
+		if (__llapi_layout_find_parity_comp_by_data(layout, comp)) {
 			errno = EINVAL;
 			return -1;
 		}
