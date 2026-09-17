@@ -964,10 +964,11 @@ test_21d() {
 	mkdir_on_mdt0 $DIR/$tdir-1
 	mkdir_on_mdt0 $DIR/$tdir-2
 	multiop_bg_pause $DIR/$tdir-1/f O_c || return 1
-	pid=$!
+	local pid=$!
 
 	do_facet $SINGLEMDS "lctl set_param fail_loc=0x80000129"
 	$MULTIOP $DIR/$tdir-2/f Oc &
+	local pid2=$!
 	sleep 1
 	do_facet $SINGLEMDS "lctl set_param fail_loc=0"
 
@@ -975,6 +976,7 @@ test_21d() {
 	kill -USR1 $pid
 	cancel_lru_locks mdc
 	wait $pid || return 1
+	wait $pid2 || return 4
 	do_facet $SINGLEMDS "lctl set_param fail_loc=0"
 
 	$CHECKSTAT -t file $DIR/$tdir-1/f || return 2
