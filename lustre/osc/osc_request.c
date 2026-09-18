@@ -2636,6 +2636,118 @@ static void osc_process_ar(struct osc_async_rc *ar, __u64 xid,
 		ar->ar_force_sync = 0;
 }
 
+static inline int osc_read_lat_bucket(u32 page_count)
+{
+	return min_t(int, fls(page_count) - 1, OSC_LAT_BUCKETS - 1);
+}
+
+/**
+ * osc_read_rtt_update() - Fold one successful read into the latency estimate
+ * @cli: client obd, cl_loi_list_lock held
+ * @page_count: pages in the RPC, selects the bucket
+ * @latency: build-to-completion time of the RPC
+ *
+ * Smoothed latency and mean deviation as for the TCP retransmission timer
+ * (RFC 6298), seeded with the first sample.  A successful read also ends
+ * any slow mark and soft timeout backoff on the import.
+ */
+static void osc_read_rtt_update(struct client_obd *cli, u32 page_count,
+				ktime_t latency)
+{
+	s64 sample = clamp_t(s64, ktime_to_us(latency), 1, INT_MAX);
+	struct osc_read_rtt *rtt;
+	s64 err;
+
+	rtt = &cli->cl_read_rtt[osc_read_lat_bucket(page_count)];
+	if (rtt->ort_srtt == 0) {
+		rtt->ort_srtt = sample;
+		rtt->ort_rttvar = sample / 2;
+	} else {
+		err = sample - rtt->ort_srtt;
+		rtt->ort_rttvar += (abs(err) - (s64)rtt->ort_rttvar) / 4;
+		rtt->ort_srtt += err / 8;
+	}
+	cli->cl_slow_read_backoff = 0;
+	cli->cl_read_slow_until = 0;
+}
+
+/**
+ * osc_read_slow_mark() - Treat the import as slow after a soft timeout
+ * @cli: client obd, cl_loi_list_lock held
+ * @req: the abandoned read
+ * @now: its completion time
+ *
+ * EC reads avoid the import (lov_sub_unavailable()) for four times the
+ * soft deadline of the abandoned read (at least slow_read_min_ms), or
+ * until a read on it succeeds.
+ * Each further soft timeout before a successful read doubles both the
+ * deadline and the hold, up to the hard timeout, so a false positive
+ * under a short load spike costs little while an OST that stays slow is
+ * probed less and less often.  A plain mirror's reads do not consult the
+ * mark: each is abandoned on its own and rotates to the next mirror.
+ */
+static void osc_read_slow_mark(struct client_obd *cli,
+			       struct ptlrpc_request *req, ktime_t now)
+{
+	s64 hard_us = (req->rq_deadline - req->rq_sent) * USEC_PER_SEC;
+	s64 hold_us = 4 * max_t(s64, req->rq_soft_budget_us,
+				(s64)osc_slow_read_min_ms(cli) * USEC_PER_MSEC);
+
+	if (hard_us > 0 && hold_us > hard_us)
+		hold_us = hard_us;
+	/* RPCs in flight together time out together: back off once */
+	if (!ktime_after(cli->cl_read_slow_until, now) &&
+	    cli->cl_slow_read_backoff < 16)
+		cli->cl_slow_read_backoff++;
+	if (ktime_before(cli->cl_read_slow_until, ktime_add_us(now, hold_us)))
+		cli->cl_read_slow_until = ktime_add_us(now, hold_us);
+	cli->cl_slow_read_timeouts++;
+	CDEBUG(D_HA, "%s: read abandoned at soft deadline, avoiding OST for %lldms\n",
+	       cli->cl_import->imp_obd->obd_name, hold_us / USEC_PER_MSEC);
+}
+
+/**
+ * osc_read_soft_budget() - Soft deadline of a top-level no-delay read
+ * @cli: client obd, cl_loi_list_lock held
+ * @req: the read RPC about to be sent
+ * @page_count: pages in the RPC, selects the latency estimate
+ *
+ * The larger of slow_read_pct percent of the smoothed latency for RPCs of
+ * this size and the smoothed latency plus four deviations, at least
+ * slow_read_min_ms, and doubled for each soft timeout since the last
+ * successful read.  With no estimate for this size yet, that of the
+ * nearest smaller size is scaled up by the size ratio, which errs long
+ * for a larger read; with none at all, the floor alone applies.
+ *
+ * Return: the budget in usec, counted from when the read is sent, or 0
+ * if it would not be shorter than the hard timeout
+ */
+static u32 osc_read_soft_budget(struct client_obd *cli,
+				struct ptlrpc_request *req, u32 page_count)
+{
+	u64 us = (u64)osc_slow_read_min_ms(cli) * USEC_PER_MSEC;
+	int bucket = osc_read_lat_bucket(page_count);
+	int i;
+
+	for (i = bucket; i >= 0; i--) {
+		struct osc_read_rtt *rtt = &cli->cl_read_rtt[i];
+		u64 srtt = (u64)rtt->ort_srtt << (bucket - i);
+		u64 rttvar = (u64)rtt->ort_rttvar << (bucket - i);
+
+		if (!rtt->ort_srtt)
+			continue;
+		us = max3(us, srtt * cli->cl_slow_read_pct / 100,
+			  srtt + 4 * rttvar);
+		break;
+	}
+
+	us <<= cli->cl_slow_read_backoff;
+	if (us >= (u64)req->rq_timeout * USEC_PER_SEC || us > U32_MAX)
+		return 0;
+
+	return us;
+}
+
 static int brw_interpret(const struct lu_env *env,
 			 struct ptlrpc_request *req, void *args, int rc)
 {
@@ -2657,6 +2769,15 @@ static int brw_interpret(const struct lu_env *env,
 
 	rc = osc_brw_fini_request(req, rc);
 	CDEBUG(D_INODE, "request %p aa %p rc %d\n", req, aa, rc);
+
+	/* Publish the slow mark before any page completes, so the reader's
+	 * restart already sees it when it selects a mirror.
+	 */
+	if (req->rq_soft_timedout) {
+		spin_lock(&cli->cl_loi_list_lock);
+		osc_read_slow_mark(cli, req, completion_time);
+		spin_unlock(&cli->cl_loi_list_lock);
+	}
 
 	/* restore clear text pages */
 	osc_release_bounce_pages(aa->aa_ppga, aa->aa_page_count);
@@ -2820,6 +2941,8 @@ static int brw_interpret(const struct lu_env *env,
 					&cli->cl_read_io_latency_by_size[idx],
 					latency_us);
 			}
+			if (rc == 0 && page_count)
+				osc_read_rtt_update(cli, page_count, latency);
 		}
 	}
 	osc_wake_cache_waiters(cli);
@@ -2882,6 +3005,7 @@ int osc_build_rpc(const struct lu_env *env, struct client_obd *cli,
 	int page_count = 0;
 	bool soft_sync = false;
 	bool ndelay = false;
+	bool soft_tmo = false;
 	bool srvlock = false;
 	int grant = 0;
 	int i, rc;
@@ -2958,6 +3082,8 @@ int osc_build_rpc(const struct lu_env *env, struct client_obd *cli,
 		}
 		if (ext->oe_ndelay)
 			ndelay = true;
+		if (ext->oe_soft_tmo)
+			soft_tmo = true;
 		if (ext->oe_srvlock)
 			srvlock = true;
 	}
@@ -3033,6 +3159,9 @@ int osc_build_rpc(const struct lu_env *env, struct client_obd *cli,
 		lprocfs_oh_tally(&cli->cl_read_rpc_hist, cli->cl_r_in_flight);
 		lprocfs_oh_tally_log2(&cli->cl_read_offset_hist,
 				      starting_offset + 1);
+		if (soft_tmo && cli->cl_slow_read_pct)
+			req->rq_soft_budget_us =
+				osc_read_soft_budget(cli, req, page_count);
 	} else {
 		cli->cl_w_in_flight++;
 		lprocfs_oh_tally_log2(&cli->cl_write_page_hist, page_count);
@@ -4171,6 +4300,7 @@ int osc_setup_common(struct obd_device *obd, struct lustre_cfg *lcfg)
 		GOTO(out_ptlrpcd_work, rc);
 
 	cli->cl_grant_shrink_interval = GRANT_SHRINK_INTERVAL;
+	cli->cl_slow_read_pct = OSC_SLOW_READ_PCT_DEFAULT;
 	cli->cl_root_squash = 0;
 	osc_update_next_shrink(cli);
 

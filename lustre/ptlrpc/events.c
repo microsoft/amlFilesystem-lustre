@@ -503,6 +503,7 @@ static void ptlrpc_master_callback(struct lnet_event *ev)
 	LASSERT(callback == request_out_callback ||
 		callback == reply_in_callback ||
 		callback == client_bulk_callback ||
+		callback == ptlrpc_bulk_sink_callback ||
 		callback == request_in_callback ||
 #ifdef CONFIG_LUSTRE_FS_SERVER
 		callback == server_bulk_callback ||
@@ -633,17 +634,27 @@ int ptlrpc_init_portals(void)
 		CERROR("network initialisation failed: rc = %d\n", rc);
 		return rc;
 	}
+	rc = ptlrpc_bulk_sink_init();
+	if (rc != 0) {
+		CERROR("%s: bulk sink initialisation failed: rc = %d\n",
+		       "ptlrpc", rc);
+		ptlrpc_ni_fini();
+		return rc;
+	}
 	rc = ptlrpcd_addref();
 	if (rc == 0)
 		return 0;
 
 	CERROR("rpcd initialisation failed: rc = %d\n", rc);
 	ptlrpc_ni_fini();
+	ptlrpc_bulk_sink_fini();
 	return rc;
 }
 
 void ptlrpc_exit_portals(void)
 {
 	ptlrpcd_decref();
+	ptlrpc_bulk_sink_stop();
 	ptlrpc_ni_fini();
+	ptlrpc_bulk_sink_fini();
 }

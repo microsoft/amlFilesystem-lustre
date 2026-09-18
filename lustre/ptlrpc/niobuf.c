@@ -534,6 +534,247 @@ int ptlrpc_unregister_bulk(struct ptlrpc_request *req, int async)
 	RETURN(0);
 }
 
+/*
+ * Bulk sinks of abandoned reads
+ *
+ * A read abandoned at its soft deadline unlinks its bulk buffers, but the
+ * server is not told.  Its PUT of the data would find no buffer and be
+ * dropped, so it gets no ACK and holds its service thread for bulk_timeout,
+ * while the early replies it sends meanwhile push its adaptive timeout, and
+ * with it every client's RPC deadline, to that time.  A sink takes the data
+ * in place of each bulk buffer that was still waiting: an MD on the same
+ * match bits over one scratch page, repeated, which nothing reads.  A sink
+ * whose PUT never comes, e.g. because the server had already sent it, is
+ * unlinked once the server can no longer send it.
+ */
+struct ptlrpc_bulk_sink {
+	struct list_head	pbs_list;
+	struct list_head	pbs_reap;
+	struct ptlrpc_cb_id	pbs_cbid;
+	time64_t		pbs_expire;
+	int			pbs_refs;
+	int			pbs_count;
+	struct lnet_handle_md	pbs_mds[PTLRPC_BULK_OPS_COUNT];
+};
+
+#define PTLRPC_BULK_SINK_MAX		1024
+#define PTLRPC_BULK_SINK_REAP_SEC	10
+
+static struct page *ptlrpc_sink_page;
+static struct bio_vec *ptlrpc_sink_vec;
+static LIST_HEAD(ptlrpc_sinks);
+static DEFINE_SPINLOCK(ptlrpc_sink_lock);
+static unsigned int ptlrpc_sink_nr;
+static bool ptlrpc_sink_stopping;
+static void ptlrpc_bulk_sink_reap(struct work_struct *work);
+static DECLARE_DELAYED_WORK(ptlrpc_sink_work, ptlrpc_bulk_sink_reap);
+
+static void ptlrpc_bulk_sink_put(struct ptlrpc_bulk_sink *sink)
+{
+	bool last;
+
+	spin_lock(&ptlrpc_sink_lock);
+	last = --sink->pbs_refs == 0;
+	if (last) {
+		list_del(&sink->pbs_list);
+		ptlrpc_sink_nr--;
+	}
+	spin_unlock(&ptlrpc_sink_lock);
+
+	if (last)
+		OBD_FREE_PTR(sink);
+}
+
+void ptlrpc_bulk_sink_callback(struct lnet_event *ev)
+{
+	struct ptlrpc_cb_id *cbid = ev->md_user_ptr;
+	struct ptlrpc_bulk_sink *sink = cbid->cbid_arg;
+
+	LASSERT(ev->type == LNET_EVENT_PUT || ev->type == LNET_EVENT_UNLINK);
+	LASSERT(ev->unlinked);
+
+	if (ev->type == LNET_EVENT_PUT)
+		CDEBUG(D_HA, "drained %u bytes of abandoned bulk x%llu: rc = %d\n",
+		       ev->mlength, ev->match_bits, ev->status);
+	ptlrpc_bulk_sink_put(sink);
+}
+
+static void ptlrpc_bulk_sink_reap(struct work_struct *work)
+{
+	time64_t now = ktime_get_seconds();
+	struct ptlrpc_bulk_sink *sink;
+	struct ptlrpc_bulk_sink *tmp;
+	LIST_HEAD(expired);
+	bool more;
+	int i;
+
+	spin_lock(&ptlrpc_sink_lock);
+	list_for_each_entry(sink, &ptlrpc_sinks, pbs_list) {
+		if (sink->pbs_expire > now && !ptlrpc_sink_stopping)
+			continue;
+		sink->pbs_refs++;
+		list_add_tail(&sink->pbs_reap, &expired);
+	}
+	spin_unlock(&ptlrpc_sink_lock);
+
+	/* the unlink calls the handler, which takes ptlrpc_sink_lock */
+	list_for_each_entry_safe(sink, tmp, &expired, pbs_reap) {
+		for (i = 0; i < sink->pbs_count; i++)
+			LNetMDUnlink(sink->pbs_mds[i]);
+		list_del(&sink->pbs_reap);
+		ptlrpc_bulk_sink_put(sink);
+	}
+
+	spin_lock(&ptlrpc_sink_lock);
+	more = !list_empty(&ptlrpc_sinks) && !ptlrpc_sink_stopping;
+	spin_unlock(&ptlrpc_sink_lock);
+	if (more)
+		schedule_delayed_work(&ptlrpc_sink_work,
+				cfs_time_seconds(PTLRPC_BULK_SINK_REAP_SEC));
+}
+
+/**
+ * ptlrpc_bulk_sink_post() - Unlink an abandoned read's bulk into sinks
+ * @req: read request abandoned before its reply
+ *
+ * Each bulk buffer of @req that has not taken its PUT yet is unlinked and
+ * replaced by a sink, so the server completes the transfer at once.
+ */
+void ptlrpc_bulk_sink_post(struct ptlrpc_request *req)
+{
+	struct ptlrpc_bulk_desc *desc = req->rq_bulk;
+	struct ptlrpc_bulk_sink *sink;
+	struct lnet_md md = { NULL };
+	struct lnet_processid peer;
+	struct lnet_me *me;
+	time64_t left;
+	int rc = 0;
+	int i;
+
+	if (!desc || !desc->bd_registered || !ptlrpc_sink_vec ||
+	    !ptlrpc_is_bulk_put_sink(desc->bd_type))
+		return;
+
+	OBD_ALLOC_PTR(sink);
+	if (!sink)
+		return;
+
+	sink->pbs_cbid.cbid_fn = ptlrpc_bulk_sink_callback;
+	sink->pbs_cbid.cbid_arg = sink;
+	INIT_LIST_HEAD(&sink->pbs_reap);
+	/* the server drops a request not started by its deadline, and gives
+	 * up a started bulk after bulk_timeout
+	 */
+	left = max_t(time64_t, req->rq_deadline - ktime_get_real_seconds(), 0);
+	sink->pbs_expire = ktime_get_seconds() + left + bulk_timeout;
+	sink->pbs_refs = 1;		/* dropped once posted */
+
+	spin_lock(&ptlrpc_sink_lock);
+	if (ptlrpc_sink_stopping || ptlrpc_sink_nr >= PTLRPC_BULK_SINK_MAX) {
+		spin_unlock(&ptlrpc_sink_lock);
+		OBD_FREE_PTR(sink);
+		return;
+	}
+	ptlrpc_sink_nr++;
+	list_add_tail(&sink->pbs_list, &ptlrpc_sinks);
+	spin_unlock(&ptlrpc_sink_lock);
+
+	peer = desc->bd_import->imp_connection->c_peer;
+	md.umd_start = ptlrpc_sink_vec;
+	md.umd_length = LNET_MAX_IOV;
+	md.umd_threshold = 1;
+	md.umd_options = PTLRPC_MD_OPTIONS | LNET_MD_OP_PUT | LNET_MD_KIOV;
+	md.umd_user_ptr = &sink->pbs_cbid;
+	md.umd_handler = ptlrpc_handler;
+
+	for (i = 0; i < desc->bd_md_count; i++) {
+		/* a buffer that took its PUT is gone already */
+		if (LNetMDUnlink(desc->bd_mds[i]) != 0)
+			continue;
+
+		me = LNetMEAttach(desc->bd_portal, &peer,
+				  desc->bd_last_mbits + i, 0, LNET_UNLINK,
+				  LNET_INS_AFTER);
+		rc = PTR_ERR_OR_ZERO(me);
+		if (rc)
+			break;
+
+		spin_lock(&ptlrpc_sink_lock);
+		sink->pbs_refs++;
+		spin_unlock(&ptlrpc_sink_lock);
+		percpu_ref_get(&ptlrpc_pending);
+		rc = LNetMDAttach(me, &md, LNET_UNLINK,
+				  &sink->pbs_mds[sink->pbs_count]);
+		if (rc) {
+			percpu_ref_put(&ptlrpc_pending);
+			ptlrpc_bulk_sink_put(sink);
+			break;
+		}
+		sink->pbs_count++;
+	}
+	if (rc)
+		CDEBUG(D_HA, "%s: no sink for abandoned bulk x%llu: rc = %d\n",
+		       desc->bd_import->imp_obd->obd_name,
+		       desc->bd_last_mbits + i, rc);
+	if (sink->pbs_count)
+		schedule_delayed_work(&ptlrpc_sink_work,
+				cfs_time_seconds(PTLRPC_BULK_SINK_REAP_SEC));
+	ptlrpc_bulk_sink_put(sink);
+}
+
+int ptlrpc_bulk_sink_init(void)
+{
+	int i;
+
+	ptlrpc_sink_page = alloc_page(GFP_KERNEL);
+	if (!ptlrpc_sink_page)
+		return -ENOMEM;
+
+	OBD_ALLOC_PTR_ARRAY_LARGE(ptlrpc_sink_vec, LNET_MAX_IOV);
+	if (!ptlrpc_sink_vec) {
+		__free_page(ptlrpc_sink_page);
+		ptlrpc_sink_page = NULL;
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < LNET_MAX_IOV; i++) {
+		ptlrpc_sink_vec[i].bv_page = ptlrpc_sink_page;
+		ptlrpc_sink_vec[i].bv_len = PAGE_SIZE;
+		ptlrpc_sink_vec[i].bv_offset = 0;
+	}
+	ptlrpc_sink_stopping = false;
+
+	return 0;
+}
+
+/* Unlink all sinks; their pending refs keep the network up until done */
+void ptlrpc_bulk_sink_stop(void)
+{
+	spin_lock(&ptlrpc_sink_lock);
+	ptlrpc_sink_stopping = true;
+	spin_unlock(&ptlrpc_sink_lock);
+
+	cancel_delayed_work_sync(&ptlrpc_sink_work);
+	ptlrpc_bulk_sink_reap(NULL);
+}
+
+/* After the network is down: no sink can still be receiving */
+void ptlrpc_bulk_sink_fini(void)
+{
+	/* a sink left now still points at the page: leak both */
+	if (!list_empty(&ptlrpc_sinks)) {
+		CERROR("%s: %u bulk sinks left at exit: rc = %d\n", "ptlrpc",
+		       ptlrpc_sink_nr, -EBUSY);
+		return;
+	}
+	if (ptlrpc_sink_vec)
+		OBD_FREE_PTR_ARRAY_LARGE(ptlrpc_sink_vec, LNET_MAX_IOV);
+	ptlrpc_sink_vec = NULL;
+	if (ptlrpc_sink_page)
+		__free_page(ptlrpc_sink_page);
+	ptlrpc_sink_page = NULL;
+}
+
 static void ptlrpc_at_set_reply(struct ptlrpc_request *req, int flags)
 {
 	struct ptlrpc_service_part	*svcpt = req->rq_rqbd->rqbd_svcpt;
@@ -1082,6 +1323,12 @@ int ptl_send_rpc(struct ptlrpc_request *request, int noreply)
 
 	request->rq_sent_ns = ktime_get_real();
 	request->rq_sent = ktime_get_real_seconds();
+	/* the soft deadline counts from the send, not from waiting for a
+	 * reconnect or security context beforehand
+	 */
+	if (request->rq_soft_budget_us)
+		request->rq_soft_deadline =
+			ktime_add_us(ktime_get(), request->rq_soft_budget_us);
 	/* We give the server rq_timeout secs to process the req, and
 	 * add the network latency for our local timeout.
 	 */

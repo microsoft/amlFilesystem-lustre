@@ -788,6 +788,14 @@ struct ptlrpc_cli_req {
 	ktime_t				 cr_sent_ns;
 	/** time for request really sent out */
 	ktime_t				 cr_sent_out_ns;
+	/** soft deadline budget in usec, armed as cr_soft_deadline when the
+	 *  request is sent, 0 for none
+	 */
+	u32				 cr_soft_budget_us;
+	/** monotonic time after which the request is abandoned without
+	 *  failing the import, 0 for none; see ptlrpc_check_set()
+	 */
+	ktime_t				 cr_soft_deadline;
 	/** when req reply unlink must finish. */
 	time64_t			 cr_reply_deadline;
 	/** when req bulk unlink must finish. */
@@ -851,6 +859,8 @@ struct ptlrpc_cli_req {
 #define rq_queued_time_ns	rq_cli.cr_queued_time_ns
 #define rq_sent_ns		rq_cli.cr_sent_ns
 #define rq_real_sent_ns		rq_cli.cr_sent_out_ns
+#define rq_soft_budget_us	rq_cli.cr_soft_budget_us
+#define rq_soft_deadline	rq_cli.cr_soft_deadline
 #define rq_reply_deadline	rq_cli.cr_reply_deadline
 #define rq_bulk_deadline	rq_cli.cr_bulk_deadline
 #define rq_req_deadline		rq_cli.cr_req_deadline
@@ -979,7 +989,7 @@ struct ptlrpc_request {
 	spinlock_t			 rq_early_free_lock;
 	/** client-side flags are serialized by rq_lock @{ */
 	unsigned int rq_intr:1, rq_replied:1, rq_err:1,
-		rq_timedout:1, rq_resend:1, rq_restart:1,
+		rq_timedout:1, rq_soft_timedout:1, rq_resend:1, rq_restart:1,
 		/**
 		 * when ->rq_replay is set, request is kept by the client even
 		 * after server commits corresponding transaction. This is

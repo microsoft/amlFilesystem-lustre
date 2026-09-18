@@ -1,0 +1,146 @@
+.TH OSC.*.SLOW_READ_PCT 4 2026-11-24 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+osc.slow_read_pct \- percent of usual read latency before trying another mirror
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param osc." INSTANCE .slow_read_pct
+.SY
+.BI "lctl set_param osc." INSTANCE .slow_read_pct= PERCENT
+.SY
+.BI "lctl set_param osc." INSTANCE .slow_read_min_ms= MSEC
+.SY
+.BI "lctl get_param osc." INSTANCE .slow_read_stats
+.SY
+.BI "lctl set_param osc." INSTANCE .slow_read_stats= 0
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per OSC device
+.TP
+.B Config
+.br
+Always present
+.TP
+.B Default
+.br
+.RB slow_read_pct= 300
+.br
+.RB slow_read_min_ms= 0
+(250 for a non-rotational OST, 2000 otherwise, or until the client has
+fetched the OST's statfs data, e.g. with
+.BR "lfs df" )
+.TP
+.B Valid Range
+.br
+.RB slow_read_pct= 0
+(off) or any percentage of the smoothed read latency
+.br
+.RB slow_read_min_ms= 0
+(default for the OST) or any number of milliseconds
+.SH DESCRIPTION
+A read of a mirrored or erasure-coded (EC) file normally waits for an
+OST until the RPC's adaptive timeout expires, which can be many seconds,
+or up to at_max seconds while a slow OST keeps sending early replies.
+.B slow_read_pct
+bounds that wait for files that have another source for the data.
+.PP
+Each OSC keeps a smoothed latency and its mean deviation for each read
+RPC size, as TCP does for its retransmission timer.
+A read RPC of an EC or mirrored file gets a soft deadline, counted from
+when it is sent, of the largest of
+.I PERCENT
+percent of the smoothed latency, the smoothed latency plus four times its
+deviation, and
+.BR slow_read_min_ms .
+With no estimate for the RPC size yet, the estimate for the nearest
+smaller size is scaled up by the size ratio; with none at all, only
+.B slow_read_min_ms
+applies.
+Past the deadline the RPC is abandoned without the import being failed,
+and the client reads the data from another mirror, or reconstructs it
+from the parity of an EC file.
+.PP
+After an abandoned read the OSC treats the OST as slow for four times
+that soft deadline, or until a read on it succeeds, and EC reads avoid it
+meanwhile.
+Each further abandoned read before a successful one doubles both the
+deadline and the time the OST is avoided, up to the adaptive timeout, so
+an OST that stays slow is probed less and less often.
+An OST that is down is disconnected by the client, and reads are routed
+around it at once whatever the value of this parameter.
+.PP
+Reconstructing part of an EC raid set reads all of its other data
+stripes, many times the size of the read.
+A read that touches only part of a raid set therefore gets no soft
+deadline, and is not reconstructed around a slow OST, when most of the
+raid set's other stripes are on loaded OSTs, since the extra reads would
+add to that load.
+An OST counts as loaded when its smoothed latency for the read size is
+above a limit of two to four times its median latency since mount, and
+above an eighth of
+.BR slow_read_min_ms .
+That limit is twice the upper bound of the power-of-two
+.B osc.*.io_latency_stats
+bucket that holds the median.
+.PP
+Reads issued by a reconstruction itself are never abandoned, and neither
+are reads whose error could not be retried: an asynchronous direct read,
+or a direct read of a plain mirrored file, including a buffered read that
+hybrid I/O makes direct.
+A slow OST is skipped only when the parity can stand in for every
+unavailable stripe of its raid set; otherwise the read waits for it.
+A read that no in-sync parity covers is served like a plain mirror's, and
+with no other mirror it waits.
+.PP
+The OST is not told that a read was abandoned.
+It still reads the data and sends it, and the client discards it, so the
+transfer does not hold an OST service thread.
+Only when the client cannot set up a buffer to discard the data into,
+because too many abandoned reads are outstanding or memory is short, does
+the transfer hold a service thread until it times out and log a bulk read
+error.
+.PP
+.B slow_read_stats
+shows the parameters, how many milliseconds the OST is still avoided,
+the current backoff, how many reads were abandoned since the counters
+were last cleared, and the smoothed latency and deviation in microseconds
+per RPC size.
+Writing to it clears the estimates, the backoff, the mark and the
+counter.
+.SH EXAMPLES
+Give up on reads only after five times their usual latency, then check
+one OST:
+.EX
+.RB client# " lctl set_param osc.*.slow_read_pct=500"
+.RB client# " lctl get_param osc.testfs-OST0003-osc-*.slow_read_stats"
+osc.testfs-OST0003-osc-ffff8803c9c0f000.slow_read_stats=
+slow_read_pct: 500
+slow_read_min_ms: 2000
+slow_until_ms: 0
+backoff: 0
+soft_timeouts: 1
+read_latency_us:
+  4K: { average: 792, deviation: 210 }
+  1024K: { average: 7103, deviation: 1802 }
+.EE
+.PP
+Wait at least one second for any read from SSD OSTs:
+.EX
+.RB client# " lctl set_param osc.*.slow_read_min_ms=1000"
+.EE
+.SH AVAILABILITY
+.B osc.*.slow_read_pct
+is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit 2.17.5x
+.SH SEE ALSO
+.BR lfs-setstripe (1),
+.BR at_min (4),
+.BR lctl-set_param (8)

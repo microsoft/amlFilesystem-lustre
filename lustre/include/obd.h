@@ -139,6 +139,13 @@ struct timeout_item {
 #define OBD_MAX_RIF_DEFAULT	8
 #define OBD_MAX_RIF_MAX		512
 #define OSC_MAX_RIF_MAX		256
+/* default slow_read_pct: soft deadline of 3x the smoothed read latency */
+#define OSC_SLOW_READ_PCT_DEFAULT	300
+/* default slow_read_min_ms floor of the soft deadline */
+#define OSC_SLOW_READ_MIN_NONROT_MS	250
+#define OSC_SLOW_READ_MIN_ROT_MS	2000
+/* RPC latency buckets by size, one per power of two up to the maximum */
+#define OSC_LAT_BUCKETS		(PTLRPC_MAX_BRW_BITS - PAGE_SHIFT + 1)
 #define OSC_MAX_DIRTY_DEFAULT	2000	 /* Arbitrary large value */
 #define OSC_MAX_DIRTY_MB_MAX	2048     /* arbitrary, but < MAX_LONG bytes */
 #define OSC_DEFAULT_RESENDS	10
@@ -300,6 +307,20 @@ struct client_obd {
 	ktime_t			cl_io_latency_stats_init;
 	struct obd_histogram	*cl_read_io_latency_by_size;
 	struct obd_histogram	*cl_write_io_latency_by_size;
+	/* slow_read_pct state: smoothed OST_READ latency and its deviation
+	 * per RPC size (usec), the slow mark, the soft timeout backoff and
+	 * the abandoned-read count.  Under cl_loi_list_lock, except that
+	 * lov_sub_slow() and lov_sub_loaded() read them without it.
+	 */
+	struct osc_read_rtt {
+		u32		ort_srtt;
+		u32		ort_rttvar;
+	}			cl_read_rtt[OSC_LAT_BUCKETS];
+	unsigned int		cl_slow_read_pct;
+	unsigned int		cl_slow_read_min_ms;
+	unsigned int		cl_slow_read_backoff;
+	ktime_t			cl_read_slow_until;
+	u64			cl_slow_read_timeouts;
 	ktime_t			cl_batch_stats_init;
 	struct obd_histogram	cl_batch_rpc_hist;
 
@@ -850,6 +871,18 @@ struct obd_device {
 	unsigned int			obd_at_unhealthy_factor;
 	unsigned int			obd_ldlm_enqueue_min;
 };
+
+/* slow_read_min_ms, or its default for the kind of OST */
+static inline unsigned int osc_slow_read_min_ms(struct client_obd *cli)
+{
+	struct obd_device *obd = container_of(cli, struct obd_device, u.cli);
+
+	if (cli->cl_slow_read_min_ms)
+		return cli->cl_slow_read_min_ms;
+
+	return obd->obd_osfs.os_state & OS_STATFS_NONROT ?
+	       OSC_SLOW_READ_MIN_NONROT_MS : OSC_SLOW_READ_MIN_ROT_MS;
+}
 
 #define obd_get_at_min(obd) ({ \
 	struct obd_device *_obd = obd; \

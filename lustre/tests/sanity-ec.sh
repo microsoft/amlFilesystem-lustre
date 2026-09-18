@@ -8789,6 +8789,1084 @@ test_53a() {
 }
 run_test 53a "test EC recovery with non-zero read offsets"
 
+# Client-side OSC device name for OST index $1 under osc.* (never the
+# MDT-side osc-MDT0000 devices).
+ec_client_osc() {
+	local ost=$1
+
+	printf "osc.%s-OST%04x-osc-[^M][^D][^T]*" $FSNAME $ost
+}
+
+# Value of one key of osc.*.slow_read_stats for OST $1; keys are
+# slow_read_pct, slow_read_min_ms, slow_until_ms, backoff, soft_timeouts,
+# or a size such as 4K for its smoothed latency.
+ec_slow_read_stat() {
+	local ost=$1
+	local key=$2
+
+	$LCTL get_param -n $(ec_client_osc $ost).slow_read_stats |
+		awk -v k="$key:" '$1 == k {
+			v = $2 == "{" ? $4 : $2; sub(",", "", v); print v }'
+}
+
+# Number of read RPCs the client has sent to OST $1.
+ec_ost_read_rpcs() {
+	local ost=$1
+
+	$LCTL get_param -n $(ec_client_osc $ost).stats |
+		awk '$1 == "read_bytes" { print $2 }'
+}
+
+# Bytes the client has read from OST $1; an abandoned read adds none.
+ec_osc_read_bytes() {
+	local ost=$1
+
+	$LCTL get_param -n $(ec_client_osc $ost).stats |
+		awk '$1 == "read_bytes" { print $7 }'
+}
+
+ec_ms_now() {
+	date +%s%3N
+}
+
+# Turn readahead off for the test, so one 4K read is one 1-page RPC and
+# a read of a live stripe never drags the dead one in through readahead.
+ec_readahead_off() {
+	local ra=$($LCTL get_param -n llite.*.max_read_ahead_mb | head -1)
+
+	$LCTL set_param llite.*.max_read_ahead_mb=0 > /dev/null
+	stack_trap "$LCTL set_param llite.*.max_read_ahead_mb=$ra > /dev/null"
+}
+
+# Set slow_read_pct on every client OSC for the test.
+ec_slow_read_pct() {
+	local old=$($LCTL get_param -n \
+		osc.*OST*-osc-[^M][^D][^T]*.slow_read_pct | head -1)
+
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_pct=$1 \
+		> /dev/null || error "cannot set slow_read_pct=$1"
+	stack_trap "$LCTL set_param \
+		osc.*OST*-osc-[^M][^D][^T]*.slow_read_pct=$old > /dev/null"
+}
+
+# Keep the import of OST $1 from going IDLE, so stopping the OST moves
+# it to DISCONN instead of leaving it IDLE (which reads as healthy).
+ec_no_idle() {
+	local ost=$1
+	local osc=$(ec_client_osc $ost)
+	local old=$($LCTL get_param -n $osc.idle_timeout)
+
+	$LCTL set_param $osc.idle_timeout=0 > /dev/null
+	stack_trap "$LCTL set_param $osc.idle_timeout=$old > /dev/null"
+}
+
+# Stop the OST holding data stripe 0, register its restart, and wait
+# for the client import to leave FULL.  Sets facet in the caller.
+ec_54_stop_ost() {
+	local ost=$1
+
+	facet=ost$((ost + 1))
+	stop $facet || error "stop $facet failed"
+	stack_trap "facet_up $facet || \
+		start $facet $(ostdevname $((ost + 1))) $OST_MOUNT_OPTS; \
+		wait_recovery_complete $facet; \
+		wait_osc_import_ready client $facet"
+	wait_osc_import_state client $facet "\(DISCONN\|CONNECTING\)"
+}
+
+# 4M file, 2+1 EC with 1M stripes: byte 0 is data stripe 0 and byte 1M
+# is data stripe 1, chunks alternate.  Parity resynced.  Sets tf,
+# data_osts[] and parity_osts[] in the caller and leaves the cache cold.
+ec_54_setup() {
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	tf=$DIR/$tfile
+	stack_trap "rm -f $tf"
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	ec_classify_osts $tf
+	(( ${#data_osts[@]} == 2 && ${#parity_osts[@]} == 1 )) ||
+		error "layout: data=${data_osts[*]} parity=${parity_osts[*]}"
+	(( parity_osts[0] != data_osts[0] &&
+	   parity_osts[0] != data_osts[1] )) ||
+		error "parity shares OST ${parity_osts[0]} with a data stripe"
+	echo "data stripes on OST ${data_osts[*]}, parity on ${parity_osts[0]}"
+
+	# averages, marks and counters persist per OSC since mount: start clean
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+		> /dev/null || error "cannot clear slow_read_stats"
+
+	# Drop pages only.  The DLM locks from the write stay, so the size
+	# is known and no read needs a glimpse; a glimpse would wait for a
+	# stopped OST.
+	sync; echo 3 > /proc/sys/vm/drop_caches
+}
+
+# Read one 4K block at block index $2 of $1 into $3, buffered unless $4
+# is "direct".  Leaves the elapsed milliseconds in EC_READ_MS.  Not a
+# subshell function on purpose: error() must end the test, and a
+# command substitution would swallow it.
+EC_READ_MS=0
+ec_54_read_block() {
+	local tf=$1
+	local blk=$2
+	local out=$3
+	local mode=${4:-buffered}
+	local iflag=""
+	local t0
+
+	[[ $mode == direct ]] && iflag="iflag=direct"
+	t0=$(ec_ms_now)
+	dd if=$tf of=$out bs=4k count=1 skip=$blk $iflag 2> /dev/null ||
+		error "$mode read of block $blk failed"
+	EC_READ_MS=$(( $(ec_ms_now) - t0 ))
+}
+
+# Arm a fail_loc on the OSS serving OST $1 only.  ec_ost_fail_loc() arms
+# every OSS and CFS_FAIL_ONCE is consumed per node, so on a multi-OSS
+# cluster the reconstruction's own first read would trip it.
+ec_ost_fail_loc_on() {
+	local ost=$1
+	local loc=$2
+	local val=${3:-0}
+
+	do_facet ost$((ost + 1)) \
+		$LCTL set_param -n fail_loc=$loc fail_val=$val > /dev/null
+}
+
+# Poll "$1" every 200 ms for up to $3 seconds until its output is "$2".
+# wait_update() polls once a second, too slow for an import state that
+# lasts only a few seconds.
+ec_wait_output() {
+	local cmd=$1
+	local want=$2
+	local max=$3
+	local i
+
+	for ((i = 0; i < max * 5; i++)); do
+		[[ "$(eval "$cmd")" == "$want" ]] && return 0
+		sleep 0.2
+	done
+	return 1
+}
+
+# Import state of OST $1 on the client, and its last $2 states.
+ec_osc_state() {
+	$LCTL get_param -n $(ec_client_osc $1).ost_server_uuid |
+		awk '{ print $2 }'
+}
+
+ec_osc_state_tail() {
+	$LCTL get_param -n $(ec_client_osc $1).state |
+		awk '/^ *- \[/ { print $4 }' | tail -$2 | xargs
+}
+
+# Read stripe 1 of $tf into a file that must match $2 while data stripe
+# 0 is out of service ($3 says how): the read must reach stripe 1's OST
+# and send no parity read, and the whole file must still match md5 $1.
+# Uses tf, data_osts[] and parity_osts[] of the caller.
+ec_54_read_live() {
+	local sum0=$1
+	local want=$2
+	local why=$3
+	local got=$TMP/$tfile.got
+	local before after live_before live_after
+
+	before=$(ec_ost_read_rpcs ${parity_osts[0]})
+	live_before=$(ec_ost_read_rpcs ${data_osts[1]})
+	ec_54_read_block $tf 256 $got
+	after=$(ec_ost_read_rpcs ${parity_osts[0]})
+	live_after=$(ec_ost_read_rpcs ${data_osts[1]})
+	cmp $want $got || error "live-stripe read with $why returned wrong data"
+	(( live_after > live_before )) ||
+		error "live-stripe read with $why was served from cache"
+	(( after == before )) ||
+		error "live read, $why: $((after - before)) parity RPCs"
+	echo "live-stripe read with $why took ${EC_READ_MS}ms, no parity reads"
+
+	# no stat here: a glimpse would wait for a stopped OST.  A shrunken
+	# cached size would show up as a short whole-file read anyway.
+	[[ $(md5sum < $tf) == $sum0 ]] ||
+		error "whole-file md5 changed with $why"
+}
+
+test_54a() {
+	local tf data_osts parity_osts
+	local want0=$TMP/$tfile.want0
+	local want1=$TMP/$tfile.want1
+	local got=$TMP/$tfile.got
+	local dk=$TMP/$tfile.dk
+	local ost facet osc sum0 ms
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want0 $want1 $got $dk"
+	ost=${data_osts[0]}
+	facet=ost$((ost + 1))
+	ec_no_idle $ost
+
+	sum0=$(md5sum < $tf)
+	ec_54_read_block $tf 0 $want0
+	ec_54_read_block $tf 256 $want1
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# a read that misses the out-of-service stripe stays on the normal
+	# path, first with its OST deactivated
+	osc=$($LCTL dl | awk "/OST00*${ost}-osc-[^M]/ {print \$4}")
+	[[ -n $osc ]] || error "no client OSC device for OST $ost"
+	echo "deactivating OST $ost (device $osc)"
+	$LCTL --device $osc deactivate || error "deactivate $osc failed"
+	stack_trap "$LCTL --device $osc activate"
+	ec_54_read_live "$sum0" $want1 "OST $ost deactivated"
+	$LCTL --device $osc activate || error "activate $osc failed"
+	wait_osc_import_ready client $facet
+
+	# deactivation dropped stripe 0's locks: take them again, so that no
+	# read below needs a glimpse of the stopped OST
+	ec_54_read_block $tf 0 $got
+	ec_54_read_block $tf 256 $got
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# then with it stopped
+	echo "stopping $facet (data stripe 0)"
+	ec_54_stop_ost $ost
+	ec_54_read_live "$sum0" $want1 "$facet down"
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# a read of the dead stripe reconstructs at once
+	debugsave
+	stack_trap debugrestore
+	$LCTL set_param debug=+vfstrace > /dev/null
+	$LCTL clear
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	$LCTL dk > $dk
+
+	cmp $want0 $got || error "data differs with $facet down"
+	echo "read of stripe 0 with $facet down took ${ms}ms"
+	(( ms < 2000 )) || error "read took ${ms}ms, expected under 2000"
+	grep -q "no intact mirror, switch to CIT_EC_RD" $dk ||
+		error "mirror selection did not route the read to CIT_EC_RD"
+}
+run_test 54a "dead stripe read reconstructs at once, live one does not"
+
+test_54b() {
+	local tf data_osts parity_osts
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local ost0 ost1 par mode round blk ms n avg t0 t1 tp
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want $got"
+	ost0=${data_osts[0]}
+	ost1=${data_osts[1]}
+	par=${parity_osts[0]}
+	stack_trap "ec_ost_fail_loc 0 0"
+
+	for mode in buffered direct; do
+		# each mode starts with no averages, marks or counters
+		ec_slow_read_pct 0
+		$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+			> /dev/null || error "cannot clear slow_read_stats"
+
+		# warm the 1-page-RPC average of both data OSTs (blocks 0/512
+		# are stripe 0, 256/768 are stripe 1)
+		for round in 1 2 3; do
+			for blk in 0 256 512 768; do
+				ec_54_read_block $tf $blk $want $mode
+			done
+			cancel_lru_locks osc
+			sync; echo 3 > /proc/sys/vm/drop_caches
+		done
+		avg=$(ec_slow_read_stat $ost0 4K)
+		[[ -n $avg && $avg -gt 0 ]] ||
+			error "$mode: no OST $ost0 4K latency after warm-up"
+		echo "OST $ost0 4K read average ${avg}us," \
+			"OST $ost1 $(ec_slow_read_stat $ost1 4K)us"
+
+		ec_54_read_block $tf 0 $want $mode
+		cancel_lru_locks osc
+		sync; echo 3 > /proc/sys/vm/drop_caches
+
+		# one bulk read on the OSS stalls 20s: the read of stripe 0
+		# must return long before that, and only the OSC of its OST
+		# records a soft timeout
+		ec_slow_read_pct 300
+		t0=$(ec_slow_read_stat $ost0 soft_timeouts)
+		t1=$(ec_slow_read_stat $ost1 soft_timeouts)
+		tp=$(ec_slow_read_stat $par soft_timeouts)
+#define OBD_FAIL_OST_BRW_PAUSE_BULK	0x214
+		ec_ost_fail_loc_on $ost0 0x80000214 20
+		ec_54_read_block $tf 0 $got $mode
+		ms=$EC_READ_MS
+		ec_ost_fail_loc_on $ost0 0 0
+
+		cmp $want $got || error "$mode read returned wrong data"
+		echo "$mode read of stripe 0 during a 20s stall took ${ms}ms"
+		(( ms < 5000 )) || error "$mode read took ${ms}ms > 5000ms"
+		n=$(ec_slow_read_stat $ost0 soft_timeouts)
+		(( n == t0 + 1 )) ||
+			error "$mode: OST $ost0 soft_timeouts=$n != $((t0 + 1))"
+		n=$(ec_slow_read_stat $ost1 soft_timeouts)
+		(( n == t1 )) ||
+			error "$mode: OST $ost1 soft_timeouts=$n, expected $t1"
+		n=$(ec_slow_read_stat $par soft_timeouts)
+		(( n == tp )) ||
+			error "$mode: parity OST $par soft_timeouts=$n != $tp"
+		n=$(ec_slow_read_stat $ost0 slow_until_ms)
+		(( n > 0 )) ||
+			error "$mode: OST $ost0 not slow after soft timeout"
+
+		# stripe 1 lives on a healthy OST and must read normally
+		ec_54_read_block $tf 256 $got $mode
+		ms=$EC_READ_MS
+		(( ms < 2000 )) || error "$mode read of stripe 1 took ${ms}ms"
+	done
+
+	# with the tunable off the stall is waited out
+	ec_slow_read_pct 0
+	ec_54_read_block $tf 768 $want
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	t1=$(ec_slow_read_stat $ost1 soft_timeouts)
+	ec_ost_fail_loc_on $ost1 0x80000214 5
+	ec_54_read_block $tf 768 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost1 0 0
+	cmp $want $got || error "read with slow_read_pct=0 wrong data"
+	echo "read of stripe 1 during a 5s stall with pct=0 took ${ms}ms"
+	(( ms >= 4500 )) || error "read took ${ms}ms, expected the full 5s"
+	n=$(ec_slow_read_stat $ost1 soft_timeouts)
+	(( n == t1 )) || error "pct=0: OST $ost1 soft_timeouts=$n != $t1"
+}
+run_test 54b "read gives up on a stalled OST after pct x average"
+
+test_54c() {
+	local tf data_osts parity_osts
+	local want0=$TMP/$tfile.want0
+	local want1=$TMP/$tfile.want1
+	local got=$TMP/$tfile.got
+	local ost round blk ms n o t1 live_before live_after
+	local -A before
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want0 $want1 $got"
+	ost=${data_osts[0]}
+	ec_no_idle $ost
+
+	# warm the 1-page-RPC average of stripe 1's OST
+	for round in 1 2 3; do
+		for blk in 256 768; do
+			ec_54_read_block $tf $blk $want1
+		done
+		cancel_lru_locks osc
+		sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+	ec_54_read_block $tf 0 $want0
+	ec_54_read_block $tf 256 $want1
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	ec_54_stop_ost $ost
+	ec_slow_read_pct 300
+	stack_trap "ec_ost_fail_loc 0 0"
+
+	# the first bulk read on the node is a survivor or parity read of
+	# the reconstruction of stripe 0; it must be waited out, never
+	# abandoned
+	for o in ${data_osts[1]} ${parity_osts[0]}; do
+		before[$o]=$(ec_slow_read_stat $o soft_timeouts)
+	done
+	ec_ost_fail_loc_on ${data_osts[1]} 0x80000214 3
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on ${data_osts[1]} 0 0
+
+	cmp $want0 $got || error "reconstructed data wrong after the stall"
+	echo "reconstruction through a 3s survivor stall took ${ms}ms"
+	(( ms >= 2500 )) || error "survivor read abandoned after ${ms}ms"
+	for o in ${data_osts[1]} ${parity_osts[0]}; do
+		n=$(ec_slow_read_stat $o soft_timeouts)
+		(( n == before[$o] )) ||
+			error "OST $o soft_timeouts=$n during reconstruction," \
+				"expected ${before[$o]}"
+	done
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# the 3s wait went into stripe 1's read average: start again from a
+	# fresh one, so the next read is abandoned at its usual deadline
+	ec_slow_read_pct 0
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+		> /dev/null || error "cannot clear slow_read_stats"
+	for round in 1 2 3; do
+		for blk in 256 768; do
+			ec_54_read_block $tf $blk $got
+		done
+		sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+	ec_slow_read_pct 300
+
+	# stripe 0 is dead, so a 2+1 raid set has no error to spare: when the
+	# read of stripe 1 is abandoned at its soft deadline and stripe 1 is
+	# marked slow, the retry must read it and wait rather than fail for
+	# lack of parity
+	t1=$(ec_slow_read_stat ${data_osts[1]} soft_timeouts)
+	live_before=$(ec_osc_read_bytes ${data_osts[1]})
+	ec_ost_fail_loc_on ${data_osts[1]} 0x80000214 20
+	ec_54_read_block $tf 256 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on ${data_osts[1]} 0 0
+	live_after=$(ec_osc_read_bytes ${data_osts[1]})
+
+	cmp $want1 $got || error "read of the slow-marked survivor wrong data"
+	(( live_after > live_before )) ||
+		error "the slow-marked survivor was not read"
+	echo "stripe 1 read, stripe 0 dead, stripe 1 slow: ${ms}ms"
+	(( ms < 5000 )) || error "read took ${ms}ms, expected under 5000"
+	n=$(ec_slow_read_stat ${data_osts[1]} soft_timeouts)
+	(( n == t1 + 1 )) ||
+		error "OST ${data_osts[1]} soft_timeouts=$n != $((t1 + 1))"
+}
+run_test 54c "reads only a stalled survivor can serve are waited out"
+
+test_54d() {
+	local tf data_osts parity_osts
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local dk=$TMP/$tfile.dk
+	local ost par ms n t0 t1 round blk mark before after
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want $got $dk"
+	ost=${data_osts[0]}
+	par=${parity_osts[0]}
+	stack_trap "ec_ost_fail_loc 0 0"
+	debugsave
+	stack_trap debugrestore
+	$LCTL set_param debug=+vfstrace > /dev/null
+
+	# warm the 1-page-RPC averages of both data stripes' OSTs
+	for round in 1 2 3; do
+		for blk in 0 256 512 768; do
+			ec_54_read_block $tf $blk $want
+		done
+		cancel_lru_locks osc
+		sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+	ec_54_read_block $tf 0 $want
+	ec_54_read_block $tf 256 $want
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# a read of stripe 0 abandoned at its soft deadline marks it slow
+	ec_slow_read_pct 300
+	ec_ost_fail_loc_on $ost 0x80000214 20
+	ec_54_read_block $tf 0 $got
+	ec_ost_fail_loc_on $ost 0 0
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	mark=$(ec_slow_read_stat $ost slow_until_ms)
+	(( mark > 0 )) || error "OST $ost was not marked slow"
+
+	# stripe 1 turns slow too: two slow stripes of a 2+1 raid set are
+	# more than its parity covers, so the read of stripe 1 must wait for
+	# it rather than reconstruct stripe 0 and then wait anyway
+	t1=$(ec_slow_read_stat ${data_osts[1]} soft_timeouts)
+	before=$(ec_osc_read_bytes $par)
+	$LCTL clear
+	ec_ost_fail_loc_on ${data_osts[1]} 0x80000214 20
+	ec_54_read_block $tf 256 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on ${data_osts[1]} 0 0
+	$LCTL dk > $dk
+	after=$(ec_osc_read_bytes $par)
+
+	cmp $want $got || error "read of stripe 1 returned wrong data"
+	echo "read of stripe 1, stripes 0 and 1 slow-marked, took ${ms}ms"
+	(( ms < 5000 )) || error "read took ${ms}ms, expected under 5000"
+	n=$(ec_slow_read_stat ${data_osts[1]} soft_timeouts)
+	(( n == t1 + 1 )) ||
+		error "OST ${data_osts[1]} soft_timeouts=$n != $((t1 + 1))"
+	! grep -q "switch to CIT_EC_RD" $dk ||
+		error "reconstructed with more slow stripes than parity"
+	(( after == before )) ||
+		error "parity read $((after - before)) bytes, expected 0"
+
+	# a write after the resync leaves the parity stale
+	ec_slow_read_pct 0
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+		> /dev/null || error "cannot clear slow_read_stats"
+	dd if=/dev/urandom of=$tf bs=4k count=1 conv=notrunc status=none ||
+		error "write failed"
+	verify_flr_state $tf "wp"
+	$LFS getstripe $tf | grep lcme_flags | grep -q stale ||
+		error "parity is not stale after the write"
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# warm the 1-page-RPC average of stripe 0's OST
+	for round in 1 2 3; do
+		for blk in 0 512; do
+			ec_54_read_block $tf $blk $want
+		done
+		cancel_lru_locks osc
+		sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+	ec_54_read_block $tf 0 $want
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# with no parity to reconstruct from, the read must wait out the
+	# stall rather than give up on the OST and fail for lack of parity
+	ec_slow_read_pct 300
+	t0=$(ec_slow_read_stat $ost soft_timeouts)
+	ec_ost_fail_loc_on $ost 0x214 3
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost 0 0
+
+	cmp $want $got || error "read with stale parity returned wrong data"
+	echo "read of stripe 0 with stale parity during a 3s stall took ${ms}ms"
+	(( ms >= 2500 )) ||
+		error "read took ${ms}ms, expected to wait out the stall"
+	n=$(ec_slow_read_stat $ost soft_timeouts)
+	(( n == t0 )) ||
+		error "stale parity: OST $ost soft_timeouts=$n != $t0"
+
+	# the parity back in sync, then its OST down
+	ec_slow_read_pct 0
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+		> /dev/null || error "cannot clear slow_read_stats"
+	ec_no_idle $par
+
+	# warm the 1-page-RPC average of stripe 0's OST
+	for round in 1 2 3; do
+		for blk in 0 512; do
+			ec_54_read_block $tf $blk $want
+		done
+		cancel_lru_locks osc
+		sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+	ec_54_read_block $tf 0 $want
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	ec_54_stop_ost $par
+
+	# the parity is dead, so the raid set has no error to spare: when
+	# the read of stripe 0 is abandoned at its soft deadline and stripe
+	# 0 is marked slow, the retry must read it and wait rather than
+	# skip it and fail for lack of parity
+	ec_slow_read_pct 300
+	t0=$(ec_slow_read_stat $ost soft_timeouts)
+	before=$(ec_osc_read_bytes $ost)
+	ec_ost_fail_loc_on $ost 0x80000214 20
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost 0 0
+	after=$(ec_osc_read_bytes $ost)
+
+	cmp $want $got || error "read with the parity OST down wrong data"
+	(( after > before )) || error "the slow-marked stripe was not read"
+	echo "stripe 0 read, parity dead, stripe 0 slow: ${ms}ms"
+	(( ms < 5000 )) || error "read took ${ms}ms, expected under 5000"
+	n=$(ec_slow_read_stat $ost soft_timeouts)
+	(( n == t0 + 1 )) ||
+		error "OST $ost soft_timeouts=$n, expected $((t0 + 1))"
+}
+run_test 54d "slow stripe is waited on when parity cannot stand in for it"
+
+test_54e() {
+	local tf data_osts parity_osts
+	local tfm=$DIR/$tfile.mirror
+	local aio=$DIR/$tfile.aio
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local mode rmode iflag round avg hio thr t0 ms
+
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	stack_trap "rm -f $tfm $aio $want $got"
+	stack_trap "ec_ost_fail_loc 0 0"
+
+	# a direct read of a plain mirror cannot be restarted on another
+	# mirror once it fails; reads go to the preferred mirror first, on
+	# OST 0.  "hybrid" is a buffered read that hybrid IO sends direct.
+	$LFS mirror create -N -o 0 --flags=prefer -N -o 1 $tfm ||
+		error "mirror create failed"
+	dd if=/dev/urandom of=$tfm bs=1M count=1 || error "write failed"
+	$LFS mirror resync $tfm || error "resync failed"
+	verify_flr_state $tfm "ro"
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+		> /dev/null || error "cannot clear slow_read_stats"
+
+	for mode in direct hybrid; do
+		rmode=direct
+		iflag="iflag=direct"
+		if [[ $mode == hybrid ]]; then
+			local thp=llite.*.hybrid_io_read_threshold_bytes
+
+			hio=$($LCTL get_param -n llite.*.hybrid_io | head -n1)
+			thr=$($LCTL get_param -n $thp | head -n1)
+			$LCTL set_param llite.*.hybrid_io=1 $thp=4096 ||
+				error "cannot send 4K reads through hybrid IO"
+			stack_trap "$LCTL set_param llite.*.hybrid_io=$hio \
+				$thp=$thr > /dev/null"
+			rmode=buffered
+			iflag=""
+		fi
+
+		ec_slow_read_pct 0
+		for round in 1 2 3; do
+			ec_54_read_block $tfm 0 $want $rmode
+		done
+		avg=$(ec_slow_read_stat 0 4K)
+		[[ -n $avg && $avg -gt 0 ]] ||
+			error "no 4K read average on OST 0 after $mode warm-up"
+
+		ec_slow_read_pct 300
+		ec_ost_fail_loc_on 0 0x80000214 3
+		t0=$(ec_ms_now)
+		dd if=$tfm of=$got bs=4k count=1 $iflag status=none ||
+			error "$mode plain mirror read failed during stall"
+		ms=$(( $(ec_ms_now) - t0 ))
+		ec_ost_fail_loc_on 0 0 0
+
+		cmp $want $got || error "$mode read returned wrong data"
+		echo "$mode plain mirror read during 3s stall: ${ms}ms"
+		(( ms >= 2500 )) ||
+			error "$mode read took ${ms}ms, did not wait out stall"
+	done
+
+	# an asynchronous direct read of an EC file completes after the
+	# system call has returned and cannot be restarted either
+	if ! which aiocp > /dev/null 2>&1; then
+		echo "no aiocp installed, AIO read not tested"
+		return 0
+	fi
+	ec_54_setup
+	ec_slow_read_pct 0
+	for round in 1 2 3; do
+		ec_54_read_block $tf 0 $want direct
+	done
+	avg=$(ec_slow_read_stat ${data_osts[0]} 4K)
+	[[ -n $avg && $avg -gt 0 ]] ||
+		error "no 4K read average on OST ${data_osts[0]} after warm-up"
+
+	ec_slow_read_pct 300
+	touch $aio
+	ec_ost_fail_loc_on ${data_osts[0]} 0x80000214 3
+	t0=$(ec_ms_now)
+	aiocp -a $PAGE_SIZE -b 4k -s 4k -f O_DIRECT $tf $aio ||
+		error "AIO direct read failed during a stall"
+	ms=$(( $(ec_ms_now) - t0 ))
+	ec_ost_fail_loc_on ${data_osts[0]} 0 0
+
+	cmp $want $aio || error "AIO read returned wrong data"
+	echo "AIO read of stripe 0 during a 3s stall took ${ms}ms"
+	(( ms >= 2500 )) ||
+		error "AIO read took ${ms}ms, expected it to wait out the stall"
+}
+run_test 54e "reads that cannot be restarted wait out a stalled OST"
+
+test_54f() {
+	local tf data_osts parity_osts
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local dk=$TMP/$tfile.dk
+	local plain=$DIR/$tfile.plain
+	local ost facet osc old pid ppid t0 n hist
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want $got $dk $plain"
+	ost=${data_osts[0]}
+	facet=ost$((ost + 1))
+	osc=$(ec_client_osc $ost)
+	ec_54_read_block $tf 0 $want
+	stack_trap "ec_ost_fail_loc 0 0"
+	debugsave
+	stack_trap debugrestore
+	$LCTL set_param debug=+vfstrace > /dev/null
+
+	# no locks and no requests let stripe 0's import go idle
+	old=$($LCTL get_param -n $osc.idle_timeout)
+	$LCTL set_param $osc.idle_timeout=2 > /dev/null
+	stack_trap "$LCTL set_param $osc.idle_timeout=$old > /dev/null"
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	wait_osc_import_state client $facet IDLE
+
+	# hold the reconnect from IDLE at the OST so the read starts during it
+#define OBD_FAIL_TGT_DELAY_CONNECT	0x703
+	ec_ost_fail_loc_on $ost 0x80000703
+	$LCTL set_param $osc.idle_connect=1 > /dev/null
+	wait_osc_import_state client $facet CONNECTING
+
+	# the wait for the reconnect must not count toward the read's
+	# soft deadline
+	ec_slow_read_pct 300
+	t0=$(ec_slow_read_stat $ost soft_timeouts)
+	$LCTL clear
+	dd if=$tf of=$got bs=4k count=1 status=none &
+	pid=$!
+	sleep 2
+	ec_ost_fail_loc_on $ost 0 0
+	wait $pid || error "read during the reconnect from idle failed"
+	$LCTL dk > $dk
+
+	cmp $want $got ||
+		error "read during the reconnect from idle returned wrong data"
+	! grep -q "switch to CIT_EC_RD" $dk ||
+		error "read during a reconnect from idle was reconstructed"
+	n=$(ec_slow_read_stat $ost soft_timeouts)
+	(( n == t0 )) ||
+		error "idle reconnect: OST $ost soft_timeouts=$n != $t0"
+
+	# a plain file on stripe 0's OST: its read is the request that
+	# arrives while the idle DISCONNECT is in flight
+	ec_slow_read_pct 0
+	$LCTL set_param osc.*OST*-osc-[^M][^D][^T]*.slow_read_stats=0 \
+		> /dev/null || error "cannot clear slow_read_stats"
+	$LFS setstripe -c 1 -i $ost $plain || error "setstripe $plain failed"
+	dd if=/dev/urandom of=$plain bs=4k count=1 status=none ||
+		error "write of $plain failed"
+
+	# hold the DISCONNECT at the OST for 3s (the request times out
+	# after INITIAL_CONNECT_TIMEOUT = 5s)
+#define OBD_FAIL_OST_DISCONNECT_DELAY	0x245
+	ec_ost_fail_loc_on $ost 0x245 3
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	ec_wait_output "ec_osc_state $ost" CONNECTING 30 ||
+		error "OST $ost import did not start its idle disconnect"
+
+	# a request arriving now makes ptlrpc_disconnect_idle_interpret()
+	# reconnect at once, with no IDLE state in between; hold that
+	# reconnect at the OST so the read below starts during it
+	dd if=$plain of=/dev/null bs=4k count=1 status=none &
+	ppid=$!
+	ec_ost_fail_loc_on $ost 0x80000703
+	if ! ec_wait_output "ec_osc_state_tail $ost 4" \
+	     "FULL CONNECTING NEW CONNECTING" 10; then
+		hist=$(ec_osc_state_tail $ost 4)
+		error "OST $ost import went '$hist', not into a reconnect"
+	fi
+
+	ec_slow_read_pct 300
+	t0=$(ec_slow_read_stat $ost soft_timeouts)
+	$LCTL clear
+	dd if=$tf of=$got bs=4k count=1 status=none &
+	pid=$!
+	sleep 2
+	ec_ost_fail_loc_on $ost 0 0
+	wait $pid || error "read during disconnect reconnect failed"
+	wait $ppid || error "plain read during the reconnect failed"
+	$LCTL dk > $dk
+
+	cmp $want $got ||
+		error "read during disconnect reconnect: wrong data"
+	! grep -q "switch to CIT_EC_RD" $dk ||
+		error "read during disconnect reconnect reconstructed"
+	n=$(ec_slow_read_stat $ost soft_timeouts)
+	(( n == t0 )) ||
+		error "disconnect reconnect: OST $ost soft_timeouts=$n != $t0"
+}
+run_test 54f "read during a reconnect from idle is not treated as an outage"
+
+# Read 4K blocks $2.. of $1 into $3 with a cold cache each time, $4 rounds,
+# so each read is a 1-page RPC that feeds the latency estimates.
+ec_54_warm() {
+	local tf=$1
+	local out=$2
+	local rounds=$3
+	local round blk
+
+	shift 3
+	for ((round = 0; round < rounds; round++)); do
+		for blk in "$@"; do
+			ec_54_read_block $tf $blk $out
+		done
+		cancel_lru_locks osc
+		sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+}
+
+test_54g() {
+	local tf data_osts parity_osts
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local ost ms n mark
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want $got"
+	ost=${data_osts[0]}
+	stack_trap "ec_ost_fail_loc 0 0"
+
+	ec_slow_read_pct 0
+	ec_54_warm $tf $got 3 0 256
+	ec_54_warm $tf $want 1 0
+	ec_slow_read_pct 300
+
+	# the first soft timeout abandons the read at slow_read_min_ms and
+	# avoids the OST for four times that
+	local min=$(ec_slow_read_stat $ost slow_read_min_ms)
+
+	ec_ost_fail_loc_on $ost 0x80000214 20
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost 0 0
+	cmp $want $got || error "first stalled read returned wrong data"
+	echo "first read during a 20s stall took ${ms}ms, min ${min}ms"
+	(( ms < 2 * min )) || error "first read took ${ms}ms, min ${min}ms"
+	n=$(ec_slow_read_stat $ost backoff)
+	(( n == 1 )) || error "backoff=$n after one soft timeout, expected 1"
+	mark=$(ec_slow_read_stat $ost slow_until_ms)
+	(( mark > 2 * min && mark <= 4 * min )) ||
+		error "slow mark ${mark}ms, expected up to $((4 * min))ms"
+
+	# once the mark expires, the next stalled read waits twice as long
+	# and the OST is avoided twice as long
+	sleep $(( (mark + 999) / 1000 + 1 ))
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	ec_ost_fail_loc_on $ost 0x80000214 20
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost 0 0
+	cmp $want $got || error "second stalled read returned wrong data"
+	echo "second read during a 20s stall took ${ms}ms"
+	(( ms >= 2 * min - 100 && ms < 4 * min )) ||
+		error "second read took ${ms}ms, expected about $((2 * min))ms"
+	n=$(ec_slow_read_stat $ost backoff)
+	(( n == 2 )) || error "backoff=$n after two soft timeouts, expected 2"
+	mark=$(ec_slow_read_stat $ost slow_until_ms)
+	(( mark > 4 * min && mark <= 8 * min )) ||
+		error "slow mark ${mark}ms, expected up to $((8 * min))ms"
+
+	# a successful read clears the backoff and the mark
+	sleep $(( (mark + 999) / 1000 + 1 ))
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	ec_54_read_block $tf 0 $got
+	cmp $want $got || error "read after the stall returned wrong data"
+	n=$(ec_slow_read_stat $ost backoff)
+	(( n == 0 )) || error "backoff=$n after a successful read"
+	n=$(ec_slow_read_stat $ost slow_until_ms)
+	(( n == 0 )) || error "slow mark ${n}ms after a successful read"
+}
+run_test 54g "repeated soft timeouts back off the deadline and the slow mark"
+
+test_54h() {
+	local tf data_osts parity_osts
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local ost peer ms n t0
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want $got"
+	ost=${data_osts[0]}
+	peer=${data_osts[1]}
+	stack_trap "ec_ost_fail_loc 0 0"
+
+	# enough history of the peer's usual 4K latency, then a few reads
+	# delayed 1s each so its smoothed latency is far above that
+	ec_slow_read_pct 0
+	ec_54_warm $tf $got 10 0 256 512 768
+	ec_54_warm $tf $want 1 0
+#define OBD_FAIL_OST_BRW_PAUSE_BULK	0x214
+	ec_ost_fail_loc_on $peer 0x214 1
+	ec_54_warm $tf $got 4 256
+	ec_ost_fail_loc_on $peer 0 0
+	echo "OST $peer 4K latency $(ec_slow_read_stat $peer 4K)us"
+	$LCTL get_param -n $(ec_client_osc $peer).io_latency_stats |
+		grep "rd_4K"
+
+	# a read of only stripe 0 with stripe 1 loaded gets no soft deadline:
+	# reconstructing it would read stripe 1 and add to that load
+	ec_slow_read_pct 300
+	t0=$(ec_slow_read_stat $ost soft_timeouts)
+	ec_ost_fail_loc_on $ost 0x80000214 5
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost 0 0
+	cmp $want $got || error "read with a loaded peer returned wrong data"
+	echo "stripe 0 read, stripe 1 loaded, 5s stall: ${ms}ms"
+	(( ms >= 4500 )) || error "read took ${ms}ms, expected the full 5s"
+	n=$(ec_slow_read_stat $ost soft_timeouts)
+	(( n == t0 )) || error "OST $ost soft_timeouts=$n, expected $t0"
+
+	# with the peer's estimate cleared it is no longer seen as loaded, so
+	# the same read is abandoned at its soft deadline and reconstructed;
+	# clear the stalled OST's too, which the 5s read above raised
+	$LCTL set_param $(ec_client_osc $peer).slow_read_stats=0 \
+		$(ec_client_osc $ost).slow_read_stats=0 > /dev/null ||
+		error "cannot clear OST $peer and $ost slow_read_stats"
+	t0=$(ec_slow_read_stat $ost soft_timeouts)
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	ec_ost_fail_loc_on $ost 0x80000214 20
+	ec_54_read_block $tf 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on $ost 0 0
+	cmp $want $got || error "read with an idle peer returned wrong data"
+	echo "stripe 0 read, stripe 1 idle, 20s stall: ${ms}ms"
+	(( ms < 5000 )) || error "read took ${ms}ms, expected under 5000"
+	n=$(ec_slow_read_stat $ost soft_timeouts)
+	(( n == t0 + 1 )) || error "OST $ost soft_timeouts=$n != $((t0 + 1))"
+}
+run_test 54h "partial raid set read with loaded peers waits, not reconstructs"
+
+test_54i() {
+	local tfm=$DIR/$tfile.mirror
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local ms n t0
+
+	(( OSTCOUNT >= 2 )) || skip "need >= 2 OSTs"
+	ec_readahead_off
+	stack_trap "rm -f $tfm $want $got"
+	stack_trap "ec_ost_fail_loc 0 0"
+
+	# a write leaves the mirror on OST 1 stale, so only OST 0 can serve
+	# a read: abandoning it would only retry the same OST
+	$LFS mirror create -N -o 0 --flags=prefer -N -o 1 $tfm ||
+		error "mirror create failed"
+	dd if=/dev/urandom of=$tfm bs=1M count=1 conv=fsync ||
+		error "write failed"
+	verify_flr_state $tfm "wp"
+	ec_54_read_block $tfm 0 $want
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	ec_slow_read_pct 300
+	t0=$(ec_slow_read_stat 0 soft_timeouts)
+	ec_ost_fail_loc_on 0 0x80000214 3
+	ec_54_read_block $tfm 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on 0 0 0
+	cmp $want $got || error "read of a single valid mirror wrong data"
+	echo "read of the only valid mirror during a 3s stall: ${ms}ms"
+	(( ms >= 2500 )) || error "read took ${ms}ms, did not wait out stall"
+	n=$(ec_slow_read_stat 0 soft_timeouts)
+	(( n == t0 )) || error "OST 0 soft_timeouts=$n != $t0"
+
+	# once both mirrors are in sync, the read of the stalled preferred
+	# mirror is abandoned at its soft deadline and served by the other;
+	# clear the latency estimate the 3s read above raised
+	$LFS mirror resync $tfm || error "mirror resync failed"
+	verify_flr_state $tfm "ro"
+	$LCTL set_param $(ec_client_osc 0).slow_read_stats=0 > /dev/null ||
+		error "cannot clear OST 0 slow_read_stats"
+	t0=$(ec_slow_read_stat 0 soft_timeouts)
+	cancel_lru_locks osc
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	ec_ost_fail_loc_on 0 0x80000214 20
+	ec_54_read_block $tfm 0 $got
+	ms=$EC_READ_MS
+	ec_ost_fail_loc_on 0 0 0
+	cmp $want $got || error "read of two mirrors wrong data"
+	echo "read of two mirrors during a 20s stall: ${ms}ms"
+	(( ms < 5000 )) || error "read took ${ms}ms, did not try mirror 2"
+	n=$(ec_slow_read_stat 0 soft_timeouts)
+	(( n == t0 + 1 )) || error "OST 0 soft_timeouts=$n != $((t0 + 1))"
+}
+run_test 54i "read waits for its only valid mirror, or tries the other"
+
+test_54j() {
+	local tf data_osts parity_osts
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local ost par facet pid
+
+	ec_54_setup
+	ec_readahead_off
+	stack_trap "rm -f $want $got"
+	ost=${data_osts[0]}
+	par=${parity_osts[0]}
+	ec_no_idle $ost
+	ec_no_idle $par
+	ec_54_read_block $tf 0 $want
+	ec_54_read_block $tf 256 $got
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# with stripe 0 and the parity both down, as in an OSS failover, the
+	# raid set has more unavailable stripes than parity: the read must
+	# wait for the OSTs to come back rather than fail
+	ec_54_stop_ost $par
+	ec_54_stop_ost $ost
+	ec_54_read_block $tf 0 $got &
+	pid=$!
+	sleep 5
+	kill -0 $pid || error "read of stripe 0 did not wait for its OST"
+	for facet in ost$((ost + 1)) ost$((par + 1)); do
+		start $facet $(ostdevname ${facet#ost}) $OST_MOUNT_OPTS ||
+			error "start $facet failed"
+	done
+	wait $pid || error "read of stripe 0 failed after the OSTs returned"
+	cmp $want $got || error "read after the OSTs returned wrong data"
+}
+run_test 54j "read waits for an OSS failover parity cannot cover"
+
+test_54k() {
+	(( OSTCOUNT >= 6 )) || skip "need >= 6 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local data_osts parity_osts safe_osts
+	local ost facet pid
+
+	stack_trap "rm -f $tf $want $got"
+	# 2+1 on 4 stripes is two raid sets: data stripes 0,1 with parity
+	# stripe 0, and data stripes 2,3 with parity stripe 1
+	$LFS setstripe -E -1 -S 1M -c 4 --ec 2+1 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=8 || error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+	ec_classify_osts $tf
+	(( ${#data_osts[@]} == 4 && ${#parity_osts[@]} == 2 )) ||
+		error "layout: data=${data_osts[*]} parity=${parity_osts[*]}"
+	(( $(printf '%s\n' ${data_osts[@]} ${parity_osts[@]} |
+	     sort -u | wc -l) == 6 )) ||
+		skip "data and parity stripes share OSTs"
+	ec_readahead_off
+	dd if=$tf of=$want bs=4M count=1 2> /dev/null || error "read failed"
+	sync; echo 3 > /proc/sys/vm/drop_caches
+
+	# raid set 0 lost one data stripe, which its parity can rebuild, but
+	# raid set 1 lost a data stripe and its parity, as in an OSS failover:
+	# a read of both sets must wait for the OSTs, not fail or spin
+	for ost in ${data_osts[0]} ${data_osts[2]} ${parity_osts[1]}; do
+		ec_no_idle $ost
+		ec_54_stop_ost $ost
+	done
+	dd if=$tf of=$got bs=4M count=1 &
+	pid=$!
+	sleep 5
+	if ! kill -0 $pid 2> /dev/null; then
+		wait $pid
+		error "read of both raid sets did not wait: rc=$?," \
+			"$(stat -c %s $got) bytes"
+	fi
+	for ost in ${data_osts[0]} ${data_osts[2]} ${parity_osts[1]}; do
+		facet=ost$((ost + 1))
+		start $facet $(ostdevname $((ost + 1))) $OST_MOUNT_OPTS ||
+			error "start $facet failed"
+	done
+	wait $pid || error "read of both raid sets failed after OSTs returned"
+	cmp $want $got || error "read after the OSTs returned wrong data"
+}
+run_test 54k "read waits when one of its raid sets cannot be rebuilt"
+
 test_55a() {
 	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
 	enable_ec

@@ -2112,6 +2112,10 @@ struct cl_io {
 			     ci_p2pdma_unsupported:1,
 	/* Switch to CIT_EC_RD */
 			     ci_switch_ec_io:1,
+	/* no soft deadline: no other mirror can serve the read, or it reads
+	 * part of a raid set whose reconstruction would add to the load
+	 */
+			     ci_no_soft_tmo:1,
 	/* this IO is lockless */
 			     ci_lockless:1,
 	/* the layout has a parity mirror, even where pos is not covered */

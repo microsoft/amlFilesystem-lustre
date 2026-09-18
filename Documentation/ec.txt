@@ -721,3 +721,64 @@ compute the parities over.
  +------------------------+  |
  | 0000000000000000000000 |  |
  +------------------------+  /
+
+4. Degraded reads: slow and dead OSTs
+=====================================
+A read of an EC file whose data stripe sits on an OST that cannot answer
+is recovered from the surviving stripes and the parity.  Three cases
+reach that path:
+
+- The OSC import is deactivated or invalid, or not connected (any state
+  but FULL or IDLE, except a reconnect from idle): lov_io_mirror_init()
+  sees it while selecting a mirror and switches the read to CIT_EC_RD at
+  once, skipping the FLR retry rounds.  Only the stripes the read touches
+  are examined, so a read of a live stripe of a degraded file stays on
+  the normal path.
+
+- The OST is alive but slow: each OSC keeps a smoothed OST_READ latency
+  and its deviation per RPC size (as for the TCP retransmission timer),
+  and a top-level no-delay read RPC carries a soft deadline, counted
+  from its send, of the largest of osc.*.slow_read_pct (default 300)
+  percent of the smoothed latency, the smoothed latency plus four
+  deviations, and osc.*.slow_read_min_ms (250 ms for a non-rotational
+  OST, 2 s otherwise).  When it passes, ptlrpcd abandons the request
+  without failing the import, the OSC marks the import slow for four
+  times the deadline, and the restarted read is routed to CIT_EC_RD
+  like the case above.  Each further soft timeout before a successful
+  read doubles the deadline and the mark, up to the adaptive timeout;
+  any read on that OST that succeeds clears both.
+
+- The OST fails a read outright, which the existing FLR no-delay retry
+  already turns into CIT_EC_RD.
+
+All three need in-sync parity behind the read.  With none the file
+reads like a plain mirror, and with a single data mirror the read waits
+on its stripes rather than probe them.
+
+Parity stands in for no more stripes of a raid set than it has parity
+objects the read can reach.  A stripe on an unreachable OST is
+reconstructed when the parity covers the raid set's unreachable
+stripes, reading any slow ones, and one on a slow-marked OST only when
+the parity covers every unavailable stripe of the set: past that the
+reconstruction would still wait on a slow stripe and the parity reads
+would be wasted.  Otherwise the read waits for those stripes, for
+example until an OSS failover completes, so a read that can succeed by
+waiting still does.  A read spanning several raid sets waits as a whole
+only if none of them can be rebuilt; otherwise it rebuilds those it can
+and waits for the rest.
+
+Reconstructing part of a raid set reads all of its other data stripes,
+many times the size of the read.  A read that touches only part of a
+raid set gets no soft deadline, and is not reconstructed around a slow
+stripe, when most of the set's other stripes are on OSTs whose smoothed
+latency is above a limit of two to four times their median since mount
+(twice the upper bound of the power-of-two io_latency_stats bucket that
+holds the median) and above an eighth of slow_read_min_ms, as the extra
+reads would add to the load that likely made the stripe slow.  An
+unreachable stripe is reconstructed regardless.
+
+Reads issued by the reconstruction itself never get a soft deadline: a
+survivor has no alternative.  Nor does an asynchronous direct read: it
+completes after the system call has returned and cannot be restarted.
+osc.*.slow_read_stats shows the estimates, the mark, the backoff and the
+count of abandoned reads.

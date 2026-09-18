@@ -113,7 +113,7 @@ void ptlrpc_init_xid(void);
 void ptlrpc_set_add_new_req(struct ptlrpcd_ctl *pc,
 			    struct ptlrpc_request *req);
 void ptlrpc_expired_set(struct ptlrpc_request_set *set);
-time64_t ptlrpc_set_next_timeout(struct ptlrpc_request_set *);
+long ptlrpc_set_next_timeout(struct ptlrpc_request_set *set);
 void ptlrpc_resend_req(struct ptlrpc_request *request);
 void ptlrpc_set_mbits(struct ptlrpc_request *req);
 void ptlrpc_assign_next_xid_nolock(struct ptlrpc_request *req);
@@ -127,6 +127,13 @@ void ptlrpc_batch_set_portal(struct ptlrpc_request *req);
 /* events.c */
 int ptlrpc_init_portals(void);
 void ptlrpc_exit_portals(void);
+
+/* niobuf.c */
+void ptlrpc_bulk_sink_callback(struct lnet_event *ev);
+void ptlrpc_bulk_sink_post(struct ptlrpc_request *req);
+int ptlrpc_bulk_sink_init(void);
+void ptlrpc_bulk_sink_stop(void);
+void ptlrpc_bulk_sink_fini(void);
 
 void ptlrpc_request_handle_notconn(struct ptlrpc_request *);
 void ptlrpc_wake_delayed_nolock(struct obd_import *imp);

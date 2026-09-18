@@ -123,6 +123,70 @@ static ssize_t max_rpcs_in_flight_store(struct kobject *kobj,
 }
 LUSTRE_RW_ATTR(max_rpcs_in_flight);
 
+static ssize_t slow_read_pct_show(struct kobject *kobj, struct attribute *attr,
+				  char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct client_obd *cli = &obd->u.cli;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", cli->cl_slow_read_pct);
+}
+
+static ssize_t slow_read_pct_store(struct kobject *kobj,
+				   struct attribute *attr,
+				   const char *buffer, size_t count)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct client_obd *cli = &obd->u.cli;
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	spin_lock(&cli->cl_loi_list_lock);
+	cli->cl_slow_read_pct = val;
+	spin_unlock(&cli->cl_loi_list_lock);
+
+	return count;
+}
+LUSTRE_RW_ATTR(slow_read_pct);
+
+static ssize_t slow_read_min_ms_show(struct kobject *kobj,
+				     struct attribute *attr, char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+			 obd->u.cli.cl_slow_read_min_ms);
+}
+
+static ssize_t slow_read_min_ms_store(struct kobject *kobj,
+				      struct attribute *attr,
+				      const char *buffer, size_t count)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct client_obd *cli = &obd->u.cli;
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	spin_lock(&cli->cl_loi_list_lock);
+	cli->cl_slow_read_min_ms = val;
+	spin_unlock(&cli->cl_loi_list_lock);
+
+	return count;
+}
+LUSTRE_RW_ATTR(slow_read_min_ms);
+
 static ssize_t max_dirty_mb_show(struct kobject *kobj,
 				 struct attribute *attr,
 				 char *buf)
@@ -541,6 +605,56 @@ static int osc_unstable_stats_seq_show(struct seq_file *m, void *v)
 
 LDEBUGFS_SEQ_FOPS_RO(osc_unstable_stats);
 
+static int osc_slow_read_stats_seq_show(struct seq_file *m, void *v)
+{
+	struct obd_device *obd = m->private;
+	struct client_obd *cli = &obd->u.cli;
+	ktime_t now = ktime_get();
+	s64 left = 0;
+	int i, kb;
+
+	spin_lock(&cli->cl_loi_list_lock);
+	if (ktime_after(cli->cl_read_slow_until, now))
+		left = ktime_ms_delta(cli->cl_read_slow_until, now);
+	seq_printf(m, "slow_read_pct: %u\n"
+		      "slow_read_min_ms: %u\n"
+		      "slow_until_ms: %lld\n"
+		      "backoff: %u\n"
+		      "soft_timeouts: %llu\n"
+		      "read_latency_us:\n",
+		   cli->cl_slow_read_pct, osc_slow_read_min_ms(cli), left,
+		   cli->cl_slow_read_backoff, cli->cl_slow_read_timeouts);
+	for (i = 0, kb = PAGE_SIZE / 1024; i < OSC_LAT_BUCKETS; i++, kb <<= 1)
+		if (cli->cl_read_rtt[i].ort_srtt)
+			seq_printf(m, "  %dK: { average: %u, deviation: %u }\n",
+				   kb, cli->cl_read_rtt[i].ort_srtt,
+				   cli->cl_read_rtt[i].ort_rttvar);
+	spin_unlock(&cli->cl_loi_list_lock);
+
+	return 0;
+}
+
+/* any write clears the estimates, the slow mark and the counters */
+static ssize_t osc_slow_read_stats_seq_write(struct file *file,
+					     const char __user *buf,
+					     size_t len, loff_t *off)
+{
+	struct seq_file *m = file->private_data;
+	struct obd_device *obd = m->private;
+	struct client_obd *cli = &obd->u.cli;
+
+	spin_lock(&cli->cl_loi_list_lock);
+	memset(cli->cl_read_rtt, 0, sizeof(cli->cl_read_rtt));
+	cli->cl_read_slow_until = 0;
+	cli->cl_slow_read_backoff = 0;
+	cli->cl_slow_read_timeouts = 0;
+	spin_unlock(&cli->cl_loi_list_lock);
+
+	return len;
+}
+
+LDEBUGFS_SEQ_FOPS(osc_slow_read_stats);
+
 static ssize_t idle_timeout_show(struct kobject *kobj, struct attribute *attr,
 				 char *buf)
 {
@@ -671,7 +785,7 @@ static int osc_io_latency_stats_seq_show(struct seq_file *seq, void *v)
 {
 	struct obd_device *obd = seq->private;
 	struct client_obd *cli = &obd->u.cli;
-	int num_buckets = PTLRPC_MAX_BRW_BITS - PAGE_SHIFT;
+	int num_buckets = OSC_LAT_BUCKETS;
 
 	return obd_io_latency_stats_seq_show(seq,
 					     cli->cl_read_io_latency_by_size,
@@ -688,7 +802,7 @@ static ssize_t osc_io_latency_stats_seq_write(struct file *file,
 	struct seq_file *seq = file->private_data;
 	struct obd_device *obd = seq->private;
 	struct client_obd *cli = &obd->u.cli;
-	int num_buckets = PTLRPC_MAX_BRW_BITS - PAGE_SHIFT;
+	int num_buckets = OSC_LAT_BUCKETS;
 
 	obd_io_latency_stats_clear(cli->cl_read_io_latency_by_size,
 				   cli->cl_write_io_latency_by_size,
@@ -893,6 +1007,8 @@ static struct ldebugfs_vars ldebugfs_osc_obd_vars[] = {
 	  .fops	=	&osc_server_uuid_fops		},
 	{ .name	=	"rpc_stats",
 	  .fops	=	&osc_rpc_stats_fops		},
+	{ .name	=	"slow_read_stats",
+	  .fops	=	&osc_slow_read_stats_fops	},
 	{ .name	=	"state",
 	  .fops	=	&osc_state_fops			},
 	{ .name	=	"timeouts",
@@ -926,6 +1042,8 @@ static struct attribute *osc_attrs[] = {
 	&lustre_attr_max_rpcs_in_flight.attr,
 	&lustre_attr_osc_unevict_cached_mb.attr,
 	&lustre_attr_short_io_bytes.attr,
+	&lustre_attr_slow_read_pct.attr,
+	&lustre_attr_slow_read_min_ms.attr,
 	&lustre_attr_resend_count.attr,
 	&lustre_attr_ost_conn_uuid.attr,
 	&lustre_attr_conn_uuid.attr,

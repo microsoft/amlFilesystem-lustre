@@ -140,6 +140,7 @@ static struct lov_lock *lov_lock_sub_init(const struct lu_env *env,
 	struct lov_io *lio = lov_env_io(env);
 	bool is_trunc = cl_io_is_trunc(io);
 	struct lov_lock *lovlck;
+	struct lu_extent io_ext;
 	struct lu_extent ext;
 	loff_t start;
 	loff_t end;
@@ -204,6 +205,8 @@ static struct lov_lock *lov_lock_sub_init(const struct lu_env *env,
 
 	lovlck->lls_nr = nr;
 	nr = 0;
+	io_ext.e_start = lio->lis_pos;
+	io_ext.e_end = lio->lis_endpos;
 	lov_foreach_io_layout(index, lov_env_io(env), &ext) {
 		struct lov_layout_raid0 *r0 = lov_r0(lov, index);
 		struct lov_stripe_md_entry *lsme;
@@ -212,6 +215,7 @@ static struct lov_lock *lov_lock_sub_init(const struct lu_env *env,
 		lov_foreach_io_stripe(io, lsme, i, r0->lo_nr) {
 			struct lov_lock_sub *lls;
 			struct cl_lock_descr *descr;
+			bool skipped;
 
 			if (unlikely(!r0->lo_sub[i]))
 				continue;
@@ -237,6 +241,18 @@ init_sublock:
 
 			lls->sub_index = lov_comp_index(index, i);
 
+			/* a stripe in an EC read's range it added no sub IO
+			 * for, as it routes around the OST or the stripe holds
+			 * no data before EOF, gets a placeholder; the lock of
+			 * an mmapped read buffer elsewhere in the file is
+			 * still taken
+			 */
+			skipped = io->ci_type == CIT_EC_RD &&
+				  descr->cld_enq_flags & CEF_HEED_ERROR &&
+				  !lov_sub_lookup(lio, lls->sub_index) &&
+				  lov_stripe_intersects(lov->lo_lsm, index, i,
+							&io_ext, NULL, NULL);
+
 			/* initialize sub lock */
 			result = lov_sublock_init(env, lock, lls);
 			if (result < 0)
@@ -248,16 +264,17 @@ init_sublock:
 			 * under a placeholder lock.  Otherwise retry the OST,
 			 * and lov_lock_enqueue() converts the lock if it fails.
 			 */
-			if (io->ci_type == CIT_EC_RD &&
-			    descr->cld_enq_flags & CEF_HEED_ERROR &&
-			    r0->lo_sub[i]->lso_status == LSS_READ_ERR) {
+			if (skipped ||
+			    (io->ci_type == CIT_EC_RD &&
+			     descr->cld_enq_flags & CEF_HEED_ERROR &&
+			     r0->lo_sub[i]->lso_status == LSS_READ_ERR)) {
 				struct lov_oinfo *oinfo;
 				struct lu_tgt_desc *tgt;
 
 				oinfo = lov_lse(lov, index)->lsme_oinfo[i];
 				tgt = lov_tgt(lov_object_dev(lov)->ld_lov,
 					      oinfo->loi_ost_idx);
-				if (tgt && tgt->ltd_active) {
+				if (!skipped && tgt && tgt->ltd_active) {
 					r0->lo_sub[i]->lso_status = LSS_OK;
 					continue;
 				}

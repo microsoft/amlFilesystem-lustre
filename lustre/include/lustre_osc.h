@@ -913,6 +913,8 @@ struct osc_extent {
 				oe_urgent:1,
 	/** Non-delay RPC should be used for this extent. */
 				oe_ndelay:1,
+	/** read whose RPC may be abandoned at a soft deadline */
+				oe_soft_tmo:1,
 	/** direct IO pages */
 				oe_dio:1,
 	/** pages transferred as stored on the OST, without the key */

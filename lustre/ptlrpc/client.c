@@ -89,6 +89,7 @@ EXPORT_SYMBOL(ptlrpc_bulk_kiov_nopin_ops);
 
 static int ptlrpc_send_new_req(struct ptlrpc_request *req);
 static int ptlrpc_unregister_reply(struct ptlrpc_request *request, int async);
+static bool ptlrpc_soft_expire_one_request(struct ptlrpc_request *req);
 
 /**
  * ptlrpc_init_client() - Initialize passed in client structure @cl
@@ -2078,7 +2079,11 @@ int ptlrpc_check_set(const struct lu_env *env, struct ptlrpc_request_set *set)
 			GOTO(interpret, req->rq_status);
 		}
 
-		if (req->rq_phase == RQ_PHASE_NEW && ptlrpc_send_new_req(req))
+		/* a soft deadline can be closer than the timer the caller
+		 * armed before this pass
+		 */
+		if (req->rq_phase == RQ_PHASE_NEW &&
+		    (ptlrpc_send_new_req(req) || req->rq_soft_deadline))
 			force_timer_recalc = 1;
 
 		/* delayed send - skip */
@@ -2147,6 +2152,13 @@ int ptlrpc_check_set(const struct lu_env *env, struct ptlrpc_request_set *set)
 			 */
 			ptlrpc_rqphase_move(req, req->rq_next_phase);
 		}
+
+		/* past its soft deadline: the next pass finishes the unlink
+		 * and interprets it
+		 */
+		if (req->rq_soft_deadline && req->rq_phase == RQ_PHASE_RPC &&
+		    ptlrpc_soft_expire_one_request(req))
+			continue;
 
 		if (req->rq_phase == RQ_PHASE_INTERPRET)
 			GOTO(interpret, req->rq_status);
@@ -2513,6 +2525,51 @@ interpret:
 EXPORT_SYMBOL(ptlrpc_check_set);
 
 /**
+ * ptlrpc_soft_expire_one_request() - Abandon a request at its soft deadline
+ * @req: in-flight request carrying a soft deadline
+ *
+ * Unlike ptlrpc_expire_one_request(), this neither fails the import nor
+ * counts against it: the server may be merely slow, and the caller can get
+ * the data elsewhere.  The request fails with -ETIMEDOUT once its reply
+ * and bulk are unlinked.
+ *
+ * Return:
+ * * %true if the request was abandoned
+ * * %false if its deadline has not passed, it was not sent yet (delayed,
+ *   waiting for a security context, or due for a resend), or it no
+ *   longer waits for a reply
+ */
+static bool ptlrpc_soft_expire_one_request(struct ptlrpc_request *req)
+{
+	ktime_t now = ktime_get();
+	s64 late_us;
+
+	spin_lock(&req->rq_lock);
+	if (req->rq_timedout || req->rq_replied || req->rq_waiting ||
+	    req->rq_wait_ctx || req->rq_resend || req->rq_err ||
+	    ktime_before(now, req->rq_soft_deadline)) {
+		spin_unlock(&req->rq_lock);
+		return false;
+	}
+	req->rq_timedout = 1;
+	req->rq_soft_timedout = 1;
+	req->rq_status = -ETIMEDOUT;
+	req->rq_err = 1;
+	late_us = ktime_us_delta(now, req->rq_soft_deadline);
+	spin_unlock(&req->rq_lock);
+
+	DEBUG_REQ(D_RPCTRACE, req, "soft timeout: %lldus past the soft deadline",
+		  late_us);
+
+	ptlrpc_unregister_reply(req, 1);
+	/* let the server finish a transfer it may be about to start */
+	ptlrpc_bulk_sink_post(req);
+	ptlrpc_unregister_bulk(req, 1);
+
+	return true;
+}
+
+/**
  * ptlrpc_expire_one_request() - Time out request
  * @req: request to expire
  * @async_unlink:  if true, that means do not wait. Else if false, wait until
@@ -2673,17 +2730,21 @@ static void ptlrpc_interrupted_set(struct ptlrpc_request_set *set)
 }
 
 /*
- * Get the smallest timeout in the set; this does NOT set a timeout.
+ * Get the smallest timeout in the set in jiffies, 0 if nothing in flight
+ * needs a timer; this does NOT set a timeout.
  */
-time64_t ptlrpc_set_next_timeout(struct ptlrpc_request_set *set)
+long ptlrpc_set_next_timeout(struct ptlrpc_request_set *set)
 {
 	time64_t now = ktime_get_real_seconds();
-	int timeout = 0;
+	ktime_t mono = ktime_get();
+	long timeout = 0;
 	struct ptlrpc_request *req;
-	time64_t deadline;
 
 	ENTRY;
 	list_for_each_entry(req, &set->set_requests, rq_set_chain) {
+		time64_t deadline;
+		long left;
+
 		/* Request in-flight? */
 		if (!(((req->rq_phase == RQ_PHASE_RPC) && !req->rq_waiting) ||
 		      (req->rq_phase == RQ_PHASE_BULK) ||
@@ -2706,9 +2767,23 @@ time64_t ptlrpc_set_next_timeout(struct ptlrpc_request_set *set)
 			deadline = req->rq_sent + req->rq_timeout;
 
 		if (deadline <= now)    /* actually expired already */
-			timeout = 1;    /* ASAP */
-		else if (timeout == 0 || timeout > deadline - now)
-			timeout = deadline - now;
+			left = cfs_time_seconds(1);     /* ASAP */
+		else
+			left = cfs_time_seconds(deadline - now);
+
+		if (req->rq_soft_deadline && req->rq_phase == RQ_PHASE_RPC &&
+		    !req->rq_resend) {
+			s64 us = ktime_us_delta(req->rq_soft_deadline, mono);
+			long soft;
+
+			soft = us <= 0 ? 1 :
+			       usecs_to_jiffies(min_t(s64, us, INT_MAX));
+			if (soft < left)
+				left = soft;
+		}
+
+		if (timeout == 0 || timeout > left)
+			timeout = left;
 	}
 	RETURN(timeout);
 }
@@ -2728,7 +2803,7 @@ int ptlrpc_set_wait(const struct lu_env *env, struct ptlrpc_request_set *set)
 {
 	struct ptlrpc_request *req;
 	sigset_t oldset, newset;
-	time64_t timeout;
+	long timeout;
 	int rc;
 
 	ENTRY;
@@ -2751,13 +2826,13 @@ int ptlrpc_set_wait(const struct lu_env *env, struct ptlrpc_request_set *set)
 
 		rc = 0;
 		timeout = ptlrpc_set_next_timeout(set);
-		remaining = cfs_time_seconds(timeout ? timeout : 1);
+		remaining = timeout ?: cfs_time_seconds(1);
 
 		/*
 		 * wait until all complete, interrupted, or an in-flight
 		 * req times out
 		 */
-		CDEBUG(D_RPCTRACE, "set %p going to sleep for %lld seconds\n",
+		CDEBUG(D_RPCTRACE, "set %p going to sleep for %ld jiffies\n",
 		       set, timeout);
 
 		add_wait_queue(&set->set_waitq, &wait);

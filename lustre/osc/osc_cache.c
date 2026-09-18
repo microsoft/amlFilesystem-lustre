@@ -2059,6 +2059,9 @@ can_merge(const struct osc_extent *ext, const struct osc_extent *in_rpc)
 	if (ext->oe_ndelay != in_rpc->oe_ndelay)
 		return false;
 
+	if (ext->oe_soft_tmo != in_rpc->oe_soft_tmo)
+		return false;
+
 	if (!ext->oe_grants != !in_rpc->oe_grants)
 		return false;
 
@@ -2853,6 +2856,13 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	ext->oe_dio = true;
 	ext->oe_ciphertext = cdp->cdp_cl_pages[from_page]->cp_ciphertext;
 	sdio = container_of(cdp, struct cl_sub_dio, csd_dio_pages);
+	/* A reconstruction read has no other source and must wait for its
+	 * OST.  A direct read's error surfaces after the I/O loop, where only
+	 * a sync read of an EC file is restarted.
+	 */
+	ext->oe_soft_tmo = ext->oe_ndelay && io->ci_type == CIT_READ &&
+			   io->ci_cross_ec && !io->ci_no_soft_tmo &&
+			   !sdio->csd_ll_aio->cda_is_aio;
 	ext->oe_csd = sdio;
 	oscl = oio->oi_write_osclock ? : oio->oi_read_osclock;
 	if (oscl && oscl->ols_dlmlock != NULL)
@@ -3018,6 +3028,12 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 	ext->oe_obj = obj;
 	ext->oe_srvlock = !!(brw_flags & OBD_BRW_SRVLOCK);
 	ext->oe_ndelay = !!(brw_flags & OBD_BRW_NDELAY);
+	/* A reconstruction read has no other source and must wait for its
+	 * OST, and so must a plain mirror's read once FLR has tried every
+	 * mirror.
+	 */
+	ext->oe_soft_tmo = ext->oe_ndelay && io->ci_type == CIT_READ &&
+			   !io->ci_tried_all_mirrors && !io->ci_no_soft_tmo;
 	ext->oe_dio = !!(brw_flags & OBD_BRW_NOCACHE);
 	ext->oe_ciphertext = ciphertext;
 	ext->oe_is_rdma_only = !!(brw_flags & OBD_BRW_RDMA_ONLY);

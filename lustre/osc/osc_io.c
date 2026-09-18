@@ -513,14 +513,6 @@ void osc_io_extent_release(const struct lu_env *env,
 }
 EXPORT_SYMBOL(osc_io_extent_release);
 
-static bool osc_import_not_healthy(struct obd_import *imp)
-{
-	return test_bit(IMPF_INVALID, imp->imp_flags) ||
-	       test_bit(IMPF_DEACTIVE, imp->imp_flags) ||
-	       !(imp->imp_state == LUSTRE_IMP_FULL ||
-		 imp->imp_state == LUSTRE_IMP_IDLE);
-}
-
 int osc_io_iter_init(const struct lu_env *env, const struct cl_io_slice *ios)
 {
 	struct cl_io *io = ios->cis_io;
@@ -537,7 +529,7 @@ int osc_io_iter_init(const struct lu_env *env, const struct cl_io_slice *ios)
 	 * fast switching mirror if we haven't tried all mirrors.
 	 */
 	if (ios->cis_io->ci_type == CIT_READ && ios->cis_io->ci_ndelay &&
-	    !ios->cis_io->ci_tried_all_mirrors && osc_import_not_healthy(imp)) {
+	    !ios->cis_io->ci_tried_all_mirrors && imp_unreachable(imp)) {
 		rc = -EAGAIN;
 	} else if (likely(!test_bit(IMPF_INVALID, imp->imp_flags))) {
 		atomic_inc(&osc->oo_nr_ios);

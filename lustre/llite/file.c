@@ -2911,6 +2911,7 @@ static ssize_t do_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		RETURN(PTR_ERR(env));
 
 	args = ll_env_args(env);
+	args->via_hybrid_switched = 0;
 	args->u.normal.via_iter = to;
 	args->u.normal.via_iocb = iocb;
 

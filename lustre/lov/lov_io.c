@@ -644,12 +644,438 @@ static loff_t lov_io_top_file_size(const struct lu_env *env,
 	return attr.cat_size;
 }
 
+/* The client OSC behind a sub-object, or NULL if its import is already
+ * gone.
+ */
+static struct client_obd *lov_sub_cli(struct lovsub_object *los)
+{
+	struct lovsub_device *sub = lu2lovsub_dev(los->lso_cl.co_lu.lo_dev);
+	struct obd_device *obd = sub->acid_next->cd_lu_dev.ld_obd;
+
+	if (unlikely(!obd || !obd->u.cli.cl_import))
+		return NULL;
+	return &obd->u.cli;
+}
+
+/**
+ * lov_sub_unreachable() - Is the sub-object's import unable to serve reads?
+ * @los: LOV sub-object to check
+ *
+ * See imp_unreachable().
+ */
+static bool lov_sub_unreachable(struct lovsub_object *los)
+{
+	struct client_obd *cli = lov_sub_cli(los);
+	struct obd_import *imp;
+
+	if (!cli)
+		return false;
+	imp = cli->cl_import;
+	if (unlikely(!imp))
+		return false;
+
+	return imp_unreachable(imp);
+}
+
+/* Did the OSC mark the import slow after a no-delay read hit its soft
+ * deadline?  The mark is read without a lock; a stale answer only changes
+ * routing for one IO.
+ */
+static bool lov_sub_slow(struct lovsub_object *los)
+{
+	struct client_obd *cli = lov_sub_cli(los);
+
+	return cli && ktime_after(READ_ONCE(cli->cl_read_slow_until),
+				  ktime_get());
+}
+
+/* A read should avoid this sub-object's OST. */
+static bool lov_sub_unavailable(struct lovsub_object *los)
+{
+	return lov_sub_unreachable(los) || lov_sub_slow(los);
+}
+
+/**
+ * lov_sub_loaded() - Is the sub-object's OST slower than it usually is?
+ * @los: LOV sub-object to check
+ * @pages: read size in pages, selects the latency estimates
+ *
+ * Compares the OSC's smoothed latency for reads of this size against the
+ * median of all of its reads of this size since mount (io_latency_stats).
+ * Most small reads are served from the OSS cache, so an OST reading from
+ * disk is many times its median without being loaded; it must also be
+ * slow on the scale of the soft deadline.  The estimates are read without
+ * a lock; a stale answer only changes the policy for one IO.
+ *
+ * Return: true if the smoothed latency is above twice the median and
+ * above an eighth of slow_read_min_ms
+ */
+static bool lov_sub_loaded(struct lovsub_object *los, u32 pages)
+{
+	struct client_obd *cli = lov_sub_cli(los);
+	int bucket = min_t(int, fls(pages) - 1, OSC_LAT_BUCKETS - 1);
+	struct obd_histogram *oh;
+	unsigned long sum = 0;
+	unsigned long half;
+	u32 srtt;
+	int i;
+
+	if (!cli || !cli->cl_read_io_latency_by_size || bucket < 0)
+		return false;
+
+	srtt = READ_ONCE(cli->cl_read_rtt[bucket].ort_srtt);
+	oh = &cli->cl_read_io_latency_by_size[bucket];
+	for (i = 0; i < OBD_HIST_MAX; i++)
+		sum += READ_ONCE(oh->oh_buckets[i]);
+	/* too little history to tell what is usual */
+	if (!srtt || sum < 16)
+		return false;
+
+	/* bucket i holds latencies up to 2^i usec */
+	for (i = 0, half = 0; i < OBD_HIST_MAX; i++) {
+		half += READ_ONCE(oh->oh_buckets[i]);
+		if (half * 2 >= sum)
+			break;
+	}
+
+	return srtt > 2UL << min(i, 30) &&
+	       srtt > osc_slow_read_min_ms(cli) * USEC_PER_MSEC / 8;
+}
+
+/* The stripes [*@first, *@last) of the raid set that holds @stripe; a
+ * component without parity is one set.
+ */
+static void lov_ec_raid_set(struct lov_stripe_md_entry *lsme, int stripe,
+			    int *first, int *last)
+{
+	struct ec_split_comp sc;
+	int base = 0;
+	int k;
+
+	if (lsme->lsme_dstripe_count == 0) {
+		*first = 0;
+		*last = lsme->lsme_stripe_count;
+		return;
+	}
+
+	ec_split_stripes(lsme->lsme_stripe_count, lsme->lsme_dstripe_count,
+			 &sc);
+	k = sc.esc_k0;
+	if (stripe >= sc.esc_k0 * sc.esc_n0) {
+		base = sc.esc_k0 * sc.esc_n0;
+		k = sc.esc_k1;
+	}
+	*first = stripe - (stripe - base) % k;
+	*last = *first + k;
+}
+
+/**
+ * lov_ec_set_parity_budget() - Data stripes a raid set's parity can rebuild
+ * @lio: LOV IO of the read
+ * @mirror_index: index of the data mirror
+ * @index: data component index
+ * @first: first data stripe of the raid set
+ * @ext: extent of the read
+ *
+ * The raid set holding stripe @first in each stripe row that @ext touches
+ * has its own parity stripes; count those the read can use.
+ *
+ * Return: the smallest number of usable parity stripes of the raid set in
+ * the rows @ext touches, 0 if it cannot be determined
+ */
+static int lov_ec_set_parity_budget(struct lov_io *lio, int mirror_index,
+				    int index, int first, struct lu_extent *ext)
+{
+	struct lov_object *lov = lio->lis_object;
+	struct lov_stripe_md_entry *lsme = lov_lse(lov, index);
+	u64 row_size = (u64)lsme->lsme_stripe_size * lsme->lsme_stripe_count;
+	u64 start = max(ext->e_start, lsme->lsme_extent.e_start);
+	u64 end = min(ext->e_end, lsme->lsme_extent.e_end);
+	int parity_mir_idx;
+	int budget = INT_MAX;
+	u64 row;
+
+	parity_mir_idx = lov_parity_mirror_index_from_data(lio, mirror_index);
+	if (parity_mir_idx < 0 || !lsme->lsme_dstripe_count || start >= end)
+		return 0;
+
+	/* data stripe rows count from file offset 0, not from e_start */
+	for (row = div64_u64(start, row_size); row * row_size < end; row++) {
+		loff_t off = row * row_size;
+		struct lov_stripe_md_entry *lsme_p;
+		struct lov_layout_raid0 *r0;
+		struct ec_parity_geom g;
+		int pcount = lsme->lsme_cstripe_count;
+		loff_t poff;
+		int pindex;
+		int base;
+		int p;
+		int i;
+
+		/* as lov_io_ec_rd_start() finds this raid set's parity */
+		pindex = lov_io_layout_at_mirror(lio, max_t(loff_t, off, start),
+						 parity_mir_idx);
+		if (pindex < 0 || !lsm_entry_inited(lov->lo_lsm, pindex) ||
+		    !lov_entry(lov, pindex)->lle_valid)
+			return 0;
+		lsme_p = lov_lse(lov, pindex);
+		if (lov_parity_geom_init(lsme, lsme_p, &g))
+			return 0;
+		/* @first starts the raid set in its stripe row */
+		ec_data_to_parity(&g, off + (loff_t)first *
+				  lsme->lsme_stripe_size, &poff);
+		r0 = lov_r0(lov, pindex);
+		base = lov_stripe_number(lov->lo_lsm, pindex, poff);
+		for (i = 0, p = pcount; i < pcount; i++) {
+			struct lovsub_object *los = r0->lo_sub[(base + i) %
+							       r0->lo_nr];
+
+			if (!los || lov_sub_unavailable(los))
+				p--;
+		}
+		budget = min(budget, p);
+	}
+
+	return budget == INT_MAX ? 0 : budget;
+}
+
+/* Count the stripes in [@first, @last) of component @index that are on
+ * unreachable OSTs (@hard) and on slow-marked ones (@slow), of those that
+ * hold data of @ext.
+ */
+static void lov_ec_raid_set_count(struct lov_object *lov, int index,
+				  int first, int last, struct lu_extent *ext,
+				  int *hard, int *slow)
+{
+	struct lov_layout_raid0 *r0 = lov_r0(lov, index);
+	int i;
+
+	*hard = 0;
+	*slow = 0;
+	for (i = first; i < last && i < r0->lo_nr; i++) {
+		struct lovsub_object *los = r0->lo_sub[i];
+
+		if (!los || !lov_stripe_intersects(lov->lo_lsm, index, i, ext,
+						   NULL, NULL))
+			continue;
+		if (lov_sub_unreachable(los))
+			(*hard)++;
+		else if (lov_sub_slow(los))
+			(*slow)++;
+	}
+}
+
+enum lov_ec_route {
+	LOV_EC_INTACT,		/* every stripe the read touches is available */
+	LOV_EC_RECONSTRUCT,	/* rebuild the unavailable ones from parity */
+	LOV_EC_WAIT,		/* parity cannot stand in: read them and wait */
+};
+
+/* Does the read touch only part of the raid set [@first, @last) of
+ * component @index, and are most of the stripes it does not touch on
+ * loaded OSTs?  Reconstructing such a read reads all of those stripes,
+ * many times the size of the read, so it would add to the load.
+ */
+static bool lov_ec_raid_set_busy(struct lov_object *lov, int index,
+				 int first, int last, struct lu_extent *ext)
+{
+	struct lov_layout_raid0 *r0 = lov_r0(lov, index);
+	u64 bytes = min_t(u64, ext->e_end - ext->e_start,
+			  lov_lse(lov, index)->lsme_stripe_size);
+	u32 pages = max_t(u32, bytes >> PAGE_SHIFT, 1);
+	int touched = 0;
+	int loaded = 0;
+	int peers = 0;
+	int i;
+
+	for (i = first; i < last && i < r0->lo_nr; i++)
+		if (lov_stripe_intersects(lov->lo_lsm, index, i, ext,
+					  NULL, NULL))
+			touched++;
+	if (!touched)
+		return false;
+
+	for (i = first; i < last && i < r0->lo_nr; i++) {
+		struct lovsub_object *los = r0->lo_sub[i];
+
+		if (!los || lov_sub_unreachable(los) ||
+		    lov_stripe_intersects(lov->lo_lsm, index, i, ext,
+					  NULL, NULL))
+			continue;
+		peers++;
+		if (lov_sub_loaded(los, pages))
+			loaded++;
+	}
+
+	return loaded * 2 > peers;
+}
+
+/**
+ * lov_ec_io_route() - Reconstruct a read's unavailable stripes, or wait?
+ * @lio: LOV IO of the read, [lis_pos, lis_endpos)
+ * @mirror_index: index of the data mirror to check
+ * @file_size: size of the file, stripes past it hold no data to read
+ * @busy: set if the read touches part of a raid set on loaded OSTs
+ *
+ * Looks at each raid set of the mirror's EC components in which the read
+ * touches a data stripe on an unreachable or slow-marked OST.  A dead
+ * stripe is reconstructed when the parity covers the set's dead stripes,
+ * reading any slow ones, and a slow one only when the parity covers every
+ * unavailable stripe of the set, as past that the reconstruction would
+ * wait on a slow OST anyway.  Nor is a slow one when the read touches
+ * only part of the raid set and most of the other stripes are on loaded
+ * OSTs (lov_ec_raid_set_busy()), as the extra reads would add to the load
+ * that likely made it slow.  Stripes the read does not touch are ignored,
+ * so a read of a live stripe of a degraded file stays on the normal path.
+ * A raid set with more dead stripes than its parity can stand in for
+ * makes the whole read wait only if no other raid set it touches can be
+ * rebuilt; otherwise CIT_EC_RD rebuilds those and waits for that raid set
+ * alone (cl_io::ci_ec_wait).
+ *
+ * Return: LOV_EC_INTACT if the read touches no unavailable stripe,
+ * LOV_EC_RECONSTRUCT to rebuild them from parity, LOV_EC_WAIT if the
+ * parity cannot stand in for them.
+ */
+static enum lov_ec_route lov_ec_io_route(struct lov_io *lio, int mirror_index,
+					 loff_t file_size, bool *busy)
+{
+	struct lov_object *lov = lio->lis_object;
+	struct lov_mirror_entry *lre = lov_mirror_entry(lov, mirror_index);
+	struct lu_extent ext = { .e_start = lio->lis_pos,
+				 .e_end = lio->lis_endpos };
+	struct lov_stripe_md_entry *lsme;
+	struct lov_layout_entry *lle;
+	struct lu_extent rows_ext;
+	bool need_dead = false;
+	bool wait_dead = false;
+	bool skip_slow = false;
+	bool wait_slow = false;
+	u64 row_size;
+	int budget;
+
+	lov_foreach_mirror_layout_entry(lov, lle, lre) {
+		struct lov_layout_raid0 *r0 = &lle->lle_raid0;
+		int index;
+		int first;
+		int last;
+
+		if (!lle->lle_valid || lle->lle_lsme->lsme_dstripe_count == 0 ||
+		    !r0->lo_sub ||
+		    !lu_extent_is_overlapped(&ext, lle->lle_extent))
+			continue;
+
+		index = lov_layout_entry_index(lov, lle);
+		lsme = lle->lle_lsme;
+		row_size = (u64)lsme->lsme_stripe_size *
+			   lsme->lsme_stripe_count;
+		/* stripe rows count from file offset 0, not from e_start */
+		rows_ext.e_start = div64_u64(max(ext.e_start,
+						 lsme->lsme_extent.e_start),
+					     row_size) * row_size;
+		rows_ext.e_end = file_size;
+		if (ext.e_end < file_size && ext.e_end > rows_ext.e_start)
+			rows_ext.e_end = min_t(u64, file_size,
+				rows_ext.e_start + row_size *
+				div64_u64(ext.e_end - rows_ext.e_start +
+					  row_size - 1, row_size));
+		for (first = 0; first < r0->lo_nr; first = last) {
+			bool set_busy;
+			int io_hard;
+			int io_slow;
+			int hard;
+			int slow;
+
+			lov_ec_raid_set(lle->lle_lsme, first, &first, &last);
+			set_busy = lov_ec_raid_set_busy(lov, index, first,
+							last, &ext);
+			if (set_busy)
+				*busy = true;
+			lov_ec_raid_set_count(lov, index, first, last, &ext,
+					      &io_hard, &io_slow);
+			if (io_hard + io_slow == 0)
+				continue;
+
+			budget = lov_ec_set_parity_budget(lio, mirror_index,
+							  index, first, &ext);
+			/* the stripes of the rows the read touches holding
+			 * data, which a reconstruction reads
+			 */
+			lov_ec_raid_set_count(lov, index, first, last,
+					      &rows_ext, &hard, &slow);
+			/* a dead stripe is rebuilt if the parity covers the
+			 * dead ones, reading any slow ones; a slow one only if
+			 * it covers them all
+			 */
+			if (io_hard > 0 && hard <= budget)
+				need_dead = true;
+			else if (io_hard > 0)
+				wait_dead = true;
+			else if (hard + slow <= budget && !set_busy)
+				skip_slow = true;
+			else
+				wait_slow = true;
+		}
+	}
+
+	/* CIT_EC_RD waits only for the raid sets it cannot rebuild; waiting
+	 * for the whole read just spares it a pass when none can be rebuilt
+	 */
+	if (need_dead)
+		return LOV_EC_RECONSTRUCT;
+	if (wait_dead)
+		return LOV_EC_WAIT;
+	if (wait_slow)
+		return LOV_EC_WAIT;
+	return skip_slow ? LOV_EC_RECONSTRUCT : LOV_EC_INTACT;
+}
+
+static bool lov_has_parity_mirror(struct lov_object *obj)
+{
+	struct lov_mirror_entry *lre;
+
+	lov_foreach_mirror_entry(obj, lre)
+		if (lre->lre_parity)
+			return true;
+
+	return false;
+}
+
+/* Number of data mirrors with a valid component covering lis_pos */
+static int lov_io_data_mirrors(struct lov_io *lio, struct lov_object *obj)
+{
+	struct lu_extent ext = { .e_start = lio->lis_pos,
+				 .e_end = lio->lis_pos + 1 };
+	struct lov_mirror_entry *lre;
+	struct lov_layout_entry *lle;
+	int count = 0;
+
+	lov_foreach_mirror_entry(obj, lre) {
+		if (!lre->lre_valid || lre->lre_foreign || lre->lre_parity)
+			continue;
+
+		lov_foreach_mirror_layout_entry(obj, lle, lre) {
+			if (lle->lle_valid &&
+			    lu_extent_is_overlapped(&ext, lle->lle_extent)) {
+				count++;
+				break;
+			}
+		}
+	}
+
+	return count;
+}
+
 static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 			      struct lov_object *obj, struct cl_io *io)
 {
 	struct lov_layout_composite *comp = &obj->u.composite;
 	bool skipped_parity = false;
+	bool ec_degraded = false;
+	bool ec_wait = false;
+	bool parity_ok;
+	int data_mirrors = 0;
 	int index = -ENOENT;
+	int pidx;
 	int i;
 	int result = 0;
 
@@ -698,6 +1124,12 @@ static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 	/* transfer the layout version for verification */
 	if (io->ci_layout_version == 0)
 		io->ci_layout_version = obj->lo_lsm->lsm_layout_gen;
+
+	/* In-sync parity behind the read is what makes it an EC read; with
+	 * none, a slow or dead stripe is handled like a plain mirror's.
+	 */
+	parity_ok = lov_find_comp_with_ec(lio, obj, &pidx);
+	data_mirrors = lov_io_data_mirrors(lio, obj);
 
 	/* find the corresponding mirror for designated mirror IO */
 	if (io->ci_designated_mirror > 0) {
@@ -809,11 +1241,12 @@ static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 	for (i = 0; i < comp->lo_mirror_count; i++) {
 		struct lu_extent ext = { .e_start = lio->lis_pos,
 					 .e_end   = lio->lis_pos + 1 };
+		int mirror = (index + i) % comp->lo_mirror_count;
 		struct lov_mirror_entry *lre;
 		struct lov_layout_entry *lle;
 		bool found = false;
 
-		lre = lov_mirror_entry(obj, (index + i) % comp->lo_mirror_count);
+		lre = lov_mirror_entry(obj, mirror);
 		if (!lre->lre_valid)
 			continue;
 
@@ -835,19 +1268,58 @@ static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 
 			if (lu_extent_is_overlapped(&ext, lle->lle_extent)) {
 				found = true;
-				if (!io->ci_cross_ec &&
+				if (!io->ci_cross_ec && parity_ok &&
 				    lle->lle_lsme->lsme_dstripe_count != 0)
 					io->ci_cross_ec = 1;
 				break;
 			}
 		} /* each component of the mirror */
+
+		/* Skip a mirror whose unavailable stripes in the IO parity
+		 * can stand in for rather than wait on their OSTs; with no
+		 * intact mirror left the read reconstructs below.  One whose
+		 * parity cannot stand in for any of them is read like a plain
+		 * mirror.
+		 */
+		ec_wait = false;
+		io->ci_no_soft_tmo = 0;
+		if (found && io->ci_type == CIT_READ && io->ci_cross_ec) {
+			enum lov_ec_route route;
+			bool busy = false;
+
+			route = lov_ec_io_route(lio, mirror,
+						lov_io_top_file_size(env, obj),
+						&busy);
+			io->ci_no_soft_tmo = busy;
+			if (route == LOV_EC_RECONSTRUCT) {
+				CDEBUG(D_VFSTRACE,
+				       DFID" mirror %d: unavailable stripe in [%llu, %llu)\n",
+				       PFID(lu_object_fid(lov2lu(obj))), mirror,
+				       lio->lis_pos, lio->lis_endpos);
+				ec_degraded = true;
+				continue;
+			}
+			ec_wait = route == LOV_EC_WAIT;
+		}
+
 		if (found) {
-			index = (index + i) % comp->lo_mirror_count;
+			index = mirror;
 			break;
 		}
 	} /* each mirror */
 
 	if (i == comp->lo_mirror_count) {
+		/* no intact mirror: reconstruct now, without the FLR backoff */
+		if (ec_degraded) {
+			CDEBUG(D_VFSTRACE,
+			       DFID" no intact mirror, switch to CIT_EC_RD\n",
+			       PFID(lu_object_fid(lov2lu(obj))));
+			io->ci_switch_ec_io = 1;
+			io->ci_need_restart = 1;
+			io->ci_ndelay_tried = 0;
+			RETURN(-ENODATA);
+		}
+
 		/* If we only skipped parity mirrors, return EINVAL */
 		if (skipped_parity) {
 			CERROR(DFID": only parity mirrors available at %llu\n",
@@ -938,6 +1410,28 @@ ndelay_retry:
 		}
 	}
 	++io->ci_ndelay_tried;
+
+	/* an EC file with no other data mirror and no parity to serve the
+	 * read has nothing to switch to: read its stripes and wait
+	 */
+	if (io->ci_type == CIT_READ && !io->ci_cross_ec &&
+	    data_mirrors <= 1 && lov_has_parity_mirror(obj)) {
+		io->ci_tried_all_mirrors = 1;
+		io->ci_ndelay = 0;
+	}
+
+	/* nor does one whose parity cannot stand in for the slow or dead
+	 * stripes the read touches: wait for them, with no soft deadline to
+	 * abandon a read on
+	 */
+	if (ec_wait && data_mirrors <= 1 && lov_has_parity_mirror(obj))
+		io->ci_ndelay = 0;
+
+	/* a plain mirrored file with no other mirror able to serve the read,
+	 * e.g. while the others are stale, would only retry the same OST
+	 */
+	if (io->ci_type == CIT_READ && !io->ci_cross_ec && data_mirrors <= 1)
+		io->ci_no_soft_tmo = 1;
 
 	CDEBUG(D_VFSTRACE, "use %sdelayed RPC state for this IO\n",
 	       io->ci_ndelay ? "non-" : "");
@@ -1654,6 +2148,9 @@ static int lov_ecio_add_data_sub(const struct lu_env *env, struct lov_io *lio,
 
 	lov_foreach_io_layout(index, lio, &data_ext) {
 		unsigned int stripe;
+		bool skip_dead = false;
+		bool skip_slow = false;
+		int set_end = 0;
 
 		if (!lsm_entry_inited(lsm, index))
 			continue;
@@ -1667,10 +2164,35 @@ static int lov_ecio_add_data_sub(const struct lu_env *env, struct lov_io *lio,
 		}
 
 		r0 = &lle->lle_raid0;
+		/* Error unavailable stripes up front rather than build a
+		 * sub-IO that would wait for the OST being routed around:
+		 * dead ones when the raid set's parity covers its dead
+		 * stripes, slow ones when it covers all unavailable ones.
+		 * Otherwise the reconstruction reads them and waits, e.g.
+		 * for an OSS failover to finish.
+		 */
 		for (stripe = 0; stripe < r0->lo_nr; stripe++) {
 			struct lov_io_sub *sub;
 			u64 sub_start;
 			u64 sub_end;
+
+			if (stripe >= set_end) {
+				int set_start;
+				int budget;
+				int hard;
+				int slow;
+
+				lov_ec_raid_set(lle->lle_lsme, stripe,
+						&set_start, &set_end);
+				lov_ec_raid_set_count(lov, index, set_start,
+						      set_end, &data_ext,
+						      &hard, &slow);
+				budget = lov_ec_set_parity_budget(lio,
+						lio->lis_mirror_index, index,
+						set_start, &data_ext);
+				skip_dead = hard <= budget;
+				skip_slow = hard + slow <= budget;
+			}
 
 			if (!lov_stripe_intersects(lsm, index, stripe,
 						   &data_ext,
@@ -1691,6 +2213,17 @@ static int lov_ecio_add_data_sub(const struct lu_env *env, struct lov_io *lio,
 				      PFID(lu_object_fid(lov2lu(lov))),
 				      stripe, index, -EIO);
 				RETURN(-EIO);
+			}
+
+			/* no sub IO: neither read nor locked by this IO */
+			if ((skip_dead &&
+			     lov_sub_unreachable(r0->lo_sub[stripe])) ||
+			    (skip_slow && lov_sub_slow(r0->lo_sub[stripe]))) {
+				(*err_nr)++;
+				CDEBUG(D_INFO, DFID": stripe %u in comp %d is unavailable (%d)\n",
+				       PFID(lu_object_fid(lov2lu(lov))),
+				       stripe, index, *err_nr);
+				continue;
 			}
 
 			sub = lov_sub_get(env, lio,
@@ -3523,6 +4056,8 @@ static int lov_io_ec_rd_start(const struct lu_env *env,
 		par_arr_cnt = nfolios * err_nr;
 		if (err_nr > 0 && err_nr <= pcount) {
 			int pi, ps;
+			DECLARE_BITMAP(par_tried, U8_MAX + 1);
+			int pass, base;
 
 			OBD_ALLOC_PTR_ARRAY_LARGE(par_folios, par_arr_cnt);
 			OBD_ALLOC_PTR_ARRAY_LARGE(par_clpages, par_arr_cnt);
@@ -3531,23 +4066,45 @@ static int lov_io_ec_rd_start(const struct lu_env *env,
 				GOTO(rg_cleanup, rc = -ENOMEM);
 			}
 
-			/* Read parity stripes until we have enough (err_nr).
+			/* Read parity stripes until we have enough (err_nr),
+			 * those on available OSTs first, then any others.
 			 * Skip dead stripes.
 			 */
-			for (pi = 0; pi < pcount && par_stripes_used < err_nr;
-			     pi++) {
-				ps = par_stripes_used;
-				rc = lov_ec_read_raw_stripe(env, lio, pindex,
-						pi, lsme_p, poff,
+			base = lov_stripe_number(lov->lo_lsm, pindex, poff);
+			bitmap_zero(par_tried, U8_MAX + 1);
+			for (pass = 0; pass < 2; pass++) {
+				for (pi = 0; pi < pcount &&
+				     par_stripes_used < err_nr; pi++) {
+					struct lovsub_object *los;
+
+					los = lov_r0(lov, pindex)->lo_sub[
+						(base + pi) %
+						lov_r0(lov, pindex)->lo_nr];
+					if (!los || test_bit(pi, par_tried))
+						continue;
+					/* a slow mark can change while pass 0
+					 * reads, so pass 1 takes the stripes
+					 * pass 0 did not try rather than
+					 * asking again
+					 */
+					if (pass == 0 &&
+					    lov_sub_unavailable(los))
+						continue;
+					__set_bit(pi, par_tried);
+					ps = par_stripes_used;
+					rc = lov_ec_read_raw_stripe(env, lio,
+						pindex, pi, lsme_p, poff,
 						pg_seq_start, nfolios,
 						&par_folios[ps * nfolios],
 						&par_clpages[ps * nfolios],
 						&plist);
-				if (rc) {
-					rc = 0; /* skip, try next */
-					continue;
+					if (rc) {
+						rc = 0; /* skip, try next */
+						continue;
+					}
+					state.ecr_parity_used[
+						par_stripes_used++] = pi;
 				}
-				state.ecr_parity_used[par_stripes_used++] = pi;
 			}
 
 			if (par_stripes_used < err_nr) {

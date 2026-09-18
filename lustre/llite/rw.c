@@ -663,15 +663,17 @@ static void ll_readahead_handle_work(struct work_struct *wq)
 
 	if (ria->ria_reserved < pages) {
 		ll_ra_stats_inc(inode, RA_STAT_MAX_IN_FLIGHT);
-		if (PAGES_TO_MiB(ria->ria_reserved) < 1) {
-			ll_ra_count_put(ll_i2sbi(inode), ria->ria_reserved);
-			GOTO(out_put_env, rc = 0);
-		}
+		if (PAGES_TO_MiB(ria->ria_reserved) < 1)
+			GOTO(out_ra_put, rc = 0);
 	}
 
-	rc = cl_io_rw_init(env, io, CIT_READ, ria->ria_start_idx, pages);
-	if (rc)
-		GOTO(out_put_env, rc);
+	rc = cl_io_rw_init(env, io, CIT_READ,
+			   (loff_t)ria->ria_start_idx << PAGE_SHIFT,
+			   (size_t)pages << PAGE_SHIFT);
+	if (rc) {
+		cl_io_fini(env, io);
+		GOTO(out_ra_put, rc);
+	}
 
 	/* overwrite jobid inited in vvp_io_init() */
 	write_seqlock(&lli->lli_jobinfo_seqlock);
@@ -690,8 +692,10 @@ static void ll_readahead_handle_work(struct work_struct *wq)
 
 	rc = ll_read_ahead_pages(env, io, &queue->c2_qin, ras, ria,
 				 &ra_end_idx, 0);
-	if (ria->ria_reserved != 0)
+	if (ria->ria_reserved != 0) {
 		ll_ra_count_put(ll_i2sbi(inode), ria->ria_reserved);
+		ria->ria_reserved = 0;
+	}
 	if (queue->c2_qin.pl_nr > 0) {
 		int count = queue->c2_qin.pl_nr;
 
@@ -718,6 +722,9 @@ static void ll_readahead_handle_work(struct work_struct *wq)
 out_io_fini:
 	cl_io_end(env, io);
 	cl_io_fini(env, io);
+out_ra_put:
+	if (ria->ria_reserved != 0)
+		ll_ra_count_put(ll_i2sbi(inode), ria->ria_reserved);
 out_put_env:
 	cl_env_put(env, &refcheck);
 out_free_work:

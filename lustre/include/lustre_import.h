@@ -375,6 +375,52 @@ timeout_t obd_at_measure(struct obd_device *obd, struct adaptive_timeout *at,
 
 int import_at_get_index(struct obd_import *imp, int portal);
 
+/* Is @imp in NEW or CONNECTING because it is reconnecting from IDLE,
+ * rather than recovering from a failure?  ptlrpc_reconnect_if_idle()
+ * goes IDLE -> CONNECTING; ptlrpc_disconnect_and_idle_import() goes
+ * FULL -> CONNECTING with IMPF_WAS_IDLE set while the idle DISCONNECT is
+ * in flight, and ptlrpc_disconnect_idle_interpret() goes CONNECTING ->
+ * NEW -> CONNECTING when a request arrives meanwhile.  A failed attempt
+ * records DISCONN before each retry, and those can go on for as long as
+ * the outage.  Reads the state history without imp_lock; a torn view
+ * only misroutes one IO.
+ */
+static inline bool imp_reconnecting_from_idle(struct obd_import *imp)
+{
+	int idx = READ_ONCE(imp->imp_state_hist_idx);
+	int i;
+
+	for (i = 1; i <= 2; i++) {
+		enum lustre_imp_state s;
+
+		s = imp->imp_state_hist[(idx - i + IMP_STATE_HIST_LEN) %
+					IMP_STATE_HIST_LEN].ish_state;
+		if (s == LUSTRE_IMP_CONNECTING)
+			continue;
+		return s == LUSTRE_IMP_IDLE || s == LUSTRE_IMP_NEW ||
+		       (s == LUSTRE_IMP_FULL &&
+			test_bit(IMPF_WAS_IDLE, imp->imp_flags));
+	}
+	return false;
+}
+
+/* Can @imp not serve a no-delay read now: deactivated, invalid, or not
+ * connected, except while it reconnects from idle, for which ptlrpc
+ * delays no-delay requests the one round trip it takes.
+ */
+static inline bool imp_unreachable(struct obd_import *imp)
+{
+	enum lustre_imp_state state = READ_ONCE(imp->imp_state);
+
+	if (test_bit(IMPF_INVALID, imp->imp_flags) ||
+	    test_bit(IMPF_DEACTIVE, imp->imp_flags))
+		return true;
+	if (state == LUSTRE_IMP_FULL || state == LUSTRE_IMP_IDLE)
+		return false;
+	return !((state == LUSTRE_IMP_NEW || state == LUSTRE_IMP_CONNECTING) &&
+		 imp_reconnecting_from_idle(imp));
+}
+
 /* genops.c */
 struct obd_export;
 extern struct obd_import *class_exp2cliimp(struct obd_export *exp);

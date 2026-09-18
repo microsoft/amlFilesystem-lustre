@@ -415,9 +415,9 @@ static int ptlrpcd(void *arg)
 	 */
 	do {
 		DEFINE_WAIT_FUNC(wait, woken_wake_function);
-		time64_t timeout;
+		long timeout;
 
-		timeout = cfs_time_seconds(ptlrpc_set_next_timeout(set));
+		timeout = ptlrpc_set_next_timeout(set);
 
 		lu_context_enter(&env.le_ctx);
 		lu_context_enter(env.le_ses);

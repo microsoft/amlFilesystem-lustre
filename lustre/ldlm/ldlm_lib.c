@@ -422,7 +422,7 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 
 	/* Initialize RPC latency by size histograms */
 	{
-		int num_buckets = PTLRPC_MAX_BRW_BITS - PAGE_SHIFT;
+		int num_buckets = OSC_LAT_BUCKETS;
 		int i;
 
 		OBD_ALLOC_PTR_ARRAY(cli->cl_read_io_latency_by_size,
@@ -620,10 +620,10 @@ err:
 	cli->cl_mod_tag_bitmap = NULL;
 err_latency:
 	OBD_FREE_PTR_ARRAY(cli->cl_read_io_latency_by_size,
-			    PTLRPC_MAX_BRW_BITS - PAGE_SHIFT);
+			    OSC_LAT_BUCKETS);
 	cli->cl_read_io_latency_by_size = NULL;
 	OBD_FREE_PTR_ARRAY(cli->cl_write_io_latency_by_size,
-			    PTLRPC_MAX_BRW_BITS - PAGE_SHIFT);
+			    OSC_LAT_BUCKETS);
 	cli->cl_write_io_latency_by_size = NULL;
 
 	RETURN(rc);
@@ -650,11 +650,11 @@ void client_obd_cleanup(struct obd_device *obd)
 
 	/* Free RPC latency by size histograms */
 	OBD_FREE_PTR_ARRAY(cli->cl_read_io_latency_by_size,
-			   PTLRPC_MAX_BRW_BITS - PAGE_SHIFT);
+			   OSC_LAT_BUCKETS);
 	cli->cl_read_io_latency_by_size = NULL;
 
 	OBD_FREE_PTR_ARRAY(cli->cl_write_io_latency_by_size,
-			   PTLRPC_MAX_BRW_BITS - PAGE_SHIFT);
+			   OSC_LAT_BUCKETS);
 	cli->cl_write_io_latency_by_size = NULL;
 
 	EXIT;
