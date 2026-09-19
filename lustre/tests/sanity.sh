@@ -30323,6 +30323,10 @@ test_276() {
 	kill -9 $pid
 	do_facet ost1 "pid=\\\$(cat $TMP/sanity_276_pid); kill -9 \\\$pid; \
 		rm $TMP/sanity_276_pid"
+
+	# ensure recovery is done so the subsequent tests have a healthy system
+	wait_recovery_complete ost1 || error "ost1 recovery not done"
+	wait_osc_import_state mds ost1 FULL
 }
 run_test 276 "Race between mount and obd_statfs"
 
