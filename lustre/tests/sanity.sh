@@ -5222,6 +5222,8 @@ sub_33h() {
 		error "MDT index match $stat times, after $tries tries"
 		same=0
 	done
+
+	rm -rf $DIR/$tdir || error "can't cleanup"
 }
 
 test_33h() {
@@ -5251,6 +5253,7 @@ test_33i()
 
 	test_mkdir -i 0 -c $MDSCOUNT $DIR/$tdir || error "mkdir $tdir failed"
 	createmany -o $DIR/$tdir/$FNAME 1000 || error "createmany failed"
+	stack_trap "unlinkmany $DIR/$tdir/$FNAME 1000"
 
 	local count
 	local total
@@ -5807,7 +5810,7 @@ test_39j() {
 	start_full_debug_logging
 	touch $DIR1/$tfile
 	sleep 1
-	stack_trap "rm -f $DIR1/$tfile"
+	stack_trap "rm -f $DIR1/$tfile $DIR1/$tfile-1"
 
 	#define OBD_FAIL_OSC_DELAY_SETTIME	 0x412
 	lctl set_param fail_loc=0x80000412
@@ -10085,6 +10088,7 @@ test_56Aa() { # was test_56aa, LU-5937
 	$LFS setdirstripe -c$MDSCOUNT $dir/striped_dir
 
 	createmany -o $dir/striped_dir/${tfile}- 1024
+	stack_trap "unlinkmany $dir/striped_dir/${tfile}- 1024"
 	local dirs=$($LFS find --size +7k $dir/)
 
 	[ -n "$dirs" ] || error "lfs find --size wrong under striped dir"
@@ -16598,6 +16602,8 @@ test_119k()
 			llite.*.hybrid_io_write_threshold_bytes | head -n1)
 	local rthresh=$($LCTL get_param -n \
 			llite.*.hybrid_io_read_threshold_bytes | head -n1)
+
+	stack_trap "rm -f $tfile"
 
 	# Enable hybrid IO
 	local hybrid=$($LCTL get_param -n llite.*.hybrid_io)
@@ -23746,11 +23752,14 @@ test_160x() {
 	(( $MDS1_VERSION >= $(version_code 2.17.54) )) ||
 		skip "Need MGS version at least 2.17.54"
 
+	test_mkdir -i0 -c1 $DIR/$tdir
+
 	changelog_chmask "ALL"
 	changelog_register || error "changelog_register failed"
 	changelog_register || error "changelog_register failed"
 	changelog_register || error "changelog_register failed"
-	createmany -o $DIR/f- 1000 || error "can't create"
+	createmany -o $DIR/$tdir/f- 1000 || error "can't create"
+	stack_trap "unlinkmany $DIR/$tdir/f- 1000"
 	before=$(changelog_users $SINGLEMDS|grep ^cl|wc -l)
 	__changelog_clear $SINGLEMDS cl1 200
 	__changelog_clear $SINGLEMDS cl1 100
@@ -24258,6 +24267,8 @@ test_165b() {
 	(( $OST1_VERSION >= $(version_code 2.13.54) )) ||
 		skip "OFD access log unsupported"
 
+	stack_trap "rm -f $trace $file"
+
 	setup_165
 	do_facet ost1 ofd_access_log_reader --debug=- --trace=- > "${trace}" &
 	sleep 5
@@ -24412,6 +24423,7 @@ test_165d() {
 	(( $OST1_VERSION >= $(version_code 2.13.54) )) ||
 		skip "OFD access log unsupported"
 
+	stack_trap "rm -rf $DIR/$tdir"
 	test_mkdir "${DIR}/${tdir}"
 
 	setup_165
@@ -36867,6 +36879,7 @@ test_430b() {
 	local offset
 	local file=$DIR/$tdir/$tfile
 
+	stack_trap "rm -f $file"
 	mkdir -p $DIR/$tdir
 	# Empty layout lseek should fail
 	$MCREATE $file
@@ -38197,6 +38210,8 @@ verify_som_sync_utility() {
 			error "User $cl_user not found in changelog_users"
 	fi
 
+	stack_trap "rm -f $DIR/$tfile"
+
 	rm -rf $DIR/$tdir || error "rm $tdir failed"
 	mkdir_on_mdt0 $DIR/$tdir || error "mkdir $tdir failed"
 	touch $DIR/$tdir/trunc || error "touch $tdir/trunc failed"
@@ -38909,6 +38924,7 @@ run_test 833 "Mixed buffered/direct read and write should not return -EIO"
 
 test_834() {
 	local file=$DIR/$tfile
+	stack_trap "rm -f $DIR/$tfile"
 
 	dd if=/dev/zero of=$file bs=1M count=100 ||
 		error "failed to write $file"
@@ -39050,6 +39066,7 @@ test_853() {
 	local file=$DIR/$tfile
 	local size=$((PAGE_SIZE * 2))
 
+	stack_trap "rm -f $file"
 	dd if=/dev/zero of=$file bs=1M count=100 ||
 		error "failed to write $file"
 	cancel_lru_locks $OSC
