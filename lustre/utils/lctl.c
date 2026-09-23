@@ -526,9 +526,6 @@ command_t cmdlist[] = {
 	 "usage: show <subsystem id/debug mask>"},
 	{"debug_list", jt_dbg_list, 0, "list subsystem and debug types\n"
 	 "usage: debug_list <subs/types>"},
-	{"modules", jt_dbg_modules, 0,
-	 "provide gdb-friendly module information\n"
-	 "usage: modules <path>"},
 
 	/* Pool commands */
 	{"===  Pools ==", NULL, 0, "pool management"},

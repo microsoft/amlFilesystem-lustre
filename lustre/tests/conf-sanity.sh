@@ -884,10 +884,31 @@ test_24b() {
 run_test 24b "Multiple MGSs on a single node (should return err)"
 
 test_25() {
+	local mods=(libcfs)
+	local used
+	local mod
+	local i
+
 	setup_noconfig
 	check_mount || error "check_mount failed"
-	local MODULES=$($LCTL modules | awk '{ print $2 }')
-	rmmod $MODULES 2>/dev/null || true
+	# Lustre modules are libcfs and all modules depending on it, as in
+	# lustre_rmmod.  Try to remove each one: only modules
+	# that nothing references may go away.
+	for ((i = 0; i < ${#mods[@]}; i++)); do
+		for mod in $(lsmod | awk -v mod=${mods[i]} \
+			     '$1 == mod { gsub(",", " ", $4); print $4 }'); do
+			[[ " ${mods[*]} " == *" $mod "* ]] || mods+=($mod)
+		done
+	done
+	# modules of the mounted client and targets must be referenced
+	used=$(lsmod | awk '$1 ~ /^(lustre|mdt|ofd|mgs|osd_.*)$/ { print $1 }')
+	for ((i = ${#mods[@]} - 1; i >= 0; i--)); do
+		rmmod ${mods[i]} 2>/dev/null && echo "removed unused ${mods[i]}"
+	done
+	for mod in $used; do
+		lsmod | grep -q "^$mod " || error "$mod removed while mounted"
+	done
+	check_mount || error "check_mount failed after rmmod"
 	cleanup || error "cleanup failed with $?"
 }
 run_test 25 "Verify modules are referenced"

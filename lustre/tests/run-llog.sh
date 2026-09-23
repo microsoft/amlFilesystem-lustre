@@ -13,15 +13,11 @@ LUSTRE=${LUSTRE:-$(dirname "$0")/..}
 . "$LUSTRE/tests/test-framework.sh"
 init_test_env "$@"
 
-TMP=${TMP:-/tmp}
-
 set -x
 MGS=$($LCTL dl | awk '/mgs/ { print $4 }')
 [ -z "$MGS" ] && echo "$0: SKIP: no MGS available, skipping llog test" && exit 0
 
 load_module kunit/llog_test || exit 1
-$LCTL modules > "$TMP/ogdb-$(hostname)"
-echo "NOW reload debugging syms.."
 
 RC=0
 
