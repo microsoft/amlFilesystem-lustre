@@ -882,8 +882,9 @@ run_test 24b "Multiple MGSs on a single node (should return err)"
 test_25() {
 	setup_noconfig
 	check_mount || error "check_mount failed"
-	local MODULES=$($LCTL modules | awk '{ print $2 }')
-	rmmod $MODULES 2>/dev/null || true
+	# the client module must be referenced while mounted
+	! rmmod lustre 2>/dev/null || error "rmmod lustre while mounted"
+	check_mount || error "check_mount failed after rmmod"
 	cleanup || error "cleanup failed with $?"
 }
 run_test 25 "Verify modules are referenced"

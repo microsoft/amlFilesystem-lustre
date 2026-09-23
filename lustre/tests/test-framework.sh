@@ -1233,10 +1233,6 @@ load_modules_local() {
 
 	MODOPTS_LUSTRE=${MODOPTS_LUSTRE:-"llite_enable_flr_ec=1"}
 	load_module llite/lustre
-	[ -d /r ] && OGDB=${OGDB:-"/r/tmp"}
-	OGDB=${OGDB:-$TMP}
-	rm -f $OGDB/ogdb-$HOSTNAME
-	$LCTL modules > $OGDB/ogdb-$HOSTNAME
 
 	# 'mount' doesn't look in $PATH, it hard-codes /sbin/mount.$FSTYPE
 	local mount_lustre=$LUSTRE/utils/mount.lustre

@@ -59,7 +59,6 @@ int jt_dbg_debug_daemon(int argc, char **argv);
 int jt_dbg_debug_file(int argc, char **argv);
 int jt_dbg_clear_debug_buf(int argc, char **argv);
 int jt_dbg_mark_debug_buf(int argc, char **argv);
-int jt_dbg_modules(int argc, char **argv);
 
 /* obd.c */
 int do_disconnect(char *func, int verbose);
