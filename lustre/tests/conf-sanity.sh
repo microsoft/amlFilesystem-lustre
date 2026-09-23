@@ -9701,23 +9701,23 @@ test_109_test_params() {
 
 	local atime_diff=$(do_facet mds $LCTL \
 		get_param -n mdd.$fsname-MDT0000.atime_diff)
-	[ $atime_diff == 63 ] || error "wrong mdd parameter after clear_conf"
+	[ $atime_diff == 63 ] || error "wrong mdd parameter after lcfg_clear"
 	local max_read_ahead_mb=$(do_facet client $LCTL \
 		get_param -n llite.$fsname*.max_read_ahead_mb)
 	[ $max_read_ahead_mb == 64 ] ||
-		error "wrong llite parameter after clear_conf"
+		error "wrong llite parameter after lcfg_clear"
 	local ost_in_pool=$(do_facet mds $LCTL pool_list $fsname.pool1 |
 		grep -v "^Pool:" | sed 's/_UUID//')
 	[ $ost_in_pool = "$fsname-OST0000" ] ||
-		error "wrong pool after clear_conf"
+		error "wrong pool after lcfg_clear"
 }
 
 #
-# run lctl clear_conf, store CONFIGS before and after that
+# run lctl lcfg_clear, store CONFIGS before and after that
 #
-test_109_clear_conf()
+test_109_lcfg_clear()
 {
-	local clear_conf_arg=$1
+	local lcfg_clear_arg=$1
 
 	local mgsdev
 	if ! combined_mgs_mds ; then
@@ -9736,8 +9736,13 @@ test_109_clear_conf()
 	#
 	# the command being tested
 	#
-	do_facet mgs $LCTL clear_conf $clear_conf_arg ||
-		error "clear_conf failed"
+	if (( $MDS1_VERSION >= $(version_code 2.15.90) )); then
+		lcfg_clear="lcfg clear"
+	else
+		lcfg_clear="lcfg_clear"
+	fi
+	do_facet mgs $LCTL $lcfg_clear $lcfg_clear_arg ||
+		error "$lcfg_clear failed"
 	if ! combined_mgs_mds ; then
 		stop_mgs || error "stop_mgs failed"
 	else
@@ -9779,7 +9784,7 @@ test_109a()
 	stop_ost || error "stop_ost failed"
 	stop_mds || error "stop_mds failed"
 
-	test_109_clear_conf $FSNAME
+	test_109_lcfg_clear $FSNAME
 	#
 	# make sure that all configs are cleared
 	#
@@ -9802,7 +9807,7 @@ test_109a()
 
 	cleanup
 }
-run_test 109a "test lctl clear_conf fsname"
+run_test 109a "test lctl lcfg_clear fsname"
 
 test_109b()
 {
@@ -9825,7 +9830,7 @@ test_109b()
 	stop_ost || error "stop_ost failed"
 	stop_mds || error "stop_mds failed"
 
-	test_109_clear_conf $FSNAME-MDT0000
+	test_109_lcfg_clear $FSNAME-MDT0000
 	#
 	# make sure that only one config is cleared
 	#
@@ -9847,7 +9852,7 @@ test_109b()
 
 	cleanup
 }
-run_test 109b "test lctl clear_conf one config"
+run_test 109b "test lctl lcfg_clear one config"
 
 test_110()
 {

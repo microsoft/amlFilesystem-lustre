@@ -344,6 +344,27 @@ command_t lqa_cmdlist[] = {
 	{.pc_help = NULL }
 };
 JT_SUBCMD(lqa);
+
+/**
+ * command_t lcfg_cmdlist - lctl lcfg commands.
+ */
+command_t lcfg_cmdlist[] = {
+	{.pc_name = "clear", .pc_func = jt_lcfg_clear,
+	 .pc_help =
+	 "drop unused config llog records for a device or filesystem.\n"
+	 "clients and servers must be unmounted during this operation.\n"
+	 "usage: lcfg clear {FSNAME|DEVNAME}"},
+	{.pc_name = "fork", .pc_func = jt_lcfg_fork,
+	 .pc_help =
+	 "copy configuration logs for named filesystem with given name\n"
+	 "usage: lcfg fork FSNAME NEWNAME"},
+	{.pc_name = "erase", .pc_func = jt_lcfg_erase,
+	 .pc_help =
+	 "permanently erase configuration logs for the named filesystem\n"
+	 "usage: lcfg erase FSNAME"},
+	{.pc_help = NULL }
+};
+JT_SUBCMD(lcfg);
 #endif
 
 command_t cmdlist[] = {
@@ -788,6 +809,7 @@ command_t cmdlist[] = {
 	 "permanently erase configuration logs for the named filesystem\n"
 	 "usage: lcfg_erase [--help] [--quiet] FSNAME"},
 	{"erase_lcfg", jt_lcfg_erase, 0, "alias for 'lcfg_erase'\n"},
+	{"lcfg", jt_lcfg, lcfg_cmdlist, ""},
 #endif /* HAVE_SERVER_SUPPORT */
 
 	{"==== obsolete (DANGEROUS) ====", NULL, 0, "obsolete (DANGEROUS)"},
