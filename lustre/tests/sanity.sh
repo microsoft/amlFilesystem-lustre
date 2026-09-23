@@ -36254,6 +36254,71 @@ test_401dc() {
 }
 run_test 401dc "invalid global param names must not match valid ones"
 
+cleanup_401dd() {
+	local param=$1
+	local path=$2
+	local nodes=$3
+	local val=$4
+
+	# the test normally deleted the record already
+	do_facet mgs "$LCTL --device MGS llog_print params" | grep -q $param &&
+		do_facet mgs $LCTL set_param -P -d $param
+	do_nodes $nodes "echo $val > $path"
+}
+
+test_401dd() {
+	(( $MGS_VERSION >= $(version_code 2.17.60.120) &&
+	   $MDS1_VERSION >= $(version_code 2.17.60.120) &&
+	   $OST1_VERSION >= $(version_code 2.17.60.120) )) ||
+		skip "need servers >= 2.17.60.120 for MODULE.PARAM fallback"
+
+	local param=ptlrpc.at_max
+
+	$LCTL get_param $param &> /dev/null ||
+		skip "lctl does not support MODULE.PARAM fallback"
+
+	local path=/sys/module/ptlrpc/parameters/at_max
+	local nodes=$(comma_list $(all_nodes))
+	local old=$(< $path)
+	local new=$((old + 1))
+	local node
+
+	# the kernel upcall for module params runs /usr/sbin/lctl directly
+	for node in ${nodes//,/ }; do
+		do_node $node "[[ -e /usr/sbin/lctl ]]" && continue
+		do_node $node "ln -s $LCTL /usr/sbin/lctl" ||
+			skip_env "$node: cannot link /usr/sbin/lctl to $LCTL"
+		stack_trap "do_node $node rm -f /usr/sbin/lctl"
+	done
+	stack_trap "cleanup_401dd $param $path $nodes $old"
+
+	# parameters that are read-only at runtime can't be saved
+	! do_facet mgs $LCTL set_param -P lnet.networks=tcp ||
+		error "set -P read-only lnet.networks"
+	! do_facet mgs $LCTL set_param -P version=1 ||
+		error "set -P read-only version"
+
+	local yaml=$TMP/$tfile.yaml
+	local rec="{ index: 1, event: set_param, device: general"
+
+	rec+=", parameter: lnet.networks, value: tcp }"
+	do_facet mgs "echo '- $rec' > $yaml"
+	stack_trap "do_facet mgs rm -f $yaml"
+	! do_facet mgs $LCTL set_param -P -F $yaml ||
+		error "set -P -F read-only lnet.networks"
+
+	do_facet mgs $LCTL set_param -P $param=$new || error "set -P $param"
+	for node in ${nodes//,/ }; do
+		wait_update $node "cat $path" $new ||
+			error "$node: $param != $new"
+	done
+
+	do_facet mgs $LCTL set_param -P -d $param || error "set -P -d $param"
+	! do_facet mgs "$LCTL --device MGS llog_print params" | grep $param ||
+		error "$param in params llog after delete"
+}
+run_test 401dd "check 'lctl set_param -P MODULE.PARAM' on all nodes"
+
 test_401e() { # LU-14779
 	$LCTL list_param -R "ldlm.namespaces.MGC*" ||
 		error "lctl list_param MGC* failed"
@@ -36332,6 +36397,49 @@ test_401fb() {
 	(( $(< $path) == val + 1 )) || error "$param=$(< $path) != $((val + 1))"
 }
 run_test 401fb "check 'lctl {get,list,find,set}_param --module MODULE.PARAM'"
+
+test_401fc() {
+	local param=ptlrpc.at_max
+	local path=/sys/module/ptlrpc/parameters/at_max
+	local val
+
+	# Lustre module parameters are found without --module
+	val=$($LCTL list_param -p at_max)
+	[[ $val == /sys/fs/lustre/at_max ]] || error "at_max path '$val'"
+	val=$($LCTL list_param -p $param)
+	[[ $val == $path ]] || error "$param path '$val'"
+	val=$($LCTL get_param -n $param) || error "get_param $param"
+	[[ "$val" == "$(< $path)" ]] || error "$param=$val != $(< $path)"
+	val=$($LCTL get_param -n "{lnet,ptlrpc}.at_max") ||
+		error "get_param {lnet,ptlrpc}.at_max"
+	[[ "$val" == "$(< $path)" ]] || error "{lnet,ptlrpc}.at_max=$val"
+
+	# no Lustre parameters match lnet.*, so the fallback finds these
+	local list=$($LCTL list_param "lnet.*")
+	local rlist=$($LCTL list_param -R lnet)
+
+	for val in /sys/module/lnet/parameters/*; do
+		val=lnet.${val##*/}
+		grep -qx "$val" <<< "$list" || error "lnet.* missing $val"
+		grep -qx "$val" <<< "$rlist" || error "-R lnet missing $val"
+	done
+
+	val=$(< $path)
+	stack_trap "echo $val > $path"
+	$LCTL set_param $param=$((val + 1)) || error "set_param $param failed"
+	(( $(< $path) == val + 1 )) || error "$param=$(< $path) != $((val + 1))"
+
+	# ptlrpc.* matches Lustre parameters, so doesn't add module params
+	! $LCTL list_param -p "ptlrpc.*" | grep "^/sys/module/" ||
+		error "ptlrpc.* found module params"
+
+	# only Lustre/LNet modules are searched without --module
+	[[ -r /sys/module/printk/parameters/time ]] || return 0
+	! $LCTL get_param printk.time 2>/dev/null ||
+		error "printk.time found without --module"
+	$LCTL get_param --module printk.time || error "get_param printk.time"
+}
+run_test 401fc "check 'lctl {get,list,set}_param MODULE.PARAM' no --module"
 
 test_401ga() {
 	local paramdir=/etc/lustre

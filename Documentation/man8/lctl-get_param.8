@@ -114,6 +114,11 @@ and
 If
 .I MODULE
 contains wildcards, only the Lustre and LNet modules are searched.
+Without this option, a module parameter is still found if
+.I MODULE
+is a Lustre or LNet module and no Lustre parameter matches the name,
+so it is only needed to include module parameters in the same wildcard
+match as Lustre parameters, or for modules that are not part of Lustre.
 .TP
 .BR -p ", " --path
 Print the parameter path instead of the parameter name.
@@ -180,6 +185,15 @@ Use --module to get kernel module parameters:
 ptlrpc.send_sepol=0
 ksocklnd.peer_buffer_credits=0
 lnet.peer_buffer_credits=0
+.EE
+.RE
+.PP
+Lustre module parameters are also found without --module when no Lustre
+parameter has the same name:
+.RS
+.EX
+.RB client# " lctl get_param mgc.mgc_requeue_timeout_min"
+mgc.mgc_requeue_timeout_min=5
 .EE
 .RE
 .PP

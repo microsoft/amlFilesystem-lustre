@@ -26,5 +26,7 @@ __printf(2, 3)
 int cfs_get_param_paths(glob_t *paths, const char *pattern, ...);
 __printf(2, 3)
 int cfs_get_param_paths_modules(glob_t *paths, const char *pattern, ...);
+__printf(2, 3)
+int cfs_get_lustre_module_param_paths(glob_t *paths, const char *pattern, ...);
 
 #endif /* _LIBCFS_UTIL_PARAM_H_ */

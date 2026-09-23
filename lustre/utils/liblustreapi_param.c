@@ -194,12 +194,25 @@ err:
 int llapi_param_get_paths_flags(const char *pattern, glob_t *paths,
 				enum llapi_param_flags flags)
 {
+	int rc;
+
 	if (flags & LLAPI_PARAM_MODULES)
 		return cfs_get_param_paths_modules(paths, "%s", pattern) ?
 		       -errno : 0;
 
-	return get_lustre_param_path(NULL, NULL, FILTER_BY_NONE,
-				     pattern, paths);
+	rc = get_lustre_param_path(NULL, NULL, FILTER_BY_NONE, pattern, paths);
+	if (rc != -ENOENT || !(flags & LLAPI_PARAM_MODULES_FALLBACK))
+		return rc;
+
+	/* No Lustre parameter matched, so try "MODULE.PARAM".  Only Lustre
+	 * modules are searched, so a mistyped parameter name doesn't find
+	 * (or change) the parameters of some unrelated kernel module.
+	 */
+	cfs_free_param_data(paths);
+	if (cfs_get_lustre_module_param_paths(paths, "%s", pattern) != 0)
+		return -errno;
+
+	return 0;
 }
 
 int llapi_param_get_paths(const char *pattern, glob_t *paths)

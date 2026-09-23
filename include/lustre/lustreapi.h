@@ -2073,8 +2073,11 @@ int llapi_layout_dom_size(struct llapi_layout *layout, uint64_t *size);
 
 enum llapi_param_flags {
 	/* also match MODULE/PARAM in /sys/module/MODULE/parameters/PARAM */
-	LLAPI_PARAM_MODULES	= 0x0001,
-	LLAPI_PARAM_ALL		= LLAPI_PARAM_MODULES,
+	LLAPI_PARAM_MODULES		= 0x0001,
+	/* if no Lustre parameter matches, try Lustre/LNet module parameters */
+	LLAPI_PARAM_MODULES_FALLBACK	= 0x0002,
+	/* MODULES already includes what MODULES_FALLBACK would find */
+	LLAPI_PARAM_ALL			= LLAPI_PARAM_MODULES,
 };
 
 int llapi_param_get_paths(const char *pattern, glob_t *paths);

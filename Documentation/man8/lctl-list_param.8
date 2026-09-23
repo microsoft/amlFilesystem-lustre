@@ -75,6 +75,11 @@ and
 If
 .I MODULE
 contains wildcards, only the Lustre and LNet modules are searched.
+Without this option, a module parameter is still found if
+.I MODULE
+is a Lustre or LNet module and no Lustre parameter matches the name,
+so it is only needed to include module parameters in the same wildcard
+match as Lustre parameters, or for modules that are not part of Lustre.
 .TP
 .BR -p ", " --path
 Print the parameter path instead of the parameter name.

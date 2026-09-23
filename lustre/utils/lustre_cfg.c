@@ -434,6 +434,76 @@ static int lcfg_setparam_perm(const char *func, char *buf, bool del)
 	return rc;
 }
 
+/**
+ * lcfg_setparam_perm_check() - Check that a parameter can be saved
+ * @func: name of the command, for error messages
+ * @param: parameter setting in the form "NAME=VALUE"
+ *
+ * A "set_param -P" parameter is applied on each node by running
+ * "lctl set_param" when the configuration is processed at mount time.
+ * A parameter that is read-only (or a module parameter that can only be
+ * set at module load) would fail on every node at every mount, so refuse
+ * to save it.  The permission is fixed by the code, so it is the same on
+ * every node that has the parameter.
+ *
+ * Only parameters found locally are checked, since many exist only on
+ * some node types.  If any match is writable, the parameter is saved.
+ * A wildcard device type is not checked, since the same parameter name
+ * may be read-only for one type (e.g. mdt) and writable for another (osc).
+ *
+ * Return: 0 if the parameter can be saved, or %-EROFS if not
+ */
+static int lcfg_setparam_perm_check(const char *func, const char *param)
+{
+	struct param_opts popt = { 0 };
+	char pattern[PATH_MAX];
+	bool writable = false;
+	bool module;
+	glob_t paths;
+	size_t len;
+	int i;
+
+	len = strcspn(param, "=");
+	if (len == 0 || len >= sizeof(pattern))
+		return 0;
+	/* the MGS treats a record with no value as a delete */
+	if (!param[len] || !param[len + 1])
+		return 0;
+	snprintf(pattern, sizeof(pattern), "%.*s", (int)len, param);
+	if (jt_clean_path(&popt, pattern) < 0)
+		return 0;
+	if (strcspn(pattern, "*?[{") < strcspn(pattern, "/"))
+		return 0;
+
+	if (llapi_param_get_paths_flags(pattern, &paths,
+					LLAPI_PARAM_MODULES_FALLBACK) != 0)
+		return 0;
+
+	/* module params are only found if no Lustre params match */
+	module = is_module_param(paths.gl_pathv[0]);
+	for (i = 0; i < paths.gl_pathc && !writable; i++) {
+		struct stat st;
+
+		if (stat(paths.gl_pathv[i], &st) == 0 &&
+		    S_ISREG(st.st_mode) && (st.st_mode & 0200))
+			writable = true;
+	}
+	llapi_param_paths_free(&paths);
+
+	if (writable)
+		return 0;
+
+	if (module)
+		fprintf(stderr,
+			"error: %s: module parameter '%.*s' cannot be changed at runtime, set it in /etc/modprobe.d/ instead\n",
+			jt_cmdname(func), (int)len, param);
+	else
+		fprintf(stderr, "error: %s: parameter '%.*s' is read-only\n",
+			jt_cmdname(func), (int)len, param);
+
+	return -EROFS;
+}
+
 /*
  * Param set to single log file, used by all clients and servers.
  * This should be loaded after the individual config logs.
@@ -442,6 +512,7 @@ static int lcfg_setparam_perm(const char *func, char *buf, bool del)
 int jt_lcfg_setparam_perm(int argc, char **argv, struct param_opts *popt)
 {
 	int rc;
+	int rc2;
 	int i;
 	char *buf = NULL;
 
@@ -470,7 +541,13 @@ int jt_lcfg_setparam_perm(int argc, char **argv, struct param_opts *popt)
 			}
 		}
 
-		rc = lcfg_setparam_perm(argv[0], buf, popt->po_delete);
+		rc2 = 0;
+		if (!popt->po_delete)
+			rc2 = lcfg_setparam_perm_check(argv[0], buf);
+		if (!rc2)
+			rc2 = lcfg_setparam_perm(argv[0], buf, popt->po_delete);
+		if (!rc)
+			rc = rc2;
 		if (buf != argv[i])
 			free(buf);
 	}
@@ -974,10 +1051,13 @@ static int lcfg_apply_param_yaml(const char *func, const char *filename)
 			printf("%s: %s\n", confset == PT_SETPARAM ?
 			       "set_param" : "conf_param", buf);
 
-			if (confset == PT_SETPARAM)
-				rc = lcfg_setparam_perm(func, buf, 0);
-			else
+			if (confset == PT_SETPARAM) {
+				rc = lcfg_setparam_perm_check(func, buf);
+				if (!rc)
+					rc = lcfg_setparam_perm(func, buf, 0);
+			} else {
 				rc = lcfg_conf_param(func, buf, 0);
+			}
 			if (rc) {
 				printf("error: failed to apply parameter rc = %d, tyring next one\n",
 				       rc);

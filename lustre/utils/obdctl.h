@@ -12,6 +12,7 @@
 #ifndef _OBDCTL_H_
 #define _OBDCTL_H_
 
+#include <stdbool.h>
 #ifdef HAVE_SERVER_SUPPORT
 #include <linux/lustre/lustre_barrier_user.h>
 #endif
@@ -124,6 +125,7 @@ struct param_opts;
 struct param;
 struct param_dir;
 int jt_clean_path(struct param_opts *popt, char *path);
+bool is_module_param(const char *path);
 int jt_lcfg_getparam(int argc, char **argv);
 int jt_lcfg_setparam(int argc, char **argv);
 int jt_lcfg_listparam(int argc, char **argv);

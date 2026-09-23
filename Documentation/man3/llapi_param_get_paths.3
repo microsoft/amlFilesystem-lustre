@@ -39,6 +39,14 @@ A wildcard
 .I MODULE
 only matches the Lustre and LNet modules.
 .TP
+.B LLAPI_PARAM_MODULES_FALLBACK
+If no Lustre parameter matches
+.IR pattern ,
+match it as
+.IR MODULE / PARAM
+against the parameters of the Lustre and LNet kernel modules only.
+Existing Lustre parameters take precedence, and a mistyped name does not match an unrelated kernel module.
+.TP
 .B LLAPI_PARAM_ALL
 Search all of the above locations.
 .PP

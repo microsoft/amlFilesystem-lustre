@@ -115,7 +115,7 @@ static int sp_parse_param_value(int argc, char **argv, char **param,
 }
 
 /* Is @path a module parameter (/sys/module/MODULE/parameters[/PARAM])? */
-static bool is_module_param(const char *path)
+bool is_module_param(const char *path)
 {
 	return strncmp(path, CFS_MODULE_PARAM_DIR"/",
 		       strlen(CFS_MODULE_PARAM_DIR"/")) == 0;
@@ -705,31 +705,30 @@ int add_dir_to_tree(struct lctl_param_dir *root, struct lctl_param_dir **dir,
 }
 
 /**
- * do_param_op() - Perform a read, write or just a listing of a parameter
+ * do_param_op_flags() - Perform a read, write or just a listing of a parameter
  * @popt: list,set,get parameter options
  * @pattern: search filter for the path of the parameter
  * @value: value to set the parameter if write operation
  * @oper: what operation to perform with the parameter
  * @wq: work queue which work items will be added or NULL if not parallel [out]
+ * @flags: which parameter directories to search
  *
  * Return:
  * * number of bytes written on success.
  * * %-errno on error and prints error message.
  */
-static int do_param_op(struct param_opts *popt, char *pattern, char *value,
-		       enum parameter_operation oper, struct sp_workq *wq)
+static int do_param_op_flags(struct param_opts *popt, char *pattern,
+			     char *value, enum parameter_operation oper,
+			     struct sp_workq *wq, enum llapi_param_flags flags)
 {
+	enum llapi_param_flags child_flags;
 	struct lctl_param_dir *pdir;
 	glob_t paths;
 	char *tmp, *opname = parameter_opname[oper];
-	int flags = 0;
 	int rc, i;
 
 	if (!wq && popt_is_parallel(*popt))
 		return -EINVAL;
-
-	if (popt->po_module)
-		flags |= LLAPI_PARAM_MODULES;
 
 	rc = llapi_param_get_paths_flags(pattern, &paths, flags);
 	if (rc) {
@@ -927,6 +926,9 @@ op_switch:
 					&lpf->lpf_val,
 					popt->po_find_pattern != NULL);
 			if (rc) {
+				/* find_param quietly skips unreadable files */
+				if (popt->po_find_pattern)
+					rc = 0;
 				free(param_name);
 				param_name = NULL;
 				continue;
@@ -1015,9 +1017,16 @@ op_switch:
 			continue;
 		}
 
-		rc2 = do_param_op(popt, pathname, value, oper, wq);
-		if (!rc2 && rc2 != -ENOENT) {
-			/* errors will be printed by do_param_op() */
+		/* Module parameter directories are only found by searching
+		 * modules, even if the top level was found by the fallback.
+		 */
+		child_flags = flags & LLAPI_PARAM_MODULES;
+		if (!child_flags && is_module_param(paths.gl_pathv[i]))
+			child_flags = LLAPI_PARAM_MODULES_FALLBACK;
+		rc2 = do_param_op_flags(popt, pathname, value, oper, wq,
+					child_flags);
+		if (rc2 && rc2 != -ENOENT) {
+			/* errors will be printed by do_param_op_flags() */
 			if (!rc)
 				rc = rc2;
 			continue;
@@ -1032,6 +1041,35 @@ op_switch:
 out_param:
 	llapi_param_paths_free(&paths);
 	return rc;
+}
+
+/**
+ * do_param_op() - Perform a read, write or just a listing of a parameter
+ * @popt: list,set,get parameter options
+ * @pattern: search filter for the path of the parameter
+ * @value: value to set the parameter if write operation
+ * @oper: what operation to perform with the parameter
+ * @wq: work queue which work items will be added or NULL if not parallel [out]
+ *
+ * With --module, search module parameters along with Lustre parameters.
+ * Otherwise, "MODULE.PARAM" only matches Lustre and LNet module parameters
+ * if no Lustre parameter matches @pattern, so that "lctl set_param" run by
+ * the "set_param -P" upcall (which has no --module option) can set them,
+ * without changing the output for patterns like "osc.*" that already match.
+ *
+ * Return:
+ * * number of bytes written on success.
+ * * %-errno on error and prints error message.
+ */
+static int do_param_op(struct param_opts *popt, char *pattern, char *value,
+		       enum parameter_operation oper, struct sp_workq *wq)
+{
+	enum llapi_param_flags flags = LLAPI_PARAM_MODULES_FALLBACK;
+
+	if (popt->po_module)
+		flags = LLAPI_PARAM_MODULES;
+
+	return do_param_op_flags(popt, pattern, value, oper, wq, flags);
 }
 
 static int param_out_cmdline(int argc, char **argv, struct param_opts *popt,

@@ -215,21 +215,30 @@ static void cfs_module_name_fixup(char *module)
 	}
 }
 
+/* Which directories cfs_vget_param_paths() searches for parameters */
+enum cfs_param_dirs {
+	CFS_PARAM_DIRS_LUSTRE		= 0x01, /* /sys/fs/lustre, debugfs */
+	CFS_PARAM_DIRS_MODULES		= 0x02, /* /sys/module/MOD/parameters */
+	CFS_PARAM_DIRS_LUSTRE_MODULES	= 0x04, /* only Lustre modules */
+};
+
 /**
  * cfs_module_param_path() - Build the glob for module parameters
  * @path: buffer to hold the resulting glob [out]
  * @size: size of @path
  * @param: parameter pattern in the form "MODULE[/PARAMETER]"
+ * @lustre_only: only match Lustre modules
  *
  * Module parameters are named "MODULE.PARAMETER" and are resolved to
  * CFS_MODULE_PARAM_DIR/MODULE/parameters/PARAMETER.  If MODULE contains
- * wildcards then it is matched only against the Lustre modules found by
- * cfs_param_modules_get(), otherwise it is used as-is.
+ * wildcards, or @lustre_only is set, then it is matched only against the
+ * Lustre modules found by cfs_param_modules_get(), otherwise it is used as-is.
  *
  * Return: length of the glob in @path, 0 if no modules match @param,
  *	   or %-E2BIG if @path is too small
  */
-static int cfs_module_param_path(char *path, size_t size, const char *param)
+static int cfs_module_param_path(char *path, size_t size, const char *param,
+				 bool lustre_only)
 {
 	struct cfs_param_modules mods;
 	char module[NAME_MAX + 1];
@@ -250,7 +259,7 @@ static int cfs_module_param_path(char *path, size_t size, const char *param)
 	cfs_module_name_fixup(module);
 
 	/* explicit module name or {a,b} list without wildcards is used as-is */
-	if (!strpbrk(module, "*?[")) {
+	if (!lustre_only && !strpbrk(module, "*?[")) {
 		len = snprintf(path, size,
 			       CFS_MODULE_PARAM_DIR"/%s/parameters%s",
 			       module, rest);
@@ -280,7 +289,7 @@ static int cfs_module_param_path(char *path, size_t size, const char *param)
 	return len < size ? len : -E2BIG;
 }
 
-static int cfs_vget_param_paths(glob_t *paths, bool modules,
+static int cfs_vget_param_paths(glob_t *paths, enum cfs_param_dirs dirs,
 				const char *pattern, va_list args)
 {
 	static const char topdir[] = "{{/proc,/sys}/fs/lustre,/sys/kernel/debug/{lnet,lustre}}";
@@ -304,18 +313,26 @@ static int cfs_vget_param_paths(glob_t *paths, bool modules,
 	}
 
 	rc = 0;
-	if (modules)
-		rc = cfs_module_param_path(modpath, sizeof(modpath), buf);
+	if (dirs & (CFS_PARAM_DIRS_MODULES | CFS_PARAM_DIRS_LUSTRE_MODULES))
+		rc = cfs_module_param_path(modpath, sizeof(modpath), buf,
+				dirs & CFS_PARAM_DIRS_LUSTRE_MODULES);
 	if (rc < 0) {
 		errno = E2BIG;
 		return -E2BIG;
 	}
 
-	if (rc > 0)
+	if (!(dirs & CFS_PARAM_DIRS_LUSTRE)) {
+		if (rc == 0) {
+			errno = ENOENT;
+			return -ENOENT;
+		}
+		rc = snprintf(path, sizeof(path), "%s", modpath);
+	} else if (rc > 0) {
 		rc = snprintf(path, sizeof(path), "{%s/%s,%s}",
 			      topdir, buf, modpath);
-	else
+	} else {
 		rc = snprintf(path, sizeof(path), "%s/%s", topdir, buf);
+	}
 	if (rc >= sizeof(path)) {
 		errno = E2BIG;
 		return -E2BIG;
@@ -366,7 +383,7 @@ int cfs_get_param_paths(glob_t *paths, const char *pattern, ...)
 	int rc;
 
 	va_start(args, pattern);
-	rc = cfs_vget_param_paths(paths, false, pattern, args);
+	rc = cfs_vget_param_paths(paths, CFS_PARAM_DIRS_LUSTRE, pattern, args);
 	va_end(args);
 
 	return rc;
@@ -393,7 +410,35 @@ int cfs_get_param_paths_modules(glob_t *paths, const char *pattern, ...)
 	int rc;
 
 	va_start(args, pattern);
-	rc = cfs_vget_param_paths(paths, true, pattern, args);
+	rc = cfs_vget_param_paths(paths, CFS_PARAM_DIRS_LUSTRE |
+					 CFS_PARAM_DIRS_MODULES, pattern, args);
+	va_end(args);
+
+	return rc;
+}
+
+/**
+ * cfs_get_lustre_module_param_paths() - Get Lustre module parameter paths
+ * @paths: glob_t structure used to hold the final result [out]
+ * @pattern: the pattern containing printf-style format specifiers
+ *	     which will be used to create the path to match
+ *
+ * Match only the parameters of Lustre and LNet kernel modules, in
+ * CFS_MODULE_PARAM_DIR/MODULE/parameters/PARAMETER, where @pattern is in
+ * the form "MODULE/PARAMETER".  Unlike cfs_get_param_paths_modules(),
+ * an explicit MODULE name must also be a Lustre or LNet module.
+ *
+ * Return: 0 for success, with results stored in @paths,
+ *	   negative errno for failure with errno set to report the reason
+ */
+int cfs_get_lustre_module_param_paths(glob_t *paths, const char *pattern, ...)
+{
+	va_list args;
+	int rc;
+
+	va_start(args, pattern);
+	rc = cfs_vget_param_paths(paths, CFS_PARAM_DIRS_LUSTRE_MODULES,
+				  pattern, args);
 	va_end(args);
 
 	return rc;

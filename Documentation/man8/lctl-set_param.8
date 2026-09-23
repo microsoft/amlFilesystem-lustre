@@ -104,8 +104,12 @@ and
 If
 .I MODULE
 contains wildcards, only the Lustre and LNet modules are searched.
-Module parameters are only set on the local node, and only those that are
-writable at runtime can be changed.
+Without this option, a module parameter is still found if
+.I MODULE
+is a Lustre or LNet module and no Lustre parameter matches the name,
+so it is only needed to include module parameters in the same wildcard
+match as Lustre parameters, or for modules that are not part of Lustre.
+Only module parameters that are writable at runtime can be changed.
 .TP
 .BR -P ", " --permanent
 Set
@@ -124,6 +128,18 @@ and
 such as the
 .B FSNAME
 and/or specific target name.
+.IP
+A Lustre or LNet module parameter can also be set permanently as
+.IR MODULE . PARAMETER .
+Permanent parameters are applied on each node after the modules are loaded,
+so a parameter that is read-only at runtime is refused.
+This check only sees parameters present on the node where
+.B set_param -P
+is run, so a parameter whose module is not loaded there is not checked,
+and can still fail when the configuration is applied on another node.
+A module parameter that can only be set at module load should instead be set
+as a module option in
+.BR /etc/modprobe.d/ .
 .TP
 .BR -q ", " --quiet
 Disable printing information.
@@ -193,6 +209,13 @@ osc.testfs-OST0001-osc-ffff8803c9c0f000.max_dirty_mb=512
 osc.testfs-OST0002-osc-ffff8803c9c0f000.max_dirty_mb=512
 osc.testfs-OST0003-osc-ffff8803c9c0f000.max_dirty_mb=512
 osc.testfs-OST0004-osc-ffff8803c9c0f000.max_dirty_mb=512
+.EE
+.RE
+.PP
+Permanently set a Lustre module parameter on all nodes:
+.RS
+.EX
+.RB mgs# " lctl set_param -P ptlrpc.tbf_jobid_cache_size=16384"
 .EE
 .RE
 .PP
