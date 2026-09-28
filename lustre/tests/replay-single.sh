@@ -5129,7 +5129,7 @@ test_135() {
 		load_module ../libcfs/libcfs/libcfs
 	do_facet ost1 "$LCTL set_param fail_loc=0"
 	mount_facet ost1
-	unmountoss
+	unmountoss || error "unmountoss failed"
 	mountoss || error "mountoss failed"
 	clients_up || clients_up || error "$LFS df $MOUNT failed"
 

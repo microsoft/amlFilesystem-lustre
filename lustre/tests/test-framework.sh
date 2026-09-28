@@ -729,7 +729,7 @@ init_test_env() {
 	export KEEP_POOLS=${KEEP_POOLS:-false}
 	export PARALLEL=${PARALLEL:-"no"}
 
-	# Run setup operations on multiple targets concurrently (LU-17240).
+	# Run setup and cleanup operations on multiple targets concurrently.
 	# PARALLEL_OPS (0/1) sets the default for each operation, *_TARGETS
 	# lists the target types run concurrently, and *_TYPES allows different
 	# target types to overlap instead of finishing one type at a time.
@@ -741,6 +741,8 @@ init_test_env() {
 	export PARALLEL_MOUNT_TARGETS=${PARALLEL_MOUNT_TARGETS:-"mdt ost"}
 	export PARALLEL_TUNEFS=${PARALLEL_TUNEFS:-$PARALLEL_OPS}
 	export PARALLEL_TUNEFS_TARGETS=${PARALLEL_TUNEFS_TARGETS:-"mdt ost"}
+	export PARALLEL_UMOUNT=${PARALLEL_UMOUNT:-$PARALLEL_OPS}
+	export PARALLEL_UMOUNT_TARGETS=${PARALLEL_UMOUNT_TARGETS:-"mdt ost"}
 
 	# seconds a target stays down in a SOFT failover
 	export FAILOVER_DELAY=${FAILOVER_DELAY:-0}
@@ -2720,6 +2722,16 @@ unexport_dm_dev() {
 		eval export ${dev_alias}failover_dev=${!saved_dev}
 }
 
+# Return 0 if stop() should remove the dm-flakey device of <facet>
+dm_cleanup_wanted() {
+	local facet=$1
+	local host=${facet}_HOST
+	local failover_host=${facet}failover_HOST
+
+	[[ -n ${!failover_host} && ${!failover_host} != ${!host} ]] ||
+		$CLEANUP_DM_DEV || [[ $facet = fs* ]]
+}
+
 #
 # Remove a device-mapper device.
 # If the destination device is a loop device, then also detach it.
@@ -2743,8 +2755,9 @@ dm_cleanup_dev() {
 	# detach a loop device
 	[[ $major -ne 7 ]] || cleanup_loop_device $facet /dev/loop$minor
 
-	# unload dm-flakey module
-	do_facet $facet "modprobe -r dm-flakey" || true
+	# unload dm-flakey module, unless unmount_facets() will do it later
+	${dm_flakey_keep:-false} ||
+		do_facet $facet "modprobe -r dm-flakey" || true
 }
 
 mount_facet() {
@@ -3030,7 +3043,8 @@ stop() {
 	running=$(do_facet ${facet} "grep -c $mntpt' ' /proc/mounts || true")
 	if [ ${running} -ne 0 ]; then
 		echo "Stopping $mntpt (opts:$*) on $HOST"
-		do_facet ${facet} $UMOUNT "$@" $mntpt
+		# return the error even where the caller disables "set -e"
+		do_facet ${facet} $UMOUNT "$@" $mntpt || return $?
 	fi
 
 	# umount should block, but we should wait for unrelated obd's
@@ -3040,13 +3054,8 @@ stop() {
 	if [[ $(facet_fstype $facet) == zfs ]]; then
 		# export ZFS storage pool
 		[ "$KEEP_ZPOOL" = "true" ] || export_zpool $facet
-	elif dm_flakey_supported $facet; then
-		local host=${facet}_HOST
-		local failover_host=${facet}failover_HOST
-		if [[ -n ${!failover_host} && ${!failover_host} != ${!host} ]]||
-			$CLEANUP_DM_DEV || [[ $facet = fs* ]]; then
-			dm_cleanup_dev $facet
-		fi
+	elif dm_flakey_supported $facet && dm_cleanup_wanted $facet; then
+		dm_cleanup_dev $facet
 	fi
 }
 
@@ -6118,7 +6127,7 @@ wait_pids() {
 }
 
 # Usage: parallel_enabled_for <operation> <target_type>
-#   operation: FORMAT, MOUNT, TUNEFS
+#   operation: FORMAT, MOUNT, TUNEFS, UMOUNT
 #   target_type: mgs, mdt, ost
 # Return 0 if <operation> should run concurrently on <target_type> targets
 parallel_enabled_for() {
@@ -6148,9 +6157,11 @@ parallel_start() {
 	# show which targets are in progress, in case one of them hangs
 	echo "$op $facet: $*"
 	# save the variables set by <command> for parallel_wait() to import,
-	# even if it exits early via error()
+	# even if it exits early via error().  bash 4.4 skips the EXIT trap of
+	# a subshell forked from a trap handler, such as stack_trap cleanup.
 	rm -f $log.env
-	( trap "export -p > $log.env" EXIT; "$@" ) > $log.log 2>&1 &
+	( trap "export -p > $log.env" EXIT; "$@"; local rc=$?;
+	  trap - EXIT; export -p > $log.env; exit $rc ) > $log.log 2>&1 &
 	par_pids+=($!)
 	par_facets+=($facet)
 	par_logs+=($log)
@@ -6441,18 +6452,39 @@ mountmgs() {
 	do_facet mgs "$LCTL set_param -P debug_raw_pointers=Y"
 }
 
-unmountmds() {
-	local mdsnum
+# Usage: unmount_facets <facet> [facet...]
+# Stop the given targets, in parallel if enabled for their type
+unmount_facets() {
+	local -a par_facets
+	local -a par_logs
+	local -a par_pids
+	local -a dm_nodes
+	# concurrent stop() calls on one node would race to load and unload
+	# dm-flakey in dm_flakey_supported() and dm_cleanup_dev()
+	local dm_flakey_keep=true
+	local facet
 	local rc=0
 
-	for ((mdsnum=1; mdsnum <= $MDSCOUNT; mdsnum++)); do
-		local facet=mds$mdsnum
+	for facet in "$@"; do
+		parallel_start UMOUNT $facet stop $facet -f || rc=$?
+	done
+	parallel_wait || rc=$?
 
-		stop $facet -f || rc=$?
+	# stop() finds a failed-over host through $TMP/<facet>active
+	for facet in "$@"; do
+		! $FLAKEY || [[ $(facet_fstype $facet) == zfs ]] ||
+			! dm_cleanup_wanted $facet ||
+			dm_nodes+=($(facet_active_host $facet))
 		rm -f $TMP/${facet}active
 	done
+	(( ${#dm_nodes[@]} == 0 )) || do_nodes $(comma_list ${dm_nodes[@]}) \
+		"modprobe -r dm-flakey 2>/dev/null" || true
 
 	return $rc
+}
+
+unmountmds() {
+	unmount_facets $(get_facets MDS | tr ',' ' ')
 }
 
 # Set <facet>_HOST and <facet>failover_HOST after starting <facet>, if unset
@@ -6515,17 +6547,7 @@ mountmds() {
 }
 
 unmountoss() {
-	local ostnum
-	local rc=0
-
-	for ((ostnum=1; ostnum <= $OSTCOUNT; ostnum++)); do
-		local facet=ost$ostnum
-
-		stop $facet -f || rc=$?
-		rm -f $TMP/${facet}active
-	done
-
-	return $rc
+	unmount_facets $(get_facets OST | tr ',' ' ')
 }
 
 mountoss() {
