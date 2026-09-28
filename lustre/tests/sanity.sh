@@ -7711,9 +7711,23 @@ test_51d_sub() {
 	local stripecount=$1
 	local nfiles=$2
 
+	local mdts=$(comma_list $(mdts_nodes))
+	local param="osp.*OST*.prealloc_next_seq"
+	local seqs
+	local try
+
 	log "create files with stripecount=$stripecount"
 	$LFS setstripe -C $stripecount $DIR/$tdir
-	createmany -o $DIR/$tdir/t- $nfiles
+	# an OST that starts a new FID sequence has no precreated objects
+	# for a while, and its stripes go to other OSTs, so create again
+	for ((try = 0; try < 3; try++)); do
+		seqs=$(do_nodes $mdts $LCTL get_param $param | sort)
+		createmany -o $DIR/$tdir/t- $nfiles
+		[[ "$(do_nodes $mdts $LCTL get_param $param | sort)" == \
+		   "$seqs" ]] && break
+		log "an OST started a new FID sequence, create again"
+		unlinkmany $DIR/$tdir/t- $nfiles
+	done
 	$LFS getstripe $DIR/$tdir > $TMP/$tfile
 	for ((n = 0; n < $OSTCOUNT; n++)); do
 		objs[$n]=$(awk -vobjs=0 '($1 == '$n') { objs += 1 } \
@@ -7771,7 +7785,9 @@ test_51d_sub() {
 	done
 }
 
-test_51d() {
+test_51d_run() {
+	local threshold_rr=$1
+
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	[[ $OSTCOUNT -lt 3 ]] && skip_env "needs >= 3 OSTs"
 
@@ -7784,7 +7800,7 @@ test_51d() {
 		"$LCTL get_param -n lod.$FSNAME-*.qos_threshold_rr" | head -n 1)
 
 	do_nodes $mdts \
-		"$LCTL set_param lod.$FSNAME-*.qos_threshold_rr=100"
+		"$LCTL set_param lod.$FSNAME-*.qos_threshold_rr=$threshold_rr"
 	stack_trap "do_nodes $mdts \
 		'$LCTL set_param lod.$FSNAME-*.qos_threshold_rr=${qos_old%%%}'"
 
@@ -7836,6 +7852,10 @@ test_51d() {
 		sub_51d_wait_precreate $need $create_count ${mdtidx[@]}
 		test_51d_sub $stripecount $nfiles
 	done
+}
+
+test_51d() {
+	test_51d_run 100
 }
 run_test 51d "check LOV round-robin OST object distribution"
 
@@ -7974,6 +7994,15 @@ test_51g() {
 	# EC parity in different failure domains from the data stripes
 	lod_rr_test -f -o 4-32 -s 2-8 -d 2-8 -e 2 ||
 		error "lod_rr_test -d -e 2 failed"
+	# QoS with 2x and 10x the free space on the last OSS
+	lod_rr_test -o 3-$osts -s 2-4 -w 2 || error "lod_rr_test -w 2 failed"
+	lod_rr_test -o 3-$osts -s 2-4 -w 2 -x 1 ||
+		error "lod_rr_test -w 2 -x 1 failed"
+	lod_rr_test -o 3-$osts -s 2-4 -w 10 -p 90 ||
+		error "lod_rr_test -w 10 failed"
+	# QoS with one new OST that has 10x the free space
+	lod_rr_test -o 3-$osts -s 1-4 -w 10 -O ||
+		error "lod_rr_test -w 10 -O failed"
 	# OSSs in HA pairs spread over the array without failure domains
 	lod_rr_test -f -o 4-64 -s 2-16 -c 1-4 -F ||
 		error "lod_rr_test -F failed"
@@ -7985,6 +8014,40 @@ test_51g() {
 		error "lod_rr_test -U -F failed"
 }
 run_test 51g "check LOD round-robin allocation in userspace"
+
+test_51h() {
+	(( MDS1_VERSION >= $(version_code 2.17.62.1) )) ||
+		skip "need MDS >= 2.17.62.1 for weighted round-robin QoS"
+
+	local lod=lod.$FSNAME-MDT0000-mdtlov
+
+	# the weights used, in case the balance below is not as expected
+	stack_trap "do_facet mds1 $LCTL get_param -n $lod.qos_ost_weights"
+	# nearly equal free space should give the same balance as RR
+	test_51d_run 0
+
+	# with qos_wrr_enable=0, QoS picks the OSTs at random by weight
+	local rr=$(do_facet mds1 $LCTL get_param -n $lod.qos_threshold_rr)
+
+	stack_trap "do_facet mds1 $LCTL set_param $lod.qos_wrr_enable=1 \
+		$lod.qos_threshold_rr=${rr%%%}"
+	do_facet mds1 $LCTL set_param $lod.qos_wrr_enable=0 \
+		$lod.qos_threshold_rr=0 || error "set qos_wrr_enable=0 failed"
+	test_mkdir -i 0 -c 1 $DIR/$tdir.random
+	stack_trap "unlinkmany $DIR/$tdir.random/f $((OSTCOUNT * 20)); \
+		rm -rf $DIR/$tdir.random"
+	createmany -o $DIR/$tdir.random/f $((OSTCOUNT * 20)) ||
+		error "createmany failed"
+
+	# 20 files per OST leave no OST unused unless picking is broken
+	local used=$($LFS getstripe -i $DIR/$tdir.random/* |
+		     grep -E '^[0-9]+$' | sort -u | xargs)
+
+	echo "OSTs used: $used"
+	(( $(wc -w <<< "$used") == OSTCOUNT )) ||
+		error "used OSTs '$used', not all $OSTCOUNT"
+}
+run_test 51h "check LOV QoS OST object distribution"
 
 # wait until the LOD of MDT0000 has OST @1 active again, which it only
 # notices at the statfs update of a create, at most every 2 * qos_maxage

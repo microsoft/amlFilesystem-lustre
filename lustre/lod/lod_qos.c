@@ -375,19 +375,11 @@ static int lod_qos_calc_rr(struct lod_device *lod, struct lu_tgt_descs *ltd,
 	OBD_ALLOC_PTR_ARRAY_LARGE(tgts, real_count);
 	if (!tgts)
 		GOTO(out_unlock, rc = -ENOMEM);
-
-	/* Zero the pool array */
-	/* alloc_rr is holding a read lock on the pool, so nobody is adding/
-	   deleting from the pool. The lq_rw_sem insures that nobody else
-	   is reading. */
-	lqr->lqr_pool.op_count = real_count;
-	rc = lu_tgt_pool_extend(&lqr->lqr_pool, real_count);
+	rc = lu_qos_rr_resize(lqr, real_count);
 	if (rc) {
 		OBD_FREE_PTR_ARRAY_LARGE(tgts, real_count);
 		GOTO(out_unlock, rc);
 	}
-	for (i = 0; i < lqr->lqr_pool.op_count; i++)
-		lqr->lqr_pool.op_array[i] = LU_RR_EMPTY;
 
 	active = lod_rr_active_count(ltd, src_pool);
 
@@ -2858,9 +2850,8 @@ out:
  * by the caller. All the internal structures are protected by the function.
  *
  * The algorithm has two steps: find available OSTs and calculate their
- * weights, then select the OSTs with their weights used as the probability.
- * An OST with a higher weight is proportionately more likely to be selected
- * than one with a lower weight.
+ * weights, then select the OSTs in round-robin order with their weights,
+ * so an OST is used in proportion to its weight (see lu_wrr_slot()).
  *
  * Return:
  * * %0 on success
@@ -2877,13 +2868,17 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 {
 	struct lod_layout_component *lod_comp;
 	struct lod_device *lod = lu2lod_dev(lo->ldo_obj.do_lu.lo_dev);
-	struct lod_avoid_guide *lag = &lod_env_info(env)->lti_avoid;
+	struct lod_thread_info *info = lod_env_info(env);
+	struct lod_avoid_guide *lag = &info->lti_avoid;
+	struct lu_fid saved_fid;
+	struct lu_qos_rr *saved_lqr;
 	struct lod_tgt_desc *ost;
 	struct dt_object *o;
-	__u64 total_weight = 0;
 	struct lod_pool_desc *pool = NULL;
 	struct lu_tgt_pool *osts;
-	unsigned int i;
+	struct lu_qos_rr_stream *lqrs;
+	struct lu_qos_rr *lqr;
+	unsigned int i, j, count, ticks;
 	__u32 nfound, good_osts, stripe_count, stripe_count_min;
 	bool overstriped = false;
 	int stripes_per_ost = 1;
@@ -2891,6 +2886,8 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 	bool slow = false;
 	int rc = 0;
 	struct lod_layout_component *linked_comp = NULL;
+	__u64 key, saved_key;
+	bool cont;
 	ENTRY;
 
 	/* Totally skip qos part when qos_threshold_rr=100% */
@@ -2922,11 +2919,18 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 		if (!pool_qos_is_usable(pool))
 			GOTO(out_nolock, rc = -EAGAIN);
 		osts = &(pool->pool_obds);
+		lqr = &pool->pool_rr;
 	} else {
 		if (!ltd_qos_is_usable(&lod->lod_ost_descs))
 			GOTO(out_nolock, rc = -EAGAIN);
 		osts = &lod->lod_ost_descs.ltd_tgt_pool;
+		lqr = &lod->lod_ost_descs.ltd_qos.lq_rr;
 	}
+
+	/* the OSTs are used in the order of the round-robin array */
+	rc = lod_qos_calc_rr(lod, &lod->lod_ost_descs, osts, lqr);
+	if (rc)
+		GOTO(out_nolock, rc);
 
 	if (lod_comp->llc_pattern & LOV_PATTERN_OVERSTRIPING)
 		stripes_per_ost =
@@ -2991,7 +2995,6 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 
 		ost->ltd_qos.ltq_usable = 1;
 		lu_tgt_qos_weight_calc(ost, false);
-		total_weight += ost->ltd_qos.ltq_weight;
 
 		good_osts++;
 	}
@@ -3036,46 +3039,49 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 	    stripe_count / stripes_per_ost > good_osts)
 		stripe_count = good_osts * stripes_per_ost;
 
-	/* Find enough OSTs with weighted random allocation. */
+	/*
+	 * Weighted round-robin over the round-robin array by free space,
+	 * see lu_wrr_slot().  Weights are not reduced by the penalties of
+	 * recently used OSTs and OSSs, which only served to spread weighted
+	 * random allocations, and qos_prio_free moves the weights above the
+	 * average down toward it, see lu_qos_weight_adjust().
+	 */
+	if (!good_osts)
+		GOTO(out, rc = -EAGAIN);
+	/* overstriping falls back to RR, before QoS uses the RR stream */
+	if (!lod_comp->llc_cstripe_count && stripe_count > good_osts)
+		GOTO(out, rc = -EAGAIN);
+	ticks = ltd_qos_wrr_weights(&lod->lod_ost_descs, lqr, stripe_count);
+	count = lqr->lqr_pool.op_count;
+	/* for the RR fallback if this fails, see lod_rr_key() */
+	saved_fid = info->lti_rr_fid;
+	saved_lqr = info->lti_rr_lqr;
+	saved_key = info->lti_rr_key;
+	key = lod_rr_key(env, lo, lod_comp, lqr, &cont);
+	lqrs = lu_rr_start(lqr, ticks, stripe_count, key, cont);
+
 	nfound = 0;
-	while (nfound < stripe_count) {
-		u64 rand, cur_weight;
+	for (i = 0; i < count * stripes_per_ost && nfound < stripe_count;
+	     i++) {
+		unsigned int slot = ltd_qos_slot(&lod->lod_ost_descs, lqr,
+						 lqrs, ticks);
 
-		cur_weight = 0;
-		rc = -ENOSPC;
+		if (slot >= count)
+			break;
 
-		rand = lu_prandom_u64_max(total_weight);
+		/* if this OST can't be used, try the next ones in order */
+		for (j = 0; j < count; j++, slot = (slot + 1) % count) {
+			__u32 idx = lqr->lqr_pool.op_array[slot];
 
-		/* On average, this will hit larger-weighted OSTs more often.
-		 * 0-weight OSTs will always get used last (only when rand=0)
-		 */
-		for (i = 0; i < osts->op_count; i++) {
-			__u32 idx = osts->op_array[i];
-			struct lod_tgt_desc *ost;
+			if (idx == LU_RR_EMPTY ||
+			    !test_bit(idx, lod->lod_ost_bitmap))
+				continue;
 
 			if (lod_should_avoid_ost(lo, lag, idx))
 				continue;
 
 			ost = OST_TGT(lod, idx);
-
 			if (!ost->ltd_qos.ltq_usable)
-				continue;
-
-			cur_weight += ost->ltd_qos.ltq_weight;
-			CDEBUG(D_OTHER,
-			       "stripe_count=%d nfound=%d cur_weight=%llu rand=%llu total_weight=%llu\n",
-			       stripe_count, nfound, cur_weight, rand,
-			       total_weight);
-
-			/* TODO: this check is wrong and can cause the qos
-			 * allocator to fail.the problem is that we do not
-			 * compute total_weight and cur_weight the same way
-			 * when OSTs are offline.
-			 * Very annoying since if OSTs are offline this will
-			 * fail, and fallback to rr quite often, making
-			 * testing painful.
-			 */
-			if (cur_weight < rand)
 				continue;
 
 			CDEBUG(D_OTHER, "stripe=%d to idx=%d\n", nfound, idx);
@@ -3132,24 +3138,25 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 			lod_qos_tgt_in_use(env, nfound, idx);
 			stripe[nfound] = o;
 			ost_indices[nfound] = idx;
-			ltd_qos_update(&lod->lod_ost_descs, ost, &total_weight);
+			/*
+			 * one stripe per OST: EC data reuses OSTs in
+			 * lod_ec_add_data(), other overstriping uses RR
+			 */
+			ost->ltd_qos.ltq_usable = 0;
 			nfound++;
-			rc = 0;
 			break;
 		}
 
-		if (rc && !slow && nfound < stripe_count) {
-			/* couldn't allocate using precreated objects
-			 * so try to wait for new precreations */
+		/* none of the OSTs could be used, wait for precreation */
+		if (j == count) {
+			if (slow)
+				break;
 			slow = true;
-			rc = 0;
-		}
-
-		if (rc) {
-			/* no OST found on this iteration, give up */
-			break;
+			i--;
 		}
 	}
+	rc = nfound < stripe_count ? -ENOSPC : 0;
+
 	/* EC protected data/parity pairs need special handling if we could not
 	 * get enough unique OSTs.
 	 */
@@ -3213,9 +3220,13 @@ static int lod_ost_alloc_qos(const struct lu_env *env, struct lod_object *lo,
 		/* makes sense to rebalance next time */
 		set_bit(LQ_DIRTY, &lod->lod_ost_descs.ltd_qos.lq_flags);
 		clear_bit(LQ_SAME_SPACE, &lod->lod_ost_descs.ltd_qos.lq_flags);
+		info->lti_rr_fid = saved_fid;
+		info->lti_rr_lqr = saved_lqr;
+		info->lti_rr_key = saved_key;
 		rc = -EAGAIN;
 	} else if (nfound < lod_comp->llc_stripe_count) {
 		lod_comp->llc_stripe_count = nfound;
+		rc = 0;
 	}
 
 	/* If there are enough OSTs, a component with overstriping requessted

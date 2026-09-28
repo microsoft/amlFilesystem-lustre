@@ -13,6 +13,7 @@
 
 #ifdef __KERNEL__
 #include <linux/gcd.h>
+#include <linux/math64.h>
 #include <linux/random.h>
 #include <linux/sort.h>
 #include <lustre_compat/linux/timer.h>
@@ -529,7 +530,8 @@ EXPORT_SYMBOL(lu_rr_fdom_count);
 /**
  * lu_rr_start() - Set up the round-robin start index for a new layout
  * @lqr: round-robin state
- * @count: number of targets in the round-robin array
+ * @count: number of targets in the round-robin array, or of indices per
+ *	   pass from lu_wrr_prepare()
  * @stripes: number of stripes to be allocated from the array
  * @key: which layouts share a start index, e.g. the stripe count and
  *	 component extent from lod_rr_key()
@@ -556,7 +558,7 @@ EXPORT_SYMBOL(lu_rr_fdom_count);
  * that are skipped, and concurrent allocations, change the stride between
  * layouts, but the shift still moves the start.
  *
- * Context: caller holds lq_rw_sem for read, takes lqr_alloc.
+ * Context: caller holds lq_rw_sem, takes lqr_alloc.
  *
  * Return: round-robin state for lu_rr_next()
  */
@@ -620,6 +622,9 @@ struct lu_qos_rr_stream *lu_rr_start(struct lu_qos_rr *lqr,
 		    ++lqrs->lqrs_layouts >= count / gcd(stride, count)) {
 			lqrs->lqrs_layouts = 0;
 			++lqrs->lqrs_offset_idx;
+			/* a new phase after every target was a start once */
+			lqrs->lqrs_laps = lqrs->lqrs_offset_idx /
+					  gcd(stride, count);
 		}
 	}
 out:
@@ -633,7 +638,7 @@ EXPORT_SYMBOL(lu_rr_start);
  * lu_rr_next() - Get the next round-robin index
  * @lqrs: round-robin state from lu_rr_start()
  *
- * Context: caller holds lq_rw_sem for read.
+ * Context: caller holds lq_rw_sem.
  *
  * Return: unbounded index into the round-robin array, which the caller
  * reduces modulo the array size
@@ -668,3 +673,161 @@ unsigned int lu_rr_reserve(struct lu_qos_rr_stream *lqrs,
 	       lqrs->lqrs_offset_idx;
 }
 EXPORT_SYMBOL(lu_rr_reserve);
+
+/**
+ * lu_qos_weight_adjust() - Move a target weight down toward the average
+ * @weight: target weight from its free space, 0 if it is not usable
+ * @avg: average weight of the usable targets
+ * @prio_free: qos_prio_free, 256 is 100%
+ *
+ * With qos_prio_free=100% targets are used in proportion to their free
+ * space.  Lower values scale the difference of each weight above the
+ * average down, so the emptier targets are used more evenly.  Weights
+ * below the average are not raised, so fuller targets are still used
+ * less, in proportion to their free space.
+ *
+ * Return: adjusted weight
+ */
+__u64 lu_qos_weight_adjust(__u64 weight, __u64 avg, unsigned int prio_free)
+{
+	if (prio_free >= 256 || weight <= avg)
+		return weight;
+	return avg + mul_u64_u32_shr(weight - avg, prio_free, 8);
+}
+
+/* indices per pass, at least as far apart as the largest weight */
+static unsigned int lu_wrr_ticks(const __u64 *wsum, unsigned int count)
+{
+	__u64 max = wsum[0];
+	unsigned int i;
+
+	for (i = 1; i < count; i++)
+		max = max_t(__u64, max, wsum[i] - wsum[i - 1]);
+	if (!max)
+		return count;
+
+	/* one index per slot if the weights are nearly equal */
+	if (div64_u64(wsum[count - 1] + max / 2, max) >= count)
+		return count;
+
+	return clamp_t(__u64, div64_u64(wsum[count - 1], max), 1, count);
+}
+
+/**
+ * lu_wrr_prepare() - Cap target weights and sum them for lu_wrr_slot()
+ * @wsum: weight of each slot of the round-robin array, which is replaced
+ *	  by the sum of the weights up to and including that slot
+ * @count: number of slots
+ * @stripes: number of stripes per layout
+ *
+ * A layout uses each target at most once, so a target whose share of
+ * the total weight is more than one stripe per layout would push its
+ * extra stripes onto the next target in the array.  Cap the weights so
+ * that no target has more than 1/@stripes of the total, and the others
+ * share the rest in proportion to their weights.
+ *
+ * Space the indices of a pass at least as far apart as the largest
+ * weight, so consecutive indices map to different targets, or one
+ * index per slot if the weights are nearly equal.
+ *
+ * Context: caller holds lq_rw_sem for write.
+ *
+ * Return: number of indices per pass for lu_wrr_slot()
+ */
+unsigned int lu_wrr_prepare(__u64 *wsum, unsigned int count,
+			    unsigned int stripes)
+{
+	__u64 cap = U64_MAX, sum, next;
+	unsigned int i, capped, weighted = 0;
+
+	for (i = 0; i < count; i++)
+		if (wsum[i])
+			weighted++;
+
+	/*
+	 * The cap gives the uncapped weights an equal share of the stripes
+	 * left over.  It only goes down as more weights are capped, which
+	 * happens at most @stripes times.
+	 */
+	while (stripes > 1 && stripes <= weighted) {
+		for (sum = 0, capped = 0, i = 0; i < count; i++) {
+			if (wsum[i] >= cap)
+				capped++;
+			else
+				sum += wsum[i];
+		}
+		if (capped >= stripes)
+			break;
+		next = div_u64(sum, stripes - capped);
+		if (next >= cap)
+			break;
+		cap = next;
+	}
+
+	for (sum = 0, i = 0; i < count; i++) {
+		sum += min(wsum[i], cap);
+		wsum[i] = sum;
+	}
+
+	return lu_wrr_ticks(wsum, count);
+}
+
+/**
+ * lu_wrr_find() - Find the slot that covers a position in the total weight
+ * @wsum: sum of the weights up to each slot, from lu_wrr_prepare()
+ * @count: number of slots
+ * @pos: position in [0, total weight)
+ *
+ * Return: slot whose part of the total weight covers @pos
+ */
+unsigned int lu_wrr_find(const __u64 *wsum, unsigned int count, __u64 pos)
+{
+	unsigned int lo = 0, hi = count - 1;
+
+	while (lo < hi) {
+		unsigned int mid = (lo + hi) / 2;
+
+		if (wsum[mid] > pos)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+
+	return lo;
+}
+
+/**
+ * lu_wrr_slot() - Map a round-robin index to a slot by target weight
+ * @lqrs: round-robin state from lu_rr_start()
+ * @wsum: sum of the weights up to each slot, from lu_wrr_prepare()
+ * @count: number of slots
+ * @ticks: indices per pass from lu_wrr_prepare()
+ * @idx: round-robin index from lu_rr_next()
+ *
+ * Each target covers a part of [0, total weight) as large as its weight,
+ * in round-robin array order.  Every @ticks consecutive indices are
+ * spaced evenly over that range, so targets are used in proportion to
+ * their weight, and in round-robin order if the weights are equal.  The
+ * spacing is shifted by a different fraction on each pass through the
+ * array, so targets whose weight is not a multiple of the spacing still
+ * get their share over several passes.
+ *
+ * Context: caller holds lq_rw_sem for write, which keeps the round-robin
+ * allocators, and their updates of the stream, out.
+ *
+ * Return: slot for @idx, or @count if the total weight is too small
+ */
+unsigned int lu_wrr_slot(struct lu_qos_rr_stream *lqrs, const __u64 *wsum,
+			 unsigned int count, unsigned int ticks,
+			 unsigned int idx)
+{
+	__u64 step = div_u64(wsum[count - 1], ticks);
+	/* golden ratio fraction of @step for each pass */
+	__u64 pos = step * (idx % ticks) +
+		    mul_u64_u32_shr(step, lqrs->lqrs_laps * 0x9E3779B9U, 32);
+
+	if (!step)
+		return count;
+
+	return lu_wrr_find(wsum, count, pos);
+}

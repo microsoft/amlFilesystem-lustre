@@ -218,8 +218,171 @@ void lu_qos_rr_fini(struct lu_qos_rr *lqr)
 	lu_tgt_pool_free(&lqr->lqr_pool);
 	OBD_FREE_LARGE(lqr->lqr_fdoms, lqr->lqr_fdoms_size);
 	lqr->lqr_fdoms = NULL;
+	OBD_FREE_PTR_ARRAY_LARGE(lqr->lqr_wsum, lqr->lqr_wsum_count);
+	lqr->lqr_wsum = NULL;
 }
 EXPORT_SYMBOL(lu_qos_rr_fini);
+
+/**
+ * lu_qos_rr_resize() - Make room for targets in the round-robin arrays
+ * @lqr: round-robin state
+ * @count: number of targets
+ *
+ * Set the round-robin array to @count targets, for the caller to fill,
+ * and make room for their weights.
+ *
+ * Context: caller holds lq_rw_sem for write.
+ *
+ * Return:
+ * * %0 on success
+ * * %-ENOMEM if the arrays could not be allocated
+ */
+int lu_qos_rr_resize(struct lu_qos_rr *lqr, unsigned int count)
+{
+	unsigned int old = lqr->lqr_pool.op_count;
+	int rc;
+
+	/* lu_tgt_pool_extend() only grows the array beyond op_count */
+	lqr->lqr_pool.op_count = count;
+	rc = lu_tgt_pool_extend(&lqr->lqr_pool, count);
+	if (!rc && lqr->lqr_wsum_count < count) {
+		__u64 *wsum;
+
+		OBD_ALLOC_PTR_ARRAY_LARGE(wsum, count);
+		if (wsum) {
+			OBD_FREE_PTR_ARRAY_LARGE(lqr->lqr_wsum,
+						 lqr->lqr_wsum_count);
+			lqr->lqr_wsum = wsum;
+			lqr->lqr_wsum_count = count;
+		} else {
+			rc = -ENOMEM;
+		}
+	}
+	if (rc)
+		lqr->lqr_pool.op_count = old;
+
+	return rc;
+}
+EXPORT_SYMBOL(lu_qos_rr_resize);
+
+/* target in @slot of the round-robin array, or NULL if it was removed */
+static struct lu_tgt_desc *ltd_rr_tgt(struct lu_tgt_descs *ltd,
+				      struct lu_qos_rr *lqr, unsigned int slot)
+{
+	__u32 idx = lqr->lqr_pool.op_array[slot];
+
+	if (idx >= ltd->ltd_tgts_size || !test_bit(idx, ltd->ltd_tgt_bitmap))
+		return NULL;
+
+	return LTD_TGT(ltd, idx);
+}
+
+/**
+ * ltd_qos_wrr_weights() - Weigh the targets for weighted round-robin
+ * @ltd: target table
+ * @lqr: round-robin state of the targets to allocate from
+ * @stripes: number of stripes per layout
+ *
+ * Weigh each target in the round-robin array by ltq_avail if it is
+ * ltq_usable, or 0 otherwise, and move the weights toward their average
+ * by qos_prio_free (see lu_qos_weight_adjust()).  Set ltq_weight to the
+ * weight that is used, for qos_*_weights.
+ *
+ * Context: caller holds lq_rw_sem for write.
+ *
+ * Return: number of indices per pass for lu_wrr_slot()
+ */
+unsigned int ltd_qos_wrr_weights(struct lu_tgt_descs *ltd,
+				 struct lu_qos_rr *lqr, unsigned int stripes)
+{
+	unsigned int count = lqr->lqr_pool.op_count;
+	unsigned int usable = 0;
+	unsigned int shift, ticks, i;
+	__u64 max_avail = 0;
+	__u64 total = 0;
+	__u64 avg;
+	__u64 *wsum = lqr->lqr_wsum;
+	struct lu_tgt_desc *tgt;
+
+	for (i = 0; i < count; i++) {
+		tgt = ltd_rr_tgt(ltd, lqr, i);
+		wsum[i] = 0;
+		if (tgt && tgt->ltd_qos.ltq_usable) {
+			wsum[i] = tgt->ltd_qos.ltq_avail;
+			max_avail = max(max_avail, wsum[i]);
+			usable++;
+		}
+	}
+	if (!usable)
+		return count;
+
+	/* MDT space * inodes can use most of 64 bits, leave room for sums */
+	shift = fls64(max_avail) > 40 ? fls64(max_avail) - 40 : 0;
+	for (i = 0; i < count; i++) {
+		wsum[i] >>= shift;
+		total += wsum[i];
+	}
+	avg = div_u64(total, usable);
+	for (i = 0; i < count; i++)
+		wsum[i] = lu_qos_weight_adjust(wsum[i], avg,
+					       ltd->ltd_qos.lq_prio_free);
+	ticks = lu_wrr_prepare(wsum, count, stripes);
+
+	for (i = 0; i < count; i++) {
+		__u64 prev = i ? wsum[i - 1] : 0;
+
+		tgt = ltd_rr_tgt(ltd, lqr, i);
+		if (tgt)
+			tgt->ltd_qos.ltq_weight = wsum[i] - prev;
+	}
+	CDEBUG(D_OTHER, "want %u count %u usable %u ticks %u total weight %llu\n",
+	       stripes, count, usable, ticks, count ? wsum[count - 1] : 0);
+
+	return ticks;
+}
+EXPORT_SYMBOL(ltd_qos_wrr_weights);
+
+/**
+ * ltd_qos_slot() - Pick the next slot of the round-robin array by weight
+ * @ltd: target table
+ * @lqr: round-robin state with weights from ltd_qos_wrr_weights()
+ * @lqrs: round-robin state from lu_rr_start()
+ * @ticks: indices per pass from ltd_qos_wrr_weights()
+ *
+ * Pick the slot by weighted round-robin (see lu_wrr_slot()), or if
+ * qos_wrr_enable is 0, at random in proportion to the weights.
+ *
+ * Context: caller holds lq_rw_sem for write.
+ *
+ * Return: slot, or lqr_pool.op_count if the total weight is too small
+ */
+unsigned int ltd_qos_slot(struct lu_tgt_descs *ltd, struct lu_qos_rr *lqr,
+			  struct lu_qos_rr_stream *lqrs, unsigned int ticks)
+{
+	unsigned int count = lqr->lqr_pool.op_count;
+	__u64 total = lqr->lqr_wsum[count - 1];
+	unsigned int slot = 0, i;
+
+	if (ltd->ltd_qos.lq_wrr_enable)
+		return lu_wrr_slot(lqrs, lqr->lqr_wsum, count, ticks,
+				   lu_rr_next(lqrs));
+	if (!total)
+		return count;
+
+	/* draw again if the target is not usable, e.g. this layout uses it */
+	for (i = 0; i < count; i++) {
+		struct lu_tgt_desc *tgt;
+
+		slot = lu_wrr_find(lqr->lqr_wsum, count,
+				   lu_prandom_u64_max(total));
+		tgt = ltd_rr_tgt(ltd, lqr, slot);
+		if (tgt && tgt->ltd_qos.ltq_usable)
+			break;
+	}
+
+	return slot;
+}
+EXPORT_SYMBOL(ltd_qos_slot);
 
 /* compare NIDs by network, then address */
 static int ltd_nid_cmp(const struct lnet_nid *a, const struct lnet_nid *b)
@@ -392,6 +555,7 @@ int lu_tgt_descs_init(struct lu_tgt_descs *ltd, bool is_mdt)
 	init_rwsem(&ltd->ltd_qos.lq_rw_sem);
 	set_bit(LQ_DIRTY, &ltd->ltd_qos.lq_flags);
 	set_bit(LQ_RESET, &ltd->ltd_qos.lq_flags);
+	ltd->ltd_qos.lq_wrr_enable = true;
 	ltd->ltd_is_mdt = is_mdt;
 	/* MDT imbalance threshold is low to balance across MDTs
 	 * relatively quickly, because each directory may result

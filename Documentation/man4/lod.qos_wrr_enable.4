@@ -1,0 +1,66 @@
+.TH LOD.QOS_WRR_ENABLE 4 2026-10-02 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+lod.qos_wrr_enable \- allocate targets by weighted round-robin
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param lod." FSNAME "*.qos_wrr_enable"
+.SY
+.BI "lctl set_param lod." FSNAME "*.qos_wrr_enable=" 0|1
+.YS
+.SS PROPERTIES
+.TP
+.B Perms
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per-MDT
+.TP
+.B Config
+.br
+Always present on MDS nodes
+.TP
+.B Default
+.br
+.RB lod.*.qos_wrr_enable= 1
+.TP
+.B Valid Range
+.br
+.RB lod.*.qos_wrr_enable= 0
+.br
+.RB lod.*.qos_wrr_enable= 1
+.SH DESCRIPTION
+When the free space of the OSTs differs by more than
+.BR lod.qos_threshold_rr (4),
+the MDS allocates new OST objects by the free space of each OST, weighted
+as described in
+.BR lod.qos_prio_free (4).
+With
+.B qos_wrr_enable
+set to 1, the OSTs are used in round-robin order, each in proportion to its
+weight.
+With 0, each stripe is put on an OST picked at random in proportion to the
+same weights as weighted round-robin allocation, without the penalties
+for recently used OSTs and OSSs that were used before release 2.18.0.
+This is a fallback in case weighted round-robin allocation causes problems,
+and makes the balance worse over short runs.
+.SH EXAMPLES
+Allocate OST objects at random by weight on all MDTs of the
+.B testfs
+filesystem:
+.EX
+.RB "mds# " "lctl set_param lod.testfs-*.qos_wrr_enable=0"
+.EE
+.SH AVAILABILITY
+.B qos_wrr_enable
+is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit 2.17.59
+.SH SEE ALSO
+.BR lod.qos_ost_weights (4),
+.BR lod.qos_prio_free (4),
+.BR lod.qos_threshold_rr (4),
+.BR lctl-get_param (8),
+.BR lctl-set_param (8)

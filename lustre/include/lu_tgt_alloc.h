@@ -70,4 +70,12 @@ unsigned int lu_rr_next(struct lu_qos_rr_stream *lqrs);
 unsigned int lu_rr_reserve(struct lu_qos_rr_stream *lqrs,
 			   unsigned int stripes);
 
+__u64 lu_qos_weight_adjust(__u64 weight, __u64 avg, unsigned int prio_free);
+unsigned int lu_wrr_prepare(__u64 *wsum, unsigned int count,
+			    unsigned int stripes);
+unsigned int lu_wrr_find(const __u64 *wsum, unsigned int count, __u64 pos);
+unsigned int lu_wrr_slot(struct lu_qos_rr_stream *lqrs, const __u64 *wsum,
+			 unsigned int count, unsigned int ticks,
+			 unsigned int idx);
+
 #endif /* _LU_TGT_ALLOC_H */

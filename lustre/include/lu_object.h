@@ -1570,6 +1570,7 @@ struct lu_qos_rr_stream {
 	__u32			 lqrs_layouts;	/* since offset_idx shift */
 	__u32			 lqrs_stride;	/* stripes, with mirrors */
 	__u32			 lqrs_used;	/* lqr_clock when last used */
+	__u32			 lqrs_laps;	/* weighted RR phase */
 };
 
 #define LQR_STREAMS	16
@@ -1592,12 +1593,15 @@ struct lu_qos_rr {
 	bool			 lqr_omitted; /* inactive targets left out */
 	int			 lqr_rebuild_active; /* lq_active_gen retried */
 	size_t			 lqr_fdoms_size;/* size of lqr_fdoms */
+	__u64			*lqr_wsum;	/* cumulative QoS weights */
+	unsigned int		 lqr_wsum_count;/* lqr_wsum array size */
 };
 
 int lu_down_write_timeout(struct rw_semaphore *sem, time64_t timeout_sec);
 
 int lu_qos_rr_init(struct lu_qos_rr *lqr);
 void lu_qos_rr_fini(struct lu_qos_rr *lqr);
+int lu_qos_rr_resize(struct lu_qos_rr *lqr, unsigned int count);
 
 #endif /* CONFIG_LUSTRE_FS_SERVER */
 
@@ -1685,6 +1689,7 @@ struct lu_qos {
 	struct rw_semaphore	 lq_rw_sem;
 	__u32			 lq_active_svr_count;
 	unsigned int		 lq_prio_free;   /* priority for free space */
+	bool			 lq_wrr_enable;	/* weighted RR, else random */
 	unsigned int		 lq_threshold_rr;/* priority for rr */
 #if IS_ENABLED(CONFIG_LUSTRE_FS_SERVER)
 	struct lu_qos_rr	 lq_rr;          /* round robin qos data */
@@ -1736,6 +1741,10 @@ int ltd_add_tgt(struct lu_tgt_descs *ltd, struct lu_tgt_desc *tgt);
 void ltd_del_tgt(struct lu_tgt_descs *ltd, struct lu_tgt_desc *tgt);
 int ltd_qos_penalties_calc(struct lu_tgt_descs *ltd);
 #ifdef CONFIG_LUSTRE_FS_SERVER
+unsigned int ltd_qos_wrr_weights(struct lu_tgt_descs *ltd,
+				 struct lu_qos_rr *lqr, unsigned int stripes);
+unsigned int ltd_qos_slot(struct lu_tgt_descs *ltd, struct lu_qos_rr *lqr,
+			  struct lu_qos_rr_stream *lqrs, unsigned int ticks);
 struct lu_rr_tgt;
 void ltd_rr_failover_order(struct lu_tgt_descs *ltd, struct lu_rr_tgt *tgts,
 			   unsigned int count);

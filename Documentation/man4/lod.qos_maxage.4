@@ -1,0 +1,83 @@
+.TH LOD.QOS_MAXAGE 4 2026-09-29 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+lod.qos_maxage, lod.mdt_qos_maxage \- age of cached target free space
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param lod." FSNAME "*.qos_maxage"
+.SY
+.BI "lctl set_param lod." FSNAME "*.qos_maxage=" SECONDS
+.SY
+.BI "lctl get_param lod." FSNAME "*.mdt_qos_maxage"
+.SY
+.BI "lctl set_param lod." FSNAME "*.mdt_qos_maxage=" SECONDS
+.YS
+.SS PROPERTIES
+.TP
+.B Perms
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per-MDT
+.TP
+.B Config
+.br
+Always present on MDS nodes
+.TP
+.B Default
+.br
+.RB lod.*.qos_maxage= 5
+.br
+.RB lod.*.mdt_qos_maxage= 5
+.TP
+.B Valid Range
+.br
+.RB lod.*.qos_maxage= 1
+.br
+.RB lod.*.qos_maxage= 4294967295
+.SH DESCRIPTION
+.B qos_maxage
+is how many seconds the MDS uses the free space and inodes of the OSTs
+it has cached, before it asks the OSTs again, and
+.B mdt_qos_maxage
+is the same for the MDTs.
+The free space decides whether new objects and directory stripes are
+allocated in round-robin order or by free space, see
+.BR lod.qos_threshold_rr (4)
+and
+.BR lod.qos_prio_free (4).
+Setting it also sets the
+.B maxage
+of the OSP devices of the targets.
+.PP
+Shorter intervals follow the free space of the targets more closely, at
+the cost of more statfs requests to them.
+The penalties of recently used MDTs also decay in multiples of
+.BR mdt_qos_maxage .
+.SH EXAMPLES
+Refresh the free space of the OSTs every 10 seconds on all MDTs of the
+.B testfs
+filesystem:
+.EX
+.RB "mds# " "lctl set_param lod.testfs-*.qos_maxage=10"
+.EE
+.SH AVAILABILITY
+.B qos_maxage
+is part of the
+.BR lustre (7)
+filesystem package since release 2.4.0, and
+.B mdt_qos_maxage
+since release 2.13.0.
+Before that it was
+.BR lov.qos_maxage ,
+since release 1.8.0.
+.\" lov.qos_maxage added in commit v1_7_90_1~1^2
+.\" Added in commit v2_3_50_0-153-g189c466ff8f7
+.\" mdt_qos_maxage added in commit v2_12_58-179-gc1d0a355a6a6
+.SH SEE ALSO
+.BR lod.qos_ost_weights (4),
+.BR lod.qos_prio_free (4),
+.BR lod.qos_threshold_rr (4),
+.BR lctl-get_param (8),
+.BR lctl-set_param (8)

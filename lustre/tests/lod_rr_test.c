@@ -53,6 +53,21 @@ static inline int atomic_add_return(int i, atomic_t *v)
 	return v->counter;
 }
 
+static inline __u64 mul_u64_u32_shr(__u64 a, __u32 mul, unsigned int shift)
+{
+	__u32 ah = a >> 32, al = a;
+	__u64 ret = ((__u64)al * mul) >> shift;
+
+	if (ah)
+		ret += ((__u64)ah * mul) << (32 - shift);
+	return ret;
+}
+
+static inline __u64 div_u64(__u64 dividend, __u32 divisor)
+{
+	return dividend / divisor;
+}
+
 static inline __u32 get_random_u32_below(__u32 ceil)
 {
 	return random() % ceil;
@@ -86,7 +101,12 @@ static inline void spin_unlock(int *lock)
 
 #define max(a, b)	((a) > (b) ? (a) : (b))
 #define min(a, b)	((a) < (b) ? (a) : (b))
+#define U64_MAX		(~0ULL)
 #define max_t(type, a, b)	((type)(a) > (type)(b) ? (type)(a) : (type)(b))
+#define clamp_t(type, v, lo, hi) \
+	((type)(v) < (type)(lo) ? (type)(lo) : \
+	 (type)(v) > (type)(hi) ? (type)(hi) : (type)(v))
+#define div64_u64(a, b)	((__u64)(a) / (__u64)(b))
 #define swap(a, b) \
 	do { typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while (0)
 
@@ -105,6 +125,7 @@ struct lu_qos_rr_stream {
 	__u32			 lqrs_layouts;
 	__u32			 lqrs_stride;
 	__u32			 lqrs_used;
+	__u32			 lqrs_laps;
 };
 
 #define LQR_STREAMS	16
@@ -136,6 +157,10 @@ static unsigned int unusable;
 static unsigned int unbalanced_first;
 static bool fdom_unset_first;
 static bool fdom_unset_odd;
+static unsigned int qos_mult;
+static bool qos_one_ost;
+static bool qos_random;
+static unsigned int qos_prio_free = 256;
 static bool fdom_by_ost;
 static bool failover_pairs;
 static bool big_gen;
@@ -152,6 +177,8 @@ struct rr_test {
 	unsigned int	stripes_per_ost;
 	bool		skip[MAX_OSTS];
 	__u32		fdom[MAX_OSTS];
+	__u64		weight[MAX_OSTS];
+	__u64		capped[MAX_OSTS];
 	unsigned int	objs[MAX_OSTS];
 	unsigned int	objs0[MAX_OSTS];
 	unsigned int	objs0c[MAX_PATTERN][MAX_OSTS];
@@ -206,6 +233,11 @@ static void rr_fill(struct lu_tgt_pool *rr, struct lu_rr_fdoms *fdoms,
 						(rt->oss_count + 1) / 2);
 			tgts[i].lrrt_inferred = true;
 		}
+		/* the OSTs of the last OSS are new, with more free space */
+		rt->weight[i] = 1ULL << 39;
+		if (qos_one_ost ? i == rt->ost_count - 1 :
+		    oss == rt->oss_count - 1 && rt->oss_count > 1)
+			rt->weight[i] *= qos_mult;
 	}
 
 	rr->op_count = rt->ost_count;
@@ -318,6 +350,120 @@ static void rr_alloc(struct rr_test *rt, struct lu_qos_rr *lqr,
 		}
 		rt->objs[ost]++;
 	}
+}
+
+/*
+ * Like lod_ost_alloc_qos() when every OST is usable: map each round-robin
+ * index to an OST by weight, and if that OST is already used by the
+ * layout take the next unused one in the round-robin array.
+ */
+static void qos_alloc(struct rr_test *rt, struct lu_qos_rr *lqr,
+		      unsigned int comp, __u64 key)
+{
+	static __u64 wsum[MAX_OSTS];
+	unsigned int used[MAX_OSTS];
+	struct lu_qos_rr_stream *lqrs;
+	unsigned int found = 0;
+	__u64 total = 0, avg;
+	unsigned int i, j, ticks;
+
+	memset(used, 0, rt->ost_count * sizeof(used[0]));
+	for (i = 0; i < rt->ost_count; i++)
+		total += rt->weight[i];
+	avg = total / rt->ost_count;
+	/* unusable OSTs have no weight, as in lod_ost_alloc_qos() */
+	for (i = 0; i < rt->ost_count; i++)
+		wsum[i] = rt->skip[lqr->lqr_pool.op_array[i]] ? 0 :
+			  lu_qos_weight_adjust(
+				rt->weight[lqr->lqr_pool.op_array[i]], avg,
+				qos_prio_free);
+	ticks = lu_wrr_prepare(wsum, rt->ost_count, rt->stripes);
+	for (i = 0; i < rt->ost_count; i++)
+		rt->capped[lqr->lqr_pool.op_array[i]] =
+			wsum[i] - (i ? wsum[i - 1] : 0);
+	total = wsum[rt->ost_count - 1];
+
+	lqrs = lu_rr_start(lqr, ticks, rt->stripes, key, false);
+	for (i = 0; i < rt->ost_count && found < rt->stripes; i++) {
+		unsigned int slot = 0;
+
+		if (qos_random) {
+			/* weighted random choice, as before weighted RR */
+			for (j = 0; j < 100; j++) {
+				__u64 rnd = ((__u64)random() << 31 | random()) %
+					    total;
+
+				for (slot = 0; wsum[slot] <= rnd; slot++)
+					;
+				if (!used[lqr->lqr_pool.op_array[slot]])
+					break;
+			}
+		} else {
+			slot = lu_wrr_slot(lqrs, wsum, rt->ost_count, ticks,
+					   lu_rr_next(lqrs));
+		}
+
+		for (j = 0; j < rt->ost_count; j++, slot++) {
+			__u32 ost;
+
+			slot %= rt->ost_count;
+			ost = lqr->lqr_pool.op_array[slot];
+			if (!rt->skip[ost] && !used[ost] &&
+			    wsum[slot] > (slot ? wsum[slot - 1] : 0))
+				break;
+		}
+		if (j == rt->ost_count)
+			break;
+
+		used[lqr->lqr_pool.op_array[slot]]++;
+		if (found++ == 0) {
+			rt->objs0[lqr->lqr_pool.op_array[slot]]++;
+			rt->objs0c[comp][lqr->lqr_pool.op_array[slot]]++;
+		}
+		rt->objs[lqr->lqr_pool.op_array[slot]]++;
+	}
+}
+
+/*
+ * With QoS, check that each OST gets 4/5-5/4 of its share of objects by
+ * its weight, capped at one stripe per layout, and 2/3-3/2 of its share
+ * of first objects.
+ */
+static int qos_check(struct rr_test *rt, unsigned int layouts)
+{
+	unsigned int objs = 0;
+	__u64 total = 0;
+	unsigned int i;
+	int rc = 0;
+
+	for (i = 0; i < rt->ost_count; i++) {
+		total += rt->capped[i];
+		objs += rt->objs[i];
+	}
+
+	for (i = 0; i < rt->ost_count; i++) {
+		double share = (double)rt->capped[i] / total;
+		double want = share * objs, want0 = share * layouts;
+
+		if (rt->objs[i] * 5 < want * 4 || rt->objs[i] * 4 > want * 5 ||
+		    rt->objs0[i] * 3 < want0 * 2 ||
+		    rt->objs0[i] * 2 > want0 * 3) {
+			printf("ost=%u oss=%u stripes=%u: OST%u has %u objects, %u #0, wanted %.0f and %.0f\n",
+			       rt->ost_count, rt->oss_count, rt->stripes, i,
+			       rt->objs[i], rt->objs0[i], want, want0);
+			rc = -EDOM;
+		}
+	}
+
+	if (rc || verbose) {
+		for (i = 0; i < rt->ost_count; i++)
+			printf("  OST%u weight %llu capped %llu has %u objects, %u are index 0\n",
+			       i, (unsigned long long)rt->weight[i],
+			       (unsigned long long)rt->capped[i],
+			       rt->objs[i], rt->objs0[i]);
+	}
+
+	return rc;
 }
 
 /* find the usable OSTs in failure domain @fdom with the fewest and most */
@@ -525,9 +671,12 @@ static int rr_test_one(unsigned int ost_count, unsigned int oss_count,
 			continue;
 		}
 		if (!npattern) {
-			rr_alloc(&rt, m, 0, stripes, false, used);
+			if (qos_mult)
+				qos_alloc(&rt, m, 0, stripes);
+			else
+				rr_alloc(&rt, m, 0, stripes, false, used);
 			/* EC parity continues from the data stripes */
-			if (parity) {
+			if (parity && !qos_mult) {
 				rt.stripes = parity;
 				rt.no_first = true;
 				rr_alloc(&rt, m, 0, stripes, true, used);
@@ -546,7 +695,8 @@ static int rr_test_one(unsigned int ost_count, unsigned int oss_count,
 		}
 	}
 
-	rc = rr_check(&rt, check_first);
+	rc = qos_mult ? qos_check(&rt, per_ost * ost_count) :
+			rr_check(&rt, check_first);
 	for (i = 0; i < mdt_count; i++)
 		free(lqr[i].lqr_fdoms);
 
@@ -575,8 +725,9 @@ static void print_usage(void)
 {
 	printf("usage: %s [-f] [-v] [-C MULT] [-c STRIPES[-MAX]] [-d FDS[-MAX]]\n"
 	       "\t\t[-m MDTS] [-n PER_OST] [-o OSTS[-MAX]] [-P STRIPES,...]\n"
-	       "\t\t[-B] [-D] [-e PARITY] [-F] [-M] [-r SEED] [-s OSSS[-MAX]]\n"
-	       "\t\t[-U] [-u] [-x UNUSABLE]\n"
+	       "\t\t[-B] [-D] [-e PARITY] [-F] [-M] [-O] [-p PRIO_FREE] [-R]\n"
+	       "\t\t[-r SEED] [-s OSSS[-MAX]]\n"
+	       "\t\t[-U] [-u] [-w MULT] [-x UNUSABLE]\n"
 	       "\t-B: two OSS generations, the first half with twice the OSTs\n"
 	       "\t-C: overstripe up to MULT stripes per OST (default 1)\n"
 	       "\t-c: stripe counts to test (default 1-OSTS)\n"
@@ -588,13 +739,17 @@ static void print_usage(void)
 	       "\t-M: allocate two mirrors of each layout\n"
 	       "\t-m: MDTs allocating layouts independently (default 1)\n"
 	       "\t-n: layouts to allocate per OST (default 100)\n"
+	       "\t-O: with -w, only the last OST has more free space\n"
 	       "\t-o: OST counts to test (default 3-32)\n"
 	       "\t-P: stripe counts of each layout's components, -1 all OSTs\n"
+	       "\t-p: qos_prio_free percent with -w (default 100)\n"
+	       "\t-R: with -w, use weighted random QoS allocation\n"
 	       "\t-r: random seed (default 1)\n"
 	       "\t-s: OSS counts to test (default 1-4)\n"
 	       "\t-U: leave every other OST without a failure domain\n"
 	       "\t-u: leave the first OSS without a failure domain\n"
 	       "\t-v: print object counts for every OST\n"
+	       "\t-w: QoS allocation with MULT free space on the last OSS\n"
 	       "\t-x: number of unusable OSTs (default 0)\n", progname);
 }
 
@@ -659,7 +814,7 @@ int main(int argc, char **argv)
 	progname = argv[0];
 	srandom(1);
 	while ((c = getopt(argc, argv,
-			   "BC:c:Dd:e:FfhMm:n:o:P:r:s:Uuvx:")) != -1) {
+			   "BC:c:Dd:e:FfhMm:n:Oo:P:p:Rr:s:Uuvw:x:")) != -1) {
 		switch (c) {
 		case 'B':
 			big_gen = true;
@@ -724,6 +879,18 @@ int main(int argc, char **argv)
 				pattern[npattern++] = strtol(tok, NULL, 0);
 			break;
 		}
+		case 'O':
+			qos_one_ost = true;
+			break;
+		case 'p':
+			qos_prio_free = strtoul(optarg, NULL, 0) * 256 / 100;
+			break;
+		case 'R':
+			qos_random = true;
+			break;
+		case 'w':
+			qos_mult = strtoul(optarg, NULL, 0);
+			break;
 		case 'r':
 			srandom(strtoul(optarg, NULL, 0));
 			break;

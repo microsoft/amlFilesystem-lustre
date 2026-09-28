@@ -1,0 +1,101 @@
+.TH LOD.QOS_THRESHOLD_RR 4 2026-09-29 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+lod.qos_threshold_rr, lod.mdt_qos_threshold_rr \- free space balance threshold
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param lod." FSNAME "*.qos_threshold_rr"
+.SY
+.BI "lctl set_param lod." FSNAME "*.qos_threshold_rr=" PERCENT
+.SY
+.BI "lctl get_param lod." FSNAME "*.mdt_qos_threshold_rr"
+.SY
+.BI "lctl set_param lod." FSNAME "*.mdt_qos_threshold_rr=" PERCENT
+.YS
+.SS PROPERTIES
+.TP
+.B Perms
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per-MDT
+.TP
+.B Config
+.br
+Always present on MDS nodes
+.TP
+.B Default
+.br
+.RB lod.*.qos_threshold_rr= 17%
+.br
+.RB lod.*.mdt_qos_threshold_rr= 5%
+.TP
+.B Valid Range
+.br
+.RB lod.*.qos_threshold_rr= 0%
+.br
+.RB lod.*.qos_threshold_rr= 100%
+.SH DESCRIPTION
+.B qos_threshold_rr
+decides whether the MDS allocates the objects of new files on OSTs in
+round-robin order, or by the free space of the OSTs (QoS allocation).
+.B mdt_qos_threshold_rr
+does the same for the stripes of new striped directories on MDTs, where
+the free inodes of each MDT are taken into account as well.
+.PP
+While the free space of the most full target is within
+.I PERCENT
+of the free space of the least full one, the targets are considered
+balanced and are used in round-robin order.
+When the difference is larger, the targets are used by free space as
+described in
+.BR lod.qos_prio_free (4),
+so that fuller targets are used less often until they are balanced
+again.
+.PP
+With
+.I PERCENT
+set to 100% the targets are always used in round-robin order, and with
+0% they are always used by free space.
+The
+.B %
+sign is optional when setting the value, which is kept in 1/256 steps
+and shown rounded up to the next whole percent.
+.PP
+The free space of the targets is refreshed at the interval given by
+.BR lod.qos_maxage (4).
+.SH EXAMPLES
+Allocate OST objects by free space whenever the OSTs differ by more than
+5% on all MDTs of the
+.B testfs
+filesystem:
+.EX
+.RB "mds# " "lctl set_param lod.testfs-*.qos_threshold_rr=5"
+.EE
+.PP
+Always allocate OST objects in round-robin order:
+.EX
+.RB "mds# " "lctl set_param lod.testfs-*.qos_threshold_rr=100"
+.EE
+.SH AVAILABILITY
+.B qos_threshold_rr
+is part of the
+.BR lustre (7)
+filesystem package since release 2.4.0, and
+.B mdt_qos_threshold_rr
+since release 2.13.0.
+Before that it was
+.BR lov.qos_threshold_rr ,
+since release 2.0.0.
+.\" lov.qos_threshold_rr added in commit 1f36caa31923
+.\" Added in commit v2_3_50_0-153-g189c466ff8f7
+.\" mdt_qos_threshold_rr added in commit v2_12_58-185-gaa4269f5c2e3
+.SH SEE ALSO
+.BR lfs-setdirstripe (1),
+.BR lfs-setstripe (1),
+.BR lod.qos_maxage (4),
+.BR lod.qos_ost_weights (4),
+.BR lod.qos_prio_free (4),
+.BR lctl-get_param (8),
+.BR lctl-set_param (8)

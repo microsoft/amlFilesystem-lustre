@@ -1,0 +1,87 @@
+.TH LOD.QOS_OST_WEIGHTS 4 2026-09-29 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+lod.qos_ost_weights, lod.qos_mdt_weights \- target QoS weights
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param lod." FSNAME "*.qos_ost_weights"
+.SY
+.BI "lctl get_param lod." FSNAME "*.qos_mdt_weights"
+.YS
+.SS PROPERTIES
+.TP
+.B Perms
+.br
+.BR 444 " | " -r--r--r--
+.TP
+.B Scope
+.br
+Per-MDT
+.TP
+.B Config
+.br
+Present in debugfs on MDS nodes
+.SH DESCRIPTION
+.B qos_ost_weights
+shows, for each OST, what the MDS uses to allocate OST objects by free
+space, and
+.B qos_mdt_weights
+the same for the MDTs used by striped directories.
+Each target is shown as a YAML list entry with these fields:
+.TP
+.BR ost_idx ", " mdt_idx
+The index of the target.
+.TP
+.B tgt_avail
+The free space of the target in 256-byte units, and for MDTs the free
+space in 64 KiB units times the free inodes in units of 256.
+.TP
+.B tgt_weight
+The weight of the target in the last allocation.
+For OSTs this is
+.B tgt_avail
+adjusted by
+.BR lod.qos_prio_free (4)
+and limited to one stripe per file, and for MDTs it is
+.B tgt_avail
+less the penalties.
+It is scaled down by a power of two if the largest
+.B tgt_avail
+is too large to sum.
+.TP
+.BR tgt_penalty ", " tgt_penalty_per_obj ", " tgt_last_used
+The penalty of a recently used target, how much it is increased for each
+new stripe, and when the target was last used, in seconds since the
+epoch.
+.TP
+.BR svr_nid ", " svr_bavail ", " svr_iavail
+The server of the target, and the free space and inodes of all of its
+targets, in the units of
+.BR tgt_avail :
+space in 256-byte units, or 64 KiB units for MDTs, and inodes in units
+of 256.
+.TP
+.BR svr_penalty ", " svr_penalty_per_obj ", " svr_last_used
+The same penalty values for the server.
+.PP
+The penalty and last used values are only used for MDTs.
+Writing to either file resets the weights and penalties.
+.SH EXAMPLES
+Show the free space and weights of the OSTs on the MDTs of the
+.B testfs
+filesystem:
+.EX
+.RB "mds# " "lctl get_param lod.testfs-*.qos_ost_weights"
+.EE
+.SH AVAILABILITY
+.B qos_ost_weights
+and
+.B qos_mdt_weights
+are part of the
+.BR lustre (7)
+filesystem package since release 2.16.0.
+.\" Added in commit v2_15_54-83-ga44956f0d57d
+.SH SEE ALSO
+.BR lod.qos_maxage (4),
+.BR lod.qos_prio_free (4),
+.BR lod.qos_threshold_rr (4),
+.BR lctl-get_param (8)

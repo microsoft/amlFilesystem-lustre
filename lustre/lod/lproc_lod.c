@@ -582,10 +582,11 @@ LUSTRE_RO_ATTR(desc_uuid);
 /*
  * Show QoS priority parameter.
  *
- * The printed value is a percentage value (0-100%) indicating the priority
- * of free space compared to performance. 0% means select OSTs equally
- * regardless of their free space, 100% means select OSTs only by their free
- * space even if it results in very imbalanced load on the OSTs.
+ * The printed value is a percentage value (0-100%) indicating how closely
+ * targets are used in proportion to their free space.  100% follows the
+ * free space exactly, lower values move the weights of emptier targets
+ * toward the average, see lu_qos_weight_adjust().  For MDTs it still
+ * weighs free space against the penalties of recently used MDTs.
  */
 static ssize_t __qos_prio_free_show(struct kobject *kobj,
 				    struct attribute *attr, char *buf,
@@ -616,8 +617,8 @@ static ssize_t qos_prio_free_show(struct kobject *kobj,
 /*
  * Set QoS free space priority parameter.
  *
- * Set the relative priority of free OST space compared to OST load when OSTs
- * are space imbalanced.  See qos_priofree_show() for description of
+ * Set how closely targets are used in proportion to their free space when
+ * they are space imbalanced.  See qos_prio_free_show() for description of
  * this parameter.  See qos_threshold_rr_store() and lq_threshold_rr to
  * determine what constitutes "space imbalanced" OSTs.
  */
@@ -673,6 +674,56 @@ static ssize_t qos_prio_free_store(struct kobject *kobj, struct attribute *attr,
 
 LUSTRE_RW_ATTR(mdt_qos_prio_free);
 LUSTRE_RW_ATTR(qos_prio_free);
+
+/* 1 to allocate by weighted round-robin, 0 at random by weight */
+static ssize_t __qos_wrr_enable_show(struct kobject *kobj,
+				     struct attribute *attr, char *buf,
+				     bool is_mdt)
+{
+	struct dt_device *dt = container_of(kobj, struct dt_device,
+					    dd_kobj);
+	struct lod_device *lod = dt2lod_dev(dt);
+	struct lu_tgt_descs *ltd = is_mdt ? &lod->lod_mdt_descs :
+					    &lod->lod_ost_descs;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", ltd->ltd_qos.lq_wrr_enable);
+}
+
+static ssize_t __qos_wrr_enable_store(struct kobject *kobj,
+				      struct attribute *attr,
+				      const char *buffer, size_t count,
+				      bool is_mdt)
+{
+	struct dt_device *dt = container_of(kobj, struct dt_device,
+					    dd_kobj);
+	struct lod_device *lod = dt2lod_dev(dt);
+	struct lu_tgt_descs *ltd = is_mdt ? &lod->lod_mdt_descs :
+					    &lod->lod_ost_descs;
+	bool val;
+	int rc;
+
+	rc = kstrtobool(buffer, &val);
+	if (rc)
+		return rc;
+
+	ltd->ltd_qos.lq_wrr_enable = val;
+
+	return count;
+}
+
+static ssize_t qos_wrr_enable_show(struct kobject *kobj,
+				   struct attribute *attr, char *buf)
+{
+	return __qos_wrr_enable_show(kobj, attr, buf, false);
+}
+
+static ssize_t qos_wrr_enable_store(struct kobject *kobj,
+				    struct attribute *attr,
+				    const char *buffer, size_t count)
+{
+	return __qos_wrr_enable_store(kobj, attr, buffer, count, false);
+}
+LUSTRE_RW_ATTR(qos_wrr_enable);
 
 /* Show threshold for "same space on all OSTs" rule. */
 static ssize_t __qos_threshold_rr_show(struct kobject *kobj,
@@ -788,7 +839,7 @@ static ssize_t mdt_qos_maxage_show(struct kobject *kobj, struct attribute *attr,
 static ssize_t qos_maxage_show(struct kobject *kobj, struct attribute *attr,
 			       char *buf)
 {
-	return __qos_maxage_show(kobj, attr, buf, true);
+	return __qos_maxage_show(kobj, attr, buf, false);
 }
 
 /* Set expiration period used to refresh cached statfs data. */
@@ -1417,6 +1468,7 @@ static struct attribute *lod_attrs[] = {
 	&lustre_attr_qos_maxage.attr,
 	&lustre_attr_statfs_refresh.attr,
 	&lustre_attr_qos_prio_free.attr,
+	&lustre_attr_qos_wrr_enable.attr,
 	&lustre_attr_qos_threshold_rr.attr,
 	&lustre_attr_mdt_stripecount.attr,
 	&lustre_attr_mdt_stripetype.attr,
