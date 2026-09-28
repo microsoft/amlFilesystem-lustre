@@ -51,11 +51,6 @@ MDSDEV1_2=$fs2mds_DEV
 OSTDEV1_2=$fs2ost_DEV
 OSTDEV2_2=$fs3ost_DEV
 
-# pass "-E lazy_itable_init" to mke2fs to speed up the formatting time
-if [[ "$LDISKFS_MKFS_OPTS" != *lazy_itable_init* ]]; then
-	LDISKFS_MKFS_OPTS=$(csa_add "$LDISKFS_MKFS_OPTS" -E lazy_itable_init)
-fi
-
 #
 require_dsh_mds || exit 0
 require_dsh_ost || exit 0

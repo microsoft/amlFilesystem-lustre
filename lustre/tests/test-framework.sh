@@ -2932,16 +2932,16 @@ stop() {
 	# like the MGS or MGC to also stop.
 	wait_exit_ST ${facet} || return ${PIPESTATUS[0]}
 
+	local host=${facet}_HOST
+	local failover_host=${facet}failover_HOST
+
 	if [[ $(facet_fstype $facet) == zfs ]]; then
 		# export ZFS storage pool
 		[ "$KEEP_ZPOOL" = "true" ] || export_zpool $facet
-	elif dm_flakey_supported $facet; then
-		local host=${facet}_HOST
-		local failover_host=${facet}failover_HOST
-		if [[ -n ${!failover_host} && ${!failover_host} != ${!host} ]]||
-			$CLEANUP_DM_DEV || [[ $facet = fs* ]]; then
-			dm_cleanup_dev $facet
-		fi
+	elif [[ -n ${!failover_host} && ${!failover_host} != ${!host} ]] ||
+	     $CLEANUP_DM_DEV || [[ $facet = fs* ]]; then
+		# check cheap conditions first to avoid a remote dm-flakey check
+		! dm_flakey_supported $facet || dm_cleanup_dev $facet
 	fi
 }
 
@@ -5031,7 +5031,8 @@ do_node() {
 	fi
 	if $VERBOSE && [[ -z "$quiet" ]]; then
 		echo "CMD: $HOST $*" >&2
-		$myPDSH $HOST "$LCTL mark \"$*\"" > /dev/null 2>&1 || :
+		${do_node_nomark:-false} ||
+			$myPDSH $HOST "$LCTL mark \"$*\"" > /dev/null 2>&1 || :
 	fi
 
 	if [[ "$myPDSH" == "rsh" ]] ||
@@ -5175,7 +5176,8 @@ do_nodes() {
 	export FANOUT=$(get_node_count "${rnodes//,/ }")
 	if $VERBOSE && [[ -z "$quiet" ]]; then
 		echo "CMD: $rnodes $*" >&2
-		$myPDSH $rnodes "$LCTL mark \"$*\"" > /dev/null 2>&1 || :
+		${do_node_nomark:-false} || $myPDSH $rnodes \
+			"$LCTL mark \"$*\"" > /dev/null 2>&1 || :
 	fi
 
 	# do not replace anything from pdsh output if -N is used
@@ -5260,8 +5262,8 @@ do_nodesv() {
 add() {
 	local facet=$1
 	shift
-	# make sure its not already running
-	stop ${facet} -f
+	# make sure it's not already running, unless formatall() stopped it
+	${formatall_stopped:-false} || stop ${facet} -f
 	rm -f $TMP/${facet}active
 	[[ $facet = mds1 ]] && combined_mgs_mds && rm -f $TMP/mgsactive
 
@@ -5764,6 +5766,15 @@ mkfs_opts() {
 
 	[[ "$QUOTA_TYPE" =~ "p" ]] && fs_mkfs_opts+=" -O project"
 
+	if [[ $fstype == ldiskfs ]]; then
+		[[ "$fs_mkfs_opts" == *lazy_itable_init* ]] ||
+			fs_mkfs_opts+=" -E lazy_itable_init"
+		# set by __touch_device(), mkfs.lustre will zero a regular file
+		if ${mkfs_prezeroed:-false} && ${dev_is_file:-false}; then
+			fs_mkfs_opts+=" -E assume_storage_prezeroed=1"
+		fi
+	fi
+
 	[ $fstype == ldiskfs ] && fs_mkfs_opts+=" -b ${!varbs:-$BLCKSIZE}"
 	[ $fstype == ldiskfs ] && fs_mkfs_opts=$(squash_opt $fs_mkfs_opts)
 
@@ -5825,7 +5836,12 @@ __touch_device()
 		;;
 	esac
 
-	do_facet $facet "[ -e \"$device\" ]" && return
+	# mkfs.lustre recreates a regular file, so it will be all zero
+	case "$(do_facet $facet "stat -L -c %F \"$device\" 2>/dev/null")" in
+	"") ;;
+	regular*) dev_is_file=true; return;;
+	*) return;;
+	esac
 
 	# Note: the following check only works with absolute paths
 	[[ ! "$device" =~ ^/dev/ ]] || [[ "$device" =~ ^/dev/shm/ ]] ||
@@ -5835,18 +5851,34 @@ __touch_device()
 	[[ $(facet_fstype $facet) == zfs ]] && return 0
 
 	do_facet $facet "touch \"${device}\""
+	dev_is_file=true
+}
+
+# Return 0 if mke2fs on all servers supports "-E assume_storage_prezeroed"
+mke2fs_prezeroed_supported() {
+	local ver
+
+	for ver in $(do_nodes $(comma_list $(all_server_nodes)) \
+		     "$MKE2FS -V 2>&1" |
+		     awk '/^mke2fs/ { sub(/-.*/, "", $2); print $2 }'); do
+		(( $(version_code $ver) >= $(version_code 1.47.0) )) || return 1
+	done
+	[[ -n "$ver" ]]
 }
 
 format_mgs() {
 	local quiet
+	local dev_is_file=false
 	local fstype=$(facet_fstype mgs)
+	local dev
 
 	[[ "$fstype" == "wbcfs" ]] && return
 
 	if ! $VERBOSE; then
 		quiet=yes
 	fi
-	echo "Format mgs: $(mgsdevname)"
+	dev=$(mgsdevname)
+	echo "Format mgs: $dev"
 	reformat_external_journal mgs
 
 	# touch "device" in case it is a loopback file for testing and needs to
@@ -5854,47 +5886,54 @@ format_mgs() {
 	# to non-existent files in /dev if the admin made a typo during setup
 	__touch_device mgs
 
-	add mgs $(mkfs_opts mgs $(mgsdevname)) $(mountfs_opts mgs) --reformat \
-		$(mgsdevname) $(mgsvdevname) ${quiet:+>/dev/null} || exit 10
+	add mgs $(mkfs_opts mgs $dev) $(mountfs_opts mgs) --reformat \
+		$dev $(mgsvdevname) ${quiet:+>/dev/null} || exit 10
 }
 
 format_mdt() {
 	local num=$1
 	local quiet
-	local fstype=$(facet_fstype mdt$num)
+	local dev_is_file=false
+	local fstype=$(facet_fstype mds$num)
+	local dev
 
 	[[ "$fstype" == "wbcfs" ]] && return
 
 	if ! $VERBOSE; then
 		quiet=yes
 	fi
-	echo "Format mds$num: $(mdsdevname $num)"
+	dev=$(mdsdevname $num)
+	echo "Format mds$num: $dev"
 	reformat_external_journal mds$num
 
 	__touch_device mds $num
 
-	add mds$num $(mkfs_opts mds$num $(mdsdevname ${num})) \
-		$(mountfs_opts mds$num) --reformat $(mdsdevname $num) \
-		$(mdsvdevname $num) ${quiet:+>/dev/null} || exit 10
+	add mds$num $(mkfs_opts mds$num $dev) $(mountfs_opts mds$num) \
+		--reformat $dev $(mdsvdevname $num) ${quiet:+>/dev/null} ||
+		exit 10
 }
 
 format_ost() {
 	local num=$1
+	local quiet
+	local dev_is_file=false
 	local fstype=$(facet_fstype ost$num)
+	local dev
 
 	[[ "$fstype" == "wbcfs" ]] && return
 
 	if ! $VERBOSE; then
 		quiet=yes
 	fi
-	echo "Format ost$num: $(ostdevname $num)"
+	dev=$(ostdevname $num)
+	echo "Format ost$num: $dev"
 	reformat_external_journal ost$num
 
 	__touch_device ost $num
 
-	add ost$num $(mkfs_opts ost$num $(ostdevname ${num})) \
-		$(mountfs_opts ost$num) --reformat $(ostdevname $num) \
-		$(ostvdevname ${num}) ${quiet:+>/dev/null} || exit 10
+	add ost$num $(mkfs_opts ost$num $dev) $(mountfs_opts ost$num) \
+		--reformat $dev $(ostvdevname $num) ${quiet:+>/dev/null} ||
+		exit 10
 }
 
 # Usage: parallel_enabled_for <operation> <target_type>
@@ -5985,18 +6024,24 @@ formatall() {
 	local -a par_logs
 	local -a par_pids
 	local num
+	# skip "stop" in add() and "lctl mark" in do_node() for each target
+	local formatall_stopped=true
+	local do_node_nomark=false
+	local mkfs_prezeroed=false
 
 	stopall -f
+	do_node_nomark=true
 	# Set hostid for ZFS/SPL zpool import protection
-	# (Assumes MDS version is also OSS version)
-	if [ $(lustre_version_code $SINGLEMDS) -ge $(version_code 2.8.54) ];
-	then
-		do_rpc_nodes "$(comma_list $(all_server_nodes))" set_hostid
-	fi
+	do_rpc_nodes "$(comma_list $(all_server_nodes))" set_hostid
 
 	# We need ldiskfs here, may as well load them all
-	load_modules
+	module_loaded lustre || load_modules
 	[ -n "$CLIENTONLY" ] && return
+	if [[ $(facet_fstype $SINGLEMDS) == ldiskfs ||
+	      $(facet_fstype ost1) == ldiskfs ]] &&
+	   mke2fs_prezeroed_supported; then
+		mkfs_prezeroed=true
+	fi
 	echo Formatting mgs, mds, osts
 
 	export OST_INDICES=($(hostlist_expand "$OST_INDEX_LIST"))

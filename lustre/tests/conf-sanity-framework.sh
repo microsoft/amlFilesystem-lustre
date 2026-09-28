@@ -23,11 +23,6 @@ MGSSIZE=$MDSSIZE
 OSTSIZE=200000
 [ "$ost1_FSTYPE" = zfs ] && OSTSIZE=400000
 
-# pass "-E lazy_itable_init" to mke2fs to speed up the formatting time
-if [[ "$LDISKFS_MKFS_OPTS" != *lazy_itable_init* ]]; then
-	LDISKFS_MKFS_OPTS=$(csa_add "$LDISKFS_MKFS_OPTS" -E lazy_itable_init)
-fi
-
 gen_config() {
 	# The MGS must be started before the OSTs for a new fs, so start
 	# and stop to generate the startup logs.
