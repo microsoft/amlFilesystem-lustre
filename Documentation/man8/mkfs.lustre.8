@@ -5,7 +5,7 @@
 .\"
 .\" This file may be copied under the terms of the GNU Public License.
 .\"
-.TH MKFS.LUSTRE 8 2026-08-13 Lustre "Lustre Configuration Utilities"
+.TH MKFS.LUSTRE 8 2026-09-25 Lustre "Lustre Configuration Utilities"
 .SH NAME
 mkfs.lustre \- format a disk for a Lustre service
 .SH SYNOPSIS
@@ -200,7 +200,11 @@ Enabled by default on a ZFS OST, unless an explicit value is given here.
 Print less information.
 .TP
 .B --reformat
-Reformat an existing Lustre disk as a new target
+Reformat an existing Lustre disk as a new target.  For an ldiskfs
+target, this also overwrites a device that holds a foreign filesystem,
+a RAID, LVM or LUKS member, or a partition table signature, which
+.B mkfs.lustre
+otherwise refuses.
 .TP
 .B --replace
 Used to initialize a target with the same

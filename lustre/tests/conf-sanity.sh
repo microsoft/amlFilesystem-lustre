@@ -13315,6 +13315,31 @@ test_166() {
 }
 run_test 166 "mkfs.lustre and tunefs.lustre handle autodegrade properly"
 
+test_168() {
+	[[ "$ost1_FSTYPE" == ldiskfs ]] || skip "ldiskfs only test"
+	(( $OST1_VERSION >= $(version_code 2.17.59.69) )) ||
+		skip "need OST >= 2.17.59.69 for foreign signature check"
+	do_facet ost1 "which mkfs.ext4" ||
+		skip_env "No mkfs.ext4 installed"
+
+	local img=$TMP/$tfile-ost
+	local mkfs="$MKFS --fsname=$FSNAME --ost --index=0 --mgsnode=$MGSNID"
+	mkfs+=" --backfstype=ldiskfs --device-size=32768"
+
+	stack_trap "do_facet ost1 rm -f $img"
+	do_facet ost1 "truncate -s 32M $img && mkfs.ext4 -q -F $img" ||
+		error "mkfs.ext4 $img failed"
+
+	local out
+	out=$(do_facet ost1 "$mkfs $img" 2>&1) &&
+		error "mkfs.lustre overwrote ext4 without --reformat"
+	echo "$out" | grep -q "Use --reformat" ||
+		error "mkfs.lustre failed for the wrong reason: $out"
+	do_facet ost1 $mkfs --reformat $img ||
+		error "mkfs.lustre --reformat $img failed"
+}
+run_test 168 "mkfs.lustre refuses a foreign signature without --reformat"
+
 cleanup_200() {
 	local modopts=$1
 	stopall

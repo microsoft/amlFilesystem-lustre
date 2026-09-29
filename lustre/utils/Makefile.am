@@ -334,7 +334,7 @@ mount_lustre_tgt_LDADD    = $(mount_lustre_LDADD)
 mkfs_lustre_SOURCES = mkfs_lustre.c mount_utils.c mount_utils.h $(GSSSRC)
 mkfs_lustre_CPPFLAGS := -UTUNEFS ${MNTMODCFLAGS}
 mkfs_lustre_LDFLAGS  := ${MNTMODLDFLAGS}
-mkfs_lustre_LDADD    := $(mount_lustre_LDADD)
+mkfs_lustre_LDADD    := $(mount_lustre_LDADD) $(LDLIBBLKID)
 
 tunefs_lustre_SOURCES = mkfs_lustre.c mount_utils.c mount_utils.h $(GSSSRC)
 tunefs_lustre_CPPFLAGS := -DTUNEFS ${MNTMODCFLAGS}

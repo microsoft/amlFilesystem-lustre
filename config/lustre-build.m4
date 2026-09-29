@@ -119,6 +119,8 @@ AM_CONDITIONAL([BUILD_LUSTREIOKIT], [test "x$enable_iokit" = xyes])
 # Check whether build with libmount for mount.lustre.
 # libmount is part of the util-linux since v2.18.
 # We need it to manipulate utab file.
+# libblkid (a libmount dependency) lets mkfs.lustre detect existing
+# filesystem signatures.
 #
 AC_DEFUN([LB_LIBMOUNT], [
 AC_CHECK_HEADER([libmount/libmount.h], [
@@ -135,6 +137,12 @@ AS_IF([test "x$with_libmount" = xyes], [
 	AC_MSG_RESULT([no])
 	AC_MSG_ERROR([libmount development package is required])
 ])
+AC_CHECK_HEADER([blkid/blkid.h], [
+	AC_CHECK_LIB([blkid], [blkid_do_safeprobe], [
+		LDLIBBLKID="-lblkid"
+		AC_SUBST(LDLIBBLKID)
+	], [AC_MSG_ERROR([libblkid development package is required])])
+], [AC_MSG_ERROR([libblkid development package is required])])
 ]) # LB_LIBMOUNT
 
 #

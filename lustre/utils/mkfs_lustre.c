@@ -37,6 +37,7 @@
 
 #include <string.h>
 #include <getopt.h>
+#include <blkid/blkid.h>
 #include <limits.h>
 #include <linux/lnet/nidstr.h>
 #include <linux/lnet/lnetctl.h>
@@ -808,6 +809,57 @@ static int parse_opts(int argc, char *const argv[], struct mkfs_opts *mop,
 	return 0;
 }
 
+#ifndef TUNEFS
+/* mke2fs checks for an existing filesystem only on a tty, and we pass -F */
+static int check_foreign_signature(const char *device)
+{
+	const char *type = NULL;
+	blkid_probe pr;
+	int rc;
+
+	pr = blkid_new_probe_from_filename(device);
+	if (!pr)
+		return 0; /* let mkfs report the open error */
+
+	blkid_probe_enable_superblocks(pr, 1);
+	blkid_probe_set_superblocks_flags(pr, BLKID_SUBLKS_TYPE);
+	blkid_probe_enable_partitions(pr, 1);
+
+	rc = blkid_do_safeprobe(pr);
+	switch (rc) {
+	case 0:
+		if (blkid_probe_lookup_value(pr, "TYPE", &type, NULL) != 0 &&
+		    blkid_probe_lookup_value(pr, "PTTYPE", &type, NULL) != 0)
+			type = "unknown";
+		fatal();
+		fprintf(stderr,
+			"Device %s holds a %s signature. Use --reformat to overwrite it.\n",
+			device, type);
+		rc = EEXIST;
+		break;
+	case -2:
+		fatal();
+		fprintf(stderr,
+			"Device %s holds colliding signatures. Use --reformat to overwrite it.\n",
+			device);
+		rc = EEXIST;
+		break;
+	case 1:
+		rc = 0;
+		break;
+	default:
+		fprintf(stderr,
+			"%s: cannot probe %s, not checking for existing signatures\n",
+			progname, device);
+		rc = 0;
+		break;
+	}
+
+	blkid_free_probe(pr);
+	return rc;
+}
+#endif
+
 int main(int argc, char *const argv[])
 {
 	struct mkfs_opts mop;
@@ -1107,6 +1159,11 @@ int main(int argc, char *const argv[])
 				"Device %s was previously formatted for lustre. Use --reformat to reformat it, or tunefs.lustre to modify.\n",
 				mop.mo_device);
 			goto out;
+		}
+		if (ldd->ldd_mount_type == LDD_MT_LDISKFS) {
+			ret = check_foreign_signature(mop.mo_device);
+			if (ret != 0)
+				goto out;
 		}
 	}
 
