@@ -7220,22 +7220,46 @@ static int lod_declare_instantiate_components(const struct lu_env *env,
 					      __u64 reserve)
 {
 	struct lod_thread_info *info = lod_env_info(env);
-	int i;
+	int i, n, out;
 	int rc = 0;
 	ENTRY;
 
-	/* a parity without its data component is only deferred at create
-	 * ('lfs mirror extend --ec'); instantiating it is an error, and a
-	 * file of nothing else would trip the assertion below
+	/* a parity is only instantiated with or after its data component;
+	 * one without any linked data is an error
 	 */
-	for (i = 0; i < info->lti_count; i++) {
+	n = info->lti_count;
+	for (i = 0, out = 0; i < n; i++) {
+		__u32 idx = info->lti_comp_idx[i];
 		struct lod_layout_component *lod_comp =
-			&lo->ldo_comp_entries[info->lti_comp_idx[i]];
+			&lo->ldo_comp_entries[idx];
+		struct lod_layout_component *data;
+		__u32 data_idx;
+		int j;
 
-		if ((lod_comp->llc_flags & LCME_FL_PARITY) &&
-		    !lod_comp_find_linked(lo, lod_comp))
+		if (!(lod_comp->llc_flags & LCME_FL_PARITY)) {
+			info->lti_comp_idx[out++] = idx;
+			continue;
+		}
+
+		data = lod_comp_find_linked(lo, lod_comp);
+		if (!data)
 			RETURN(-EINVAL);
+
+		if (!lod_comp_inited(data)) {
+			data_idx = data - lo->ldo_comp_entries;
+			for (j = 0; j < n; j++)
+				if (info->lti_comp_idx[j] == data_idx)
+					break;
+			if (j == n) {
+				CDEBUG(D_LAYOUT,
+				       "skip parity %#x: data %#x uninit\n",
+				       lod_comp->llc_id, data->llc_id);
+				continue;
+			}
+		}
+		info->lti_comp_idx[out++] = idx;
 	}
+	info->lti_count = out;
 
 	LASSERT(info->lti_count < lo->ldo_comp_cnt);
 

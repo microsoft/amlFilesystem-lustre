@@ -536,12 +536,12 @@ lsme_parity_origin.
 
 ec_off is a position in the parity mirror, not a data-file offset:
 a data row of stripe_count * stripe_size maps to
-raidset_count * stripe_size of parity-mirror offsets, whatever p is,
-while keeping the raid set structure visible for holes, SEEK, and
-locking.
+raidset_count * stripe_size of parity-mirror offsets. This allows
+p > k (for example 2+3) inside a finite PFL extent while keeping the
+raid set structure visible for holes, SEEK, and locking.
 
-Limits: p <= k unless k == 1, k+p <= 256 and p <= 15. EC components
-followed by extension space (SEL) are not tested.
+Hard limits: k+p <= 256 and p <= 15. EC components followed by
+extension space (SEL) are not tested.
 
 As a special case, if there is only a single data stripe then we just store
 a copy of the data as each parity instead of computing it,

@@ -1782,6 +1782,8 @@ int lod_parse_striping(const struct lu_env *env, struct lod_object *lo,
 	if (rc)
 		GOTO(out, rc);
 
+	/* a bad parity on disk must not stop the file being removed */
+	lod_verify_ec_parity_comps(lo, false);
 out:
 	if (rc)
 		lod_striping_free_nolock(env, lo);
@@ -2290,13 +2292,13 @@ static int lod_dom_stripesize_choose(const struct lu_env *env,
 	return rc;
 }
 
-/* k + p <= 256: the Cauchy matrix needs k + p distinct GF(2^8) elements */
-static inline bool lod_ec_parity_valid(__u8 k, __u8 p, __u16 stripe_count,
-				       bool inited)
+/*
+ * k, p > 0; p <= 15; k+p <= 256. Instantiated stripe_count == 0 is rejected
+ * in lod_verify_striping(); exact raidset*p by lod_verify_ec_parity_comps().
+ */
+static inline bool lod_ec_parity_valid(__u8 k, __u8 p)
 {
 	if (k == 0 || p == 0 || p > LOV_EC_MAX_CODING_STRIPES)
-		return false;
-	if (inited && (stripe_count == 0 || stripe_count % p != 0))
 		return false;
 	return k + p <= LOV_EC_MAX_TOTAL_STRIPES;
 }
@@ -2486,6 +2488,10 @@ recheck:
 			u32 hsmsize;
 			u32 ftype;
 
+			/* Foreign entries skip the PARITY k/p check below */
+			if (le32_to_cpu(ent->lcme_flags) & LCME_FL_PARITY)
+				RETURN(-EINVAL);
+
 			/*
 			 * Currently when the foreign layout is used as a basic
 			 * layout component, it only supports HSM foreign types:
@@ -2553,18 +2559,25 @@ recheck:
 		if (le32_to_cpu(ent->lcme_flags) & LCME_FL_PARITY) {
 			__u8 data_stripe = ent->lcme_dstripe_count;
 			__u8 parity_stripe = ent->lcme_cstripe_count;
-			__u16 stripe_count;
-			bool inited;
 
-			stripe_count = le16_to_cpu(lum->lmm_stripe_count);
-			inited = le32_to_cpu(ent->lcme_flags) & LCME_FL_INIT;
-			if (!lod_ec_parity_valid(data_stripe, parity_stripe,
-						 stripe_count, inited)) {
+			if (!lod_ec_parity_valid(data_stripe, parity_stripe)) {
 				rc = -EINVAL;
 				CDEBUG(D_LAYOUT,
-				       "invalid EC k+p %u+%u, stripe_count %u: rc = %d\n",
-				       data_stripe, parity_stripe,
-				       stripe_count, rc);
+				       "invalid EC k+p %u+%u: rc = %d\n",
+				       data_stripe, parity_stripe, rc);
+				RETURN(rc);
+			}
+			/*
+			 * Instantiated parity must have a positive count
+			 * before object init (DEFINED path). Exact raidset*p
+			 * is checked later by lod_verify_ec_parity_comps().
+			 */
+			if ((le32_to_cpu(ent->lcme_flags) & LCME_FL_INIT) &&
+			    le16_to_cpu(lum->lmm_stripe_count) == 0) {
+				rc = -EINVAL;
+				CDEBUG(D_LAYOUT,
+				       "EC parity %#x has zero stripe count: rc = %d\n",
+				       le32_to_cpu(ent->lcme_id), rc);
 				RETURN(rc);
 			}
 		}

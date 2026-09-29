@@ -2275,22 +2275,22 @@ static void ec_extent_str(char *buf, size_t size, uint64_t start,
 
 /**
  * ec_check_data_comp() - Refuse a data component EC cannot protect.
- * @fname:        File the component is in, or is being added to.
- * @mirror:       Its mirror as named in messages, e.g. "mirror 2".
- * @extent:       Its extent as named in messages.
- * @flags:        Its component flags.
- * @pattern:      Its layout pattern, or LLAPI_LAYOUT_DEFAULT if not set.
- * @stripe_count: Its stripe count, or an LLAPI_LAYOUT_* value if not fixed.
- * @data_count:   EC data stripe count (D in D+P).
- * @parity_count: EC parity stripe count (P in D+P).
+ * @fname:   File the component is in, or is being added to.
+ * @mirror:  Its mirror as named in messages, e.g. "mirror 2".
+ * @extent:  Its extent as named in messages.
+ * @flags:   Its component flags.
+ * @pattern: Its layout pattern, or LLAPI_LAYOUT_DEFAULT if not set.
+ *
+ * Width vs P is not checked here: RAID10-like parity allows p > k, and
+ * K is narrowed to the component's stripe count before the library
+ * validates D+P.
  *
  * Return: 0 if EC can protect the component, else a negative errno after
  * printing why not.
  */
 static int ec_check_data_comp(const char *fname, const char *mirror,
 			      const char *extent, uint32_t flags,
-			      uint64_t pattern, uint64_t stripe_count,
-			      uint8_t data_count, uint8_t parity_count)
+			      uint64_t pattern)
 {
 	/*
 	 * A parity component is paired with its data component by
@@ -2315,21 +2315,6 @@ static int ec_check_data_comp(const char *fname, const char *mirror,
 			"error: %s: %s of '%s' has a Data-on-MDT component at %s, which EC cannot protect\n",
 			progname, mirror, fname, extent);
 		return -EOPNOTSUPP;
-	}
-
-	/*
-	 * Once K is narrowed to the component's width the component
-	 * holds a single raidset, so it needs at least P stripes.
-	 * Name the component rather than leave this to the EINVAL
-	 * from the generic EC validation.
-	 */
-	if (stripe_count < parity_count) {
-		fprintf(stderr,
-			"error: %s: component %s of %s in '%s' has %llu stripe(s), too few for the %u parity stripes of EC %u+%u\n",
-			progname, extent, mirror, fname,
-			(unsigned long long)stripe_count,
-			parity_count, data_count, parity_count);
-		return -EINVAL;
 	}
 
 	return 0;
@@ -2505,8 +2490,7 @@ int build_parity_layout_for_mirror(const char *fname, uint32_t mirror_id,
 
 		/* before the stripe size: an extension comp has none */
 		rc = ec_check_data_comp(fname, mirror_name, extent, flags,
-					pattern, stripe_count, data_count,
-					parity_count);
+					pattern);
 		if (rc)
 			goto out;
 
@@ -2834,9 +2818,7 @@ static int mirror_extend_check_ec(const char *fname, struct mirror_args *m)
 
 		ec_extent_str(extent, sizeof(extent), start, end);
 		rc = ec_check_data_comp(fname, "the new mirror", extent, flags,
-					pattern, stripe_count,
-					m->m_ec_data_count,
-					m->m_ec_parity_count);
+					pattern);
 		if (rc)
 			break;
 
@@ -5215,18 +5197,6 @@ static int parse_ec_stripe_count(const char *optarg, uint8_t *data_count,
 		fprintf(stderr,
 			"error: invalid parity stripe count in '%s'\n",
 			optarg);
-		return -EINVAL;
-	}
-
-	/*
-	 * Validate EC parameters. k == 1 is special: each parity is a
-	 * plain copy of the single data stripe (memcpy), so p may be
-	 * greater than k (e.g. --ec 1+2). For k >= 2, p must be <= k.
-	 */
-	if (parity > data && data != 1) {
-		fprintf(stderr,
-			"error: parity count (%lu) must be less than or equal to data count (%lu)\n",
-			parity, data);
 		return -EINVAL;
 	}
 

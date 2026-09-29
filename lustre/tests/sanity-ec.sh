@@ -1383,19 +1383,19 @@ test_3g() {
 	}
 run_test 3g "EC parity mirror inherits pool from data mirror"
 
-# Test 4: Invalid EC parameters
+# Test 4: EC parameters
 test_4a() {
+	(( OSTCOUNT >= 5 )) || skip_env "needs >= 5 OSTs"
 	enable_ec
 	local tf=$DIR/$tfile
 
-	# Invalid: parity > data
-	$LFS setstripe -E -1 --ec 4+5 $tf 2>&1 |
-		grep -qi "parity.*must be less than or equal" ||
-		error "should reject EC with parity > data"
+	stack_trap "rm -f $tf"
 
-	! [[ -f $tf ]] || error "file should not have been created"
+	# p > k is allowed
+	$LFS setstripe -E -1 -c 2 --ec 2+3 $tf ||
+		error "should accept EC with parity > data"
 }
-run_test 4a "reject invalid EC parameters: parity > data"
+run_test 4a "accept EC parameters: parity > data"
 
 test_4b() {
 	enable_ec
@@ -1406,14 +1406,19 @@ test_4b() {
 		grep -qi "invalid parity stripe count" ||
 		error "should reject EC with parity count = 0"
 
-	# Invalid: data stripe count = 0
+	# k == 1 is valid (parity is a copy of the data). k == 0 is not.
 	$LFS setstripe -E -1 --ec 0+1 $tf 2>&1 |
 		grep -qi "invalid data stripe count" ||
 		error "should reject EC with data count = 0"
 
+	# Invalid: data stripe count does not fit in uint8
+	$LFS setstripe -E -1 --ec 256+1 $tf 2>&1 |
+		grep -qi "invalid data stripe count" ||
+		error "should reject EC with data count > 255"
+
 	! [[ -f $tf ]] || error "file should not have been created"
 }
-run_test 4b "reject invalid EC parameters: zero data or parity count"
+run_test 4b "reject invalid EC parameters: zero counts and data count > 255"
 
 test_4c() {
 	enable_ec
@@ -2863,9 +2868,8 @@ test_8d() {
 	# Registered before the first create: the later files are declared
 	# next to the cases that use them, but a failure in any case must
 	# still clean up the ones already made.
-	stack_trap "rm -f $DIR/$tfile $DIR/$tfile.ec $DIR/$tfile.narrow \
-		    $DIR/$tfile.wide $DIR/$tfile.sel $DIR/$tfile.dom \
-		    $DIR/$tfile.victim"
+	stack_trap "rm -f $DIR/$tfile $DIR/$tfile.ec $DIR/$tfile.wide \
+		    $DIR/$tfile.sel $DIR/$tfile.dom $DIR/$tfile.victim"
 
 	# FLR file, so the data mirror id is >= 1.
 	$LFS mirror create -N -E -1 -c 4 -N -E -1 -c 4 $tf ||
@@ -2920,37 +2924,6 @@ test_8d() {
 	$LFS mirror extend --mirror-id $ec_parity_id --ec 4+2 $tfec 2>&1 |
 		grep -q "is a parity mirror" ||
 		error "expected rejection when target is a parity mirror"
-
-	# A component no wider than its stripe size is instantiated with a
-	# single stripe, which cannot carry 2 parity stripes.
-	local tfnarrow=$DIR/$tfile.narrow
-
-	$LFS setstripe -E 1M -c 4 -E -1 -c 4 $tfnarrow ||
-		error "setstripe failed"
-	dd if=/dev/zero of=$tfnarrow bs=512K count=1 2>/dev/null ||
-		error "write failed"
-	$LFS mirror extend --ec 4+2 $tfnarrow 2>&1 |
-		grep -q "too few for the 2 parity stripes" ||
-		error "expected too-narrow-component rejection"
-
-	# -N adds the data mirror before its parity, so a geometry the new
-	# mirror cannot carry must be refused before the file is changed.
-	out=$($LFS mirror extend -N -E -1 -c 1 --ec 4+2 $tf 2>&1) &&
-		error "expected -N -c 1 --ec 4+2 to fail"
-	echo "$out" | grep -q "too few for the 2 parity stripes" ||
-		error "expected too-narrow new mirror rejection, got: $out"
-	verify_mirror_count $tf 2
-
-	# 5 stripes make two 4+3 raidsets, which need 6 parity stripes. The
-	# D+P fit is checked before the merge too, so the layout is untouched.
-	local gen=$($LFS getstripe $tf | awk '/lcm_layout_gen/ { print $2 }')
-
-	out=$($LFS mirror extend -N -E -1 -c 5 --ec 4+3 $tf 2>&1) &&
-		error "expected -N -c 5 --ec 4+3 to fail"
-	echo "$out" | grep -q "cannot add parity component" ||
-		error "expected D+P fit rejection, got: $out"
-	(( $($LFS getstripe $tf | awk '/lcm_layout_gen/ { print $2 }') ==
-	   gen )) || error "refused extend changed the layout of $tf"
 
 	# A parity mirror that fails after its data mirror was merged, here
 	# because EC is off on the client, must not leave that data mirror
@@ -3451,23 +3424,190 @@ test_8l() {
 }
 run_test 8l "extend accepts EC and victim on separate mirrors in either order"
 
+test_8m() {
+	(( MDS1_VERSION > $(version_code 2.17.57) )) ||
+		skip "need MDS > 2.17.57 to attach EC parity to a data mirror"
+	(( OSTCOUNT >= 5 )) || skip "need >= 5 OSTs for EC 2+3"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local mids all_mids parity_mid parity_comps
+
+	stack_trap "rm -f $tf"
+
+	# --mirror-id: hits build_parity_layout_for_mirror(); p > k.
+	$LFS mirror create -N -E -1 -c 2 -N -E -1 -c 2 $tf ||
+		error "mirror create failed"
+	mids=($(mirror_ids_of $tf))
+	(( ${#mids[@]} == 2 )) || error "expected 2 mirror ids, got ${#mids[@]}"
+
+	$LFS mirror extend --mirror-id ${mids[0]} --ec 2+3 $tf ||
+		error "mirror extend --mirror-id ${mids[0]} --ec 2+3 failed"
+	verify_mirror_count $tf 3
+
+	all_mids=($(mirror_ids_of $tf))
+	parity_mid=${all_mids[-1]}
+	parity_comps=($($LFS getstripe --mirror-id=$parity_mid $tf |
+			awk '/lcme_id/ {print $2}'))
+	(( ${#parity_comps[@]} == 1 )) ||
+		error "expected 1 parity component, got ${#parity_comps[@]}"
+	verify_comp_parity $tf ${parity_comps[0]}
+	verify_ec_stripe_count $tf ${parity_comps[0]} 2 3
+	verify_mirror_link $tf $parity_mid ${mids[0]}
+	verify_mirror_link $tf ${mids[0]} $parity_mid
+
+	dd if=/dev/urandom of=$tf bs=1M count=2 conv=fsync ||
+		error "write 2M failed"
+	$LFS mirror resync $tf || error "resync failed"
+	$LFS mirror verify $tf || error "verify failed"
+
+	# -N: hits mirror_extend_check_ec(), the other call site.
+	rm -f $tf
+	$LFS setstripe -E -1 -c 2 $tf || error "setstripe failed"
+	$LFS mirror extend -N -E -1 -c 2 --ec 2+3 $tf ||
+		error "mirror extend -N --ec 2+3 failed"
+	verify_mirror_count $tf 3
+	identify_ec_mirrors $tf
+	[[ -n $ec_data_id && -n $ec_parity_id ]] ||
+		error "no EC pair after -N --ec 2+3"
+	parity_comps=($($LFS getstripe --mirror-id=$ec_parity_id $tf |
+			awk '/lcme_id/ {print $2}'))
+	verify_ec_stripe_count $tf ${parity_comps[0]} 2 3
+}
+run_test 8m "mirror extend --ec 2+3 on a two-stripe target (p > k)"
+
+test_8n() {
+	(( MDS1_VERSION > $(version_code 2.17.60) )) ||
+		skip "need MDS > 2.17.60 to skip parity over uninit data"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local data_ids parity_ids gen
+
+	stack_trap "rm -f $tf"
+
+	# Only the first PFL extent is written; the RESYNC lease must not
+	# instantiate the second-extent parity while its data is still uninit.
+	$LFS setstripe -E 128M --ec 2+1 -E -1 -c 2 --ec 2+1 $tf ||
+		error "setstripe PFL EC failed"
+	dd if=/dev/urandom of=$tf bs=1M count=1 conv=fsync ||
+		error "write 1M failed"
+	identify_ec_mirrors $tf
+	[[ -n $ec_data_id && -n $ec_parity_id ]] ||
+		error "missing data/parity mirror"
+	data_ids=($($LFS getstripe --mirror-id=$ec_data_id $tf |
+		    awk '/lcme_id:/ {print $2}'))
+	parity_ids=($($LFS getstripe --mirror-id=$ec_parity_id $tf |
+		      awk '/lcme_id:/ {print $2}'))
+	(( ${#data_ids[@]} == 2 && ${#parity_ids[@]} == 2 )) ||
+		error "expected 2 data and 2 parity components"
+	# first-extent comps are already INIT at create (size 0 covers e_start)
+	$LFS getstripe -I${parity_ids[0]} $tf | grep -q "lcme_flags:.*init" ||
+		error "first-extent parity should be init after create"
+
+	gen=$($LFS getstripe $tf | awk '/lcm_layout_gen/{print $2}')
+	# copy I/O is not EC-aware; only the RESYNC lease matters here
+	$LFS mirror copy -i $ec_data_id -o $ec_parity_id $tf || true
+	(( $($LFS getstripe $tf | awk '/lcm_layout_gen/{print $2}') > gen )) ||
+		error "RESYNC lease was not granted"
+	$LFS getstripe -I${data_ids[1]} $tf | grep -q "lcme_flags:.*init" &&
+		error "second data component should still be uninit"
+	$LFS getstripe -I${parity_ids[1]} $tf | grep -q "lcme_flags:.*init" &&
+		error "parity of uninit data should not be instantiated"
+	# skipped orphan parity must leave the file destroyable
+	rm -f $tf || error "unlink after mirror copy failed"
+}
+run_test 8n "mirror copy lease skips parity over uninit PFL data"
+
+test_8o() {
+	(( MDS1_VERSION > $(version_code 2.17.60) )) ||
+		skip "need MDS > 2.17.60 for EC p > k"
+	(( OSTCOUNT >= 5 )) || skip_env "needs >= 5 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	stack_trap "rm -f $tf"
+
+	local ids
+
+	# Finite PFL extent used to reject 2+3 (parity would not fit).
+	$LFS setstripe -E 2M -c 2 -S 1M --ec 2+3 -E -1 $tf ||
+		error "PFL --ec 2+3 -E 2M create failed"
+
+	$LFS getstripe $tf | awk '/lmm_pattern/ { print $2 }' |
+		grep -qx parity ||
+		error "parity component should use LOV_PATTERN_PARITY"
+
+	ids=($($LFS getstripe $tf | awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	verify_comp_extent $tf ${ids[0]} 0 2097152
+	verify_comp_parity $tf ${ids[2]}
+	verify_ec_stripe_count $tf ${ids[2]} 2 3
+	verify_comp_extent $tf ${ids[2]} 0 2097152
+
+	dd if=/dev/urandom of=$tf bs=1M count=3 conv=fsync ||
+		error "write 3M failed"
+
+	$LFS mirror resync $tf || error "PFL 2+3 resync failed"
+	$LFS mirror verify $tf || error "PFL 2+3 verify failed"
+}
+run_test 8o "PFL 2+3 create/resync/verify with finite first extent"
+
+test_8p() {
+	(( MDS1_VERSION > $(version_code 2.17.60) )) ||
+		skip "need MDS > 2.17.60 for EC p > k"
+	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local ids
+	local pcount
+
+	stack_trap "rm -f $tf"
+
+	# 5 data, k=2: raidsets 2+2+1 (p=3 on each). Not 2+3 -E 2M (1 set).
+	$LFS setstripe -E -1 -S 1M -c 5 --ec 2+3 $tf ||
+		error "setstripe -c 5 --ec 2+3 failed"
+
+	dd if=/dev/urandom of=$tf bs=1M count=15 conv=fsync ||
+		error "write 15M failed"
+
+	ids=($($LFS getstripe $tf | awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	verify_comp_parity $tf ${ids[1]}
+	verify_ec_stripe_count $tf ${ids[1]} 2 3
+	pcount=$($LFS getstripe -I${ids[1]} $tf |
+		awk '/l_ost_idx:/ { n++ } END { print n+0 }')
+	(( pcount == 9 )) ||
+		error "parity objects $pcount != 9 (3 raidsets * p)"
+
+	$LFS mirror resync $tf || error "resync failed"
+	$LFS mirror verify $tf || error "verify failed"
+}
+run_test 8p "p>k multi-raidset -c 5 --ec 2+3 create/resync/verify"
+
 test_10() {
 	local tf=${DIR}/${tdir}/$tfile
 
-	# The number of parity stripes in the EC mirror must be equal to or
-	# less than the number of data stripes in the same EC mirror.
 	(( OSTCOUNT >= 5 )) || skip_env "needs >= 5 OSTs"
 	enable_ec
 
 	test_mkdir $DIR/$tdir
+	stack_trap "rm -f $tf"
 
-	# Test that creating an ec 2+3 mirror fails (parity > data)
-	$LFS setstripe -E -1 -S 4M -c 4 --ec 2+3 $tf >/dev/null &&
-		error "setstripe --ec 2+3 succeeded when it shouldn't"
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+3 $tf ||
+		error "setstripe --ec 2+3 failed"
 
-	return 0
+	$LFS getstripe $tf | awk '/lmm_pattern/ { print $2 }' |
+		grep -qx parity ||
+		error "parity component should use LOV_PATTERN_PARITY"
+
+	dd if=/dev/urandom of=$tf bs=1M count=2 conv=fsync ||
+		error "write 2M failed"
+
+	$LFS mirror resync $tf || error "mirror resync failed"
+	$LFS mirror verify $tf || error "mirror verify failed"
 }
-run_test 10 "cannot create overly large ec mirrors"
+run_test 10 "create and resync 2+3 EC (p > k)"
 
 test_12a() {
 	local tf=${DIR}/${tdir}/$tfile
@@ -11940,8 +12080,7 @@ test_301() {
 	# Second component e_start=1M is not a multiple of stripe_size=4M.
 	# Parity I/O must chunk at e_start + n*ss so [4M, 8M) splits at 5M.
 	# First component uses -c 1: -c 2 would be shrunk to 1 by LOD
-	# (extent 1M / stripe_size 1M) while dstripe_count stays 2, and
-	# resync then fails llapi_ec_check_comp_match ("too many parities").
+	# (extent 1M / stripe_size 1M) while dstripe_count stays 2.
 	$LFS setstripe -E 1M -S 1M -c 1 -E -1 -S 4M -c 4 --ec 2+2 $tf ||
 		error "setstripe PFL --ec 2+2 with unaligned e_start failed"
 

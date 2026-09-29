@@ -420,20 +420,25 @@ The
 .I DATA_STRIPES
 value must be at least 1, and
 .I PARITY_STRIPES
-must be at least 1.  For
-.I DATA_STRIPES
-greater than 1,
-.I PARITY_STRIPES
-must also be less than or equal to
-.IR DATA_STRIPES .
-When
+must be at least 1.  When
 .I DATA_STRIPES
 is 1 (for example
 .BR --ec\ 1+2 ),
 each parity stripe is a plain byte-for-byte copy
-of that single data stripe, so
+of that single data stripe.
 .I PARITY_STRIPES
-may exceed 1.
+may exceed
+.I DATA_STRIPES
+(for example
+.BR --ec\ 2+3 ).
+EC parity is stored with the
+.B LOV_PATTERN_PARITY
+layout, which is like RAID10: the RAID sets of one stripe set are
+striped like RAID0, and within one RAID set the
+.I PARITY_STRIPES
+parity stripes share a single file offset like RAID1, although each
+one holds a different parity rather than a replica.  The parities
+therefore fit in the same extent as the data they protect.
 The supported limits are 32 data stripes and 4 parity stripes.
 The sum
 .I DATA_STRIPES

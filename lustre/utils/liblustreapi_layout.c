@@ -2607,52 +2607,27 @@ int llapi_layout_comp_add_extent(struct llapi_layout *layout,
 	return 0;
 }
 
-static int layout_ec_verify_stripes(__u64 stripe_count, __u8 k, __u8 p)
+/**
+ * layout_ec_verify() - Validate EC k, p and data stripe count
+ * @k: data stripe width (dstripe_count)
+ * @p: parity count (cstripe_count)
+ * @stripe_count: data component stripe count
+ *
+ * p may exceed k.  @stripe_count must be in 1..LOV_MAX_STRIPE_COUNT.
+ * For the llapi_layout_comp_add_ec() pre-check (data stripe count not
+ * known yet), pass @k: it is already validated as non-zero and within
+ * LOV_EC_MAX_DATA_STRIPES.
+ */
+static int layout_ec_verify(__u8 k, __u8 p, __u64 stripe_count)
 {
-	struct ec_split_comp sc;
-
-	/* Validate stripe counts */
-	if (p == 0 || k == 0)
-		return -EINVAL;
-
-	/*
-	 * The total number of parities we will need across all the raid
-	 * sets can not exceed the number of stripes in the data comp
-	 * it protects. Exception: k == 1 (plain memcpy mirrors) may use
-	 * p > 1, so nsets * p may exceed the data stripe count.
-	 */
-	ec_split_stripes(stripe_count, k, &sc);
-	if (sc.esc_n0 * sc.esc_k0 + sc.esc_n1 * sc.esc_k1 != stripe_count)
-		return -EINVAL;
-	if (k != 1 && ec_raidset_count(&sc) * p > stripe_count)
+	if (k == 0 || p == 0 ||
+	    k > LOV_EC_MAX_DATA_STRIPES ||
+	    p > LOV_EC_MAX_CODING_STRIPES ||
+	    k + p > LOV_EC_MAX_TOTAL_STRIPES ||
+	    stripe_count == 0 || stripe_count > LOV_MAX_STRIPE_COUNT)
 		return -EINVAL;
 
 	return 0;
-}
-
-/* Check the EC data, coding and total stripe counts against the EC limits. */
-static int layout_ec_verify_limits(__u8 dstripe_count, __u8 cstripe_count)
-{
-	if (dstripe_count > LOV_EC_MAX_DATA_STRIPES ||
-	    cstripe_count > LOV_EC_MAX_CODING_STRIPES ||
-	    dstripe_count + cstripe_count > LOV_EC_MAX_TOTAL_STRIPES)
-		return -EINVAL;
-
-	return 0;
-}
-
-/* Check the EC limits and the K+P fit against a known data stripe count. */
-static int layout_ec_verify_counts(__u8 dstripe_count, __u8 cstripe_count,
-				   __u64 data_stripe_count)
-{
-	int rc;
-
-	rc = layout_ec_verify_limits(dstripe_count, cstripe_count);
-	if (rc)
-		return rc;
-
-	return layout_ec_verify_stripes(data_stripe_count, dstripe_count,
-					cstripe_count);
 }
 
 /**
@@ -2739,7 +2714,8 @@ int llapi_layout_comp_add_ec(struct llapi_layout *layout, uint32_t mirror_id,
 		return -1;
 	}
 
-	if (layout_ec_verify_limits(dstripe_count, cstripe_count)) {
+	/* Pre-check k/p; pass k as stand-in until data stripe count is known */
+	if (layout_ec_verify(dstripe_count, cstripe_count, dstripe_count)) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -2789,8 +2765,7 @@ int llapi_layout_comp_add_ec(struct llapi_layout *layout, uint32_t mirror_id,
 	    stripe_count == LLAPI_LAYOUT_WIDE)
 		stripe_count = dstripe_count;
 
-	if (layout_ec_verify_stripes(stripe_count, dstripe_count,
-				     cstripe_count)) {
+	if (layout_ec_verify(dstripe_count, cstripe_count, stripe_count)) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -2897,8 +2872,7 @@ int llapi_layout_comp_add_parity_only(struct llapi_layout *layout,
 		errno = EINVAL;
 		return -1;
 	}
-	if (layout_ec_verify_counts(dstripe_count, cstripe_count,
-				    data_stripe_count)) {
+	if (layout_ec_verify(dstripe_count, cstripe_count, data_stripe_count)) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -5920,9 +5894,8 @@ stripeset_with_data:
  * @data_comp: data component the parities are computed from
  * @ec_comp: EC parity component to validate against @data_comp
  *
- * The data and parity components must agree on stripe size and extent, and the
- * data component must have enough stripes to hold the requested parities,
- * otherwise the erasure coding would not fit in the extent.
+ * The data and parity components must agree on stripe size and extent.
+ * p may exceed the data stripe count.
  *
  * Return: 0 if the pair is consistent, -EINVAL otherwise
  */
@@ -5943,23 +5916,10 @@ static int llapi_ec_check_comp_match(struct llapi_layout_comp *data_comp,
 			    "data and ec range mismatch");
 		return -EINVAL;
 	}
-	/*
-	 * If there are more parities than there are data stripes then the
-	 * resulting erasure coding will no longer fit in the extent.
-	 * k == 1 is exempt: each parity is a memcpy of the data stripe
-	 * and may use p > 1.
-	 */
 	ec_parity_geom_init(&g, data_comp->llc_stripe_count,
 			    ec_comp->llc_dstripe_count,
 			    ec_comp->llc_stripe_size,
 			    ec_comp->llc_extent.e_start);
-	if (ec_comp->llc_dstripe_count != 1 &&
-	    data_comp->llc_stripe_count <
-	    (uint64_t)ec_raidset_count(&g.epg_split) *
-	    ec_comp->llc_cstripe_count) {
-		llapi_error(LLAPI_MSG_ERROR, -EINVAL, "too many parities");
-		return -EINVAL;
-	}
 	if (!ec_parity_fits(&g, ec_comp->llc_extent.e_end)) {
 		llapi_error(LLAPI_MSG_ERROR, -EINVAL,
 			    "ec parity does not fit in extent");
@@ -6019,12 +5979,11 @@ static int llapi_ec_check_comp_match(struct llapi_layout_comp *data_comp,
  *
  * LOV_PATTERN_PARITY is like RAID10: the raid sets of a stripe set are
  * striped like RAID0, and the p parities within one raid set share a
- * file offset like RAID1. They are not copies.
+ * file offset like RAID1. They are not copies, so p may exceed k.
  *
  * As a special case, if there is only a single data stripe (k == 1) then we
  * just store a copy of the data as each parity instead of computing it,
- * just as if it was a normal mirror of a single stripe. p may be greater
- * than 1 in this case (e.g. --ec 1+2).
+ * just as if it was a normal mirror of a single stripe.
  *
  * The data stripe consists of llc_stripe_count number of stripes.
  * This might be a large number, much larger than what we want to compute the
@@ -6755,9 +6714,9 @@ static int llapi_layout_sanity_cb(struct llapi_layout *layout,
 		}
 
 		/* EC parameter validation */
-		if (layout_ec_verify_stripes(data_comp->llc_stripe_count,
-					     comp->llc_dstripe_count,
-					     comp->llc_cstripe_count)) {
+		if (layout_ec_verify(comp->llc_dstripe_count,
+				     comp->llc_cstripe_count,
+				     data_comp->llc_stripe_count)) {
 			args->lsa_rc = LSE_EC_PARAM;
 			goto out_err;
 		}
