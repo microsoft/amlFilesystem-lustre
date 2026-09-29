@@ -2398,21 +2398,13 @@ static void test47(void)
 					  LUSTRE_EOF);
 	ASSERTF(rc == 0, "errno = %d", errno);
 
-	/* Test 1: total ec count > data stripe count (should fail) */
-	rc = llapi_layout_comp_add_ec(layout, 1, 0, 1024*1024*1024ULL, 3, 4);
-	ASSERTF(rc != 0,
-		"EC component with total stripe count > data stripe count should fail");
-
-	rc = llapi_layout_comp_add_ec(layout, 1, 0, 1024*1024*1024ULL, 4, 5);
-	ASSERTF(rc != 0, "EC component with cstripe > dstripe should fail");
-
-	/* Test 2: cstripe_count exceeds LOV_EC_MAX_CODING_STRIPES (should
+	/* Test 1: cstripe_count exceeds LOV_EC_MAX_CODING_STRIPES (should
 	 * fail)
 	 */
 	rc = llapi_layout_comp_add_ec(layout, 1, 0, 1024*1024*1024ULL, 255, 16);
 	ASSERTF(rc != 0, "EC component with cstripe_count > 15 should fail");
 
-	/* Test 3: dstripe + cstripe > 256 (should fail; Cauchy-over-GF(2^8)
+	/* Test 2: dstripe + cstripe > 256 (should fail; Cauchy-over-GF(2^8)
 	 * theoretical limit, k+m needs k+m distinct field elements and
 	 * GF(2^8) has 256)
 	 */
@@ -2420,12 +2412,17 @@ static void test47(void)
 	ASSERTF(rc != 0,
 		"EC component with dstripe+cstripe > 256 should fail");
 
-	/* Test 4: Valid parameters at maximum coding stripe limit with sum
+	/* Test 3: Valid parameters at LOV_EC_MAX_CODING_STRIPES with sum
 	 * exactly at LOV_EC_MAX_TOTAL_STRIPES (should succeed)
 	 */
 	rc = llapi_layout_comp_add_ec(layout, 1, 0, 1024*1024*1024ULL, 241, 15);
 	ASSERTF(rc == 0,
 		"EC component with dstripe+cstripe == 256 should succeed");
+
+	/* Test 4: p > k is allowed */
+	rc = llapi_layout_comp_add_ec(layout, 1, 1024*1024*1024ULL,
+				      LUSTRE_EOF, 3, 4);
+	ASSERTF(rc == 0, "EC 3+4 (p > k) should succeed, errno = %d", errno);
 
 	llapi_layout_free(layout);
 }

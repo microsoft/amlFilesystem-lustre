@@ -60,10 +60,11 @@ is the stripe size of the data component being protected. A parity component
 uses the same stripe size as its data component.
 .PP
 .I data_stripe_count
-is the stripe count of the data component being protected. Besides bounding
-K+P, it is stored as the parity component's own stripe count, from which the
-MDS derives the number of RAID Sets when the data component is not part of
-the same layout.
+is the stripe count of the data component being protected. It is stored as
+the parity component's own stripe count, from which the MDS derives the
+number of RAID Sets when the data component is not part of the same layout.
+P may exceed both K and
+.IR data_stripe_count .
 .PP
 .I pool_name
 is the OST pool of the data component being protected, so that parity objects
@@ -90,8 +91,9 @@ was zero,
 .I start
 was not below
 .IR end ,
-or the EC stripe counts exceeded the EC limits or did not fit
-.IR data_stripe_count .
+or the EC stripe counts or
+.I data_stripe_count
+were zero or exceeded the EC or stripe-count limits.
 .TP 15
 .B ENOMEM
 Insufficient memory to complete the operation.

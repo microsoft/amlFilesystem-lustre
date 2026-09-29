@@ -1540,6 +1540,133 @@ static bool lod_fdom_check_flr_allowed(struct lod_object *lo,
 }
 
 /**
+ * lod_verify_ec_parity_comp() - Cross-check one instantiated EC parity comp
+ * @lo: LOD object with parsed components
+ * @comp: instantiated parity component of @lo
+ *
+ * A parity that still has linked data needs a bidirectional link via
+ * lod_comp_find_linked(), inited data with matching k/p and stripe size,
+ * and stripe count ec_raidset_count() * p. A released parity or data is
+ * not checked at all.
+ *
+ * Return:
+ * * %0 if @comp matches its data peer, has none, or is released
+ * * %-EINVAL otherwise
+ */
+static int lod_verify_ec_parity_comp(struct lod_object *lo,
+				     struct lod_layout_component *comp)
+{
+	struct lod_layout_component *data;
+	struct ec_split_comp sc;
+	unsigned int full;
+
+	/* splitting or deleting its data mirror orphans a parity,
+	 * which then has no data to check against
+	 */
+	data = comp->llc_mirror_link_id ? lod_comp_find_linked(lo, comp) : NULL;
+	if (!data) {
+		CDEBUG(D_LAYOUT, "EC parity %#x has no linked data\n",
+		       comp->llc_id);
+		return 0;
+	}
+
+	/* HSM release and swap keep INIT, but the objects are gone */
+	if (data->llc_magic != LOV_MAGIC_FOREIGN &&
+	    ((data->llc_pattern | comp->llc_pattern) &
+	     LOV_PATTERN_F_RELEASED))
+		return 0;
+
+	if (lod_comp_find_linked(lo, data) != comp ||
+	    !lod_comp_inited(data) ||
+	    data->llc_magic == LOV_MAGIC_FOREIGN) {
+		CDEBUG(D_LAYOUT,
+		       "EC parity %#x has no usable linked data\n",
+		       comp->llc_id);
+		return -EINVAL;
+	}
+
+	if (data->llc_dstripe_count != comp->llc_dstripe_count ||
+	    data->llc_cstripe_count != comp->llc_cstripe_count ||
+	    (lov_pattern(data->llc_pattern) & LOV_PATTERN_MDT) ||
+	    data->llc_stripe_size != comp->llc_stripe_size) {
+		CDEBUG(D_LAYOUT,
+		       "EC parity %#x k+p %u+%u stripe %u != data %#x k+p %u+%u stripe %u pattern %#x\n",
+		       comp->llc_id, comp->llc_dstripe_count,
+		       comp->llc_cstripe_count, comp->llc_stripe_size,
+		       data->llc_id, data->llc_dstripe_count,
+		       data->llc_cstripe_count, data->llc_stripe_size,
+		       data->llc_pattern);
+		return -EINVAL;
+	}
+
+	/* avoid % 0 in ec_split_stripes() */
+	if (!comp->llc_dstripe_count || !comp->llc_cstripe_count) {
+		CDEBUG(D_LAYOUT,
+		       "EC parity %#x has zero k+p %u+%u\n",
+		       comp->llc_id, comp->llc_dstripe_count,
+		       comp->llc_cstripe_count);
+		return -EINVAL;
+	}
+
+	if (!data->llc_stripe_count) {
+		CDEBUG(D_LAYOUT, "EC data %#x has no stripes\n",
+		       data->llc_id);
+		return -EINVAL;
+	}
+
+	ec_split_stripes(data->llc_stripe_count,
+			 comp->llc_dstripe_count, &sc);
+	full = ec_raidset_count(&sc) * comp->llc_cstripe_count;
+	if (comp->llc_stripe_count != full) {
+		CDEBUG(D_LAYOUT,
+		       "EC parity %#x count %u != %u for data count %u\n",
+		       comp->llc_id, comp->llc_stripe_count, full,
+		       data->llc_stripe_count);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/**
+ * lod_verify_ec_parity_comps() - Cross-check instantiated EC parity comps
+ * @lo: LOD object with parsed components
+ * @strict: fail on a mismatched parity, else only log it
+ *
+ * Check each instantiated parity with lod_verify_ec_parity_comp(). Run
+ * strict on a LOV_MAGIC_DEFINED layout from replay, HSM release or swap
+ * layouts (lod_use_defined_striping()), and lenient on one loaded from
+ * disk (lod_parse_striping()), so a file with a bad parity can still be
+ * opened, repaired or unlinked.
+ *
+ * Return:
+ * * %0 if every instantiated parity matches its data peer, or !@strict
+ * * %-EINVAL otherwise
+ */
+int lod_verify_ec_parity_comps(struct lod_object *lo, bool strict)
+{
+	int i;
+
+	if (!lo->ldo_is_composite || !lo->ldo_comp_entries)
+		return 0;
+
+	for (i = 0; i < lo->ldo_comp_cnt; i++) {
+		struct lod_layout_component *comp = &lo->ldo_comp_entries[i];
+		int rc;
+
+		if (!(comp->llc_flags & LCME_FL_PARITY) ||
+		    !lod_comp_inited(comp))
+			continue;
+
+		rc = lod_verify_ec_parity_comp(lo, comp);
+		if (rc && strict)
+			return rc;
+	}
+
+	return 0;
+}
+
+/**
  * lod_ec_add_data() - Add additional data OSTs to data_comp.
  * @env: execution environment for this thread
  * @lo: LOD object
@@ -3626,6 +3753,8 @@ int lod_use_defined_striping(const struct lu_env *env,
 		lod_layout_scrub(mo->ldo_comp_entries, mo->ldo_comp_cnt);
 
 	rc = lod_fill_mirrors(mo);
+	if (!rc)
+		rc = lod_verify_ec_parity_comps(mo, true);
 	GOTO(out, rc);
 out:
 	if (rc)
@@ -4312,7 +4441,7 @@ int lod_comp_prep_create(const struct lu_env *env, struct lod_object *lo,
 			GOTO(out, rc = -EINVAL);
 
 		/*
-		 * lod_verify_striping() rejects zero k or m, but a layout
+		 * lod_verify_striping() rejects zero k or p, but a layout
 		 * loaded from disk does not pass through it again.
 		 */
 		if (lod_comp->llc_dstripe_count == 0 ||
