@@ -97,7 +97,8 @@ class JobStatsParser:
         'gi' : 'get_info',
         'si' : 'set_info',
         'qc' : 'quotactl',
-        'pa' : 'prealloc'
+        'pa' : 'prealloc',
+        'rp' : 'readpage',
     }
 
     def __init__(self):
@@ -143,6 +144,7 @@ class JobStatsParser:
         merge stats data of job to jobs
         '''
         job2 = jobs.get(job['job_id'], {})
+        job2.setdefault('ops', 0)
 
         for key in job.keys():
             if key not in self.op_keys.values():
