@@ -176,6 +176,11 @@ typedef enum {
 	 * corresponding to the object does not exists.
 	 */
 	LOC_F_NEW	= 0x00000001,
+	/* Have LOD fail with -EREMOTE rather than set up a new remote
+	 * object. A remote object already in the cache is still found, and
+	 * stacks without LOD ignore the flag.
+	 */
+	LOC_F_LOCAL	= 0x00000002,
 } loc_flags_t;
 
 /*

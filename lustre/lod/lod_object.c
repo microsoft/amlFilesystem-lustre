@@ -10272,6 +10272,8 @@ static int lod_object_init(const struct lu_env *env, struct lu_object *lo,
 	if (type == LU_SEQ_RANGE_MDT &&
 	    idx == lu_site2seq(lo->lo_dev->ld_site)->ss_node_id) {
 		cdev = &lod->lod_child->dd_lu_dev;
+	} else if (conf != NULL && conf->loc_flags & LOC_F_LOCAL) {
+		RETURN(-EREMOTE);
 	} else if (type == LU_SEQ_RANGE_MDT) {
 		ltd = &lod->lod_mdt_descs;
 		lod_getref(ltd);
