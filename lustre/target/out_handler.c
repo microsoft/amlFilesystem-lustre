@@ -925,6 +925,37 @@ stop:
 	RETURN(rc);
 }
 
+/*
+ * Whether @fid is known to be on another MDT, by the mapping LOD uses.
+ * Asked before the lookup, so that an object LOC_F_LOCAL would refuse never
+ * gets into the site: another thread looking it up meanwhile would find it
+ * dying there and take it for gone. Anything not known to be remote is left
+ * to the lookup.
+ */
+static bool out_fid_is_remote(const struct lu_env *env, struct dt_device *dt,
+			      const struct lu_fid *fid)
+{
+	struct seq_server_site *ss = lu_site2seq(dt->dd_lu_dev.ld_site);
+	struct lu_seq_range range = { 0 };
+	struct lu_server_fld *fld;
+
+	if (!ss || !fid_is_sane(fid) || fid_is_idif(fid))
+		return false;
+
+	if (fid_is_update_log(fid) || fid_is_update_log_dir(fid))
+		return fid_oid(fid) != ss->ss_node_id;
+
+	fld = ss->ss_server_fld;
+	if (!fid_seq_in_fldb(fid_seq(fid)) || !fld || !fld->lsf_seq_lookup)
+		return false;
+
+	fld_range_set_type(&range, LU_SEQ_RANGE_MDT);
+	if (fld->lsf_seq_lookup(env, fld, fid_seq(fid), &range) < 0)
+		return false;
+
+	return fld_range_is_mdt(&range) && range.lsr_index != ss->ss_node_id;
+}
+
 /**
  * tgt_update_bufs_get() - get the update buffers of an OUT or batch request
  * @req: OUT_UPDATE or MDS_BATCH request
@@ -1316,16 +1347,23 @@ int out_handle(struct tgt_session_info *tsi)
 			struct lu_object_conf conf;
 
 			update = object_update_request_get(our, j, NULL);
+			/*
+			 * An OUT thread must not set up a remote object, as
+			 * that reads its attributes from the MDT owning it.
+			 */
+			conf.loc_flags = LOC_F_LOCAL;
 			if (update->ou_type == OUT_CREATE)
-				conf.loc_flags = LOC_F_NEW;
-			else
-				conf.loc_flags = 0;
+				conf.loc_flags |= LOC_F_NEW;
 			CDEBUG(D_INFO, "%s: opc: 0x%x "DFID"\n",
 			       tgt_name(tsi->tsi_tgt), update->ou_type,
 			       PFID(&update->ou_fid));
 
-			dt_obj = dt_locate_at(env, dt, &update->ou_fid,
-				dt->dd_lu_dev.ld_site->ls_top_dev, &conf);
+			if (out_fid_is_remote(env, dt, &update->ou_fid))
+				dt_obj = ERR_PTR(-EREMOTE);
+			else
+				dt_obj = dt_locate_at(env, dt, &update->ou_fid,
+					dt->dd_lu_dev.ld_site->ls_top_dev,
+					&conf);
 			if (IS_ERR(dt_obj)) {
 				rc = PTR_ERR(dt_obj);
 				CDEBUG(D_HA,
@@ -1334,6 +1372,9 @@ int out_handle(struct tgt_session_info *tsi)
 				       tgt_name(tsi->tsi_tgt),
 				       update->ou_type,
 				       PFID(&update->ou_fid), rc);
+				/* not ours: same error as before */
+				if (rc == -EREMOTE)
+					rc = -ENOENT;
 				GOTO(out, rc);
 			}
 			if (dt->dd_record_fid_accessed) {
