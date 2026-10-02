@@ -121,6 +121,8 @@ struct mgs_export_data {
 	spinlock_t		med_lock;	/* protect med_clients */
 };
 
+#define NID_STATS_DISPOSE ((timeout_t)-1)
+
 /**
  * per-NID statistics structure.
  * It tracks access patterns to this export on a per-client-NID basis
@@ -139,6 +141,12 @@ struct nid_stat {
 	 * last recovery; -1 = phase never reached
 	 */
 	timeout_t		 nid_recovery_delay[LUT_RECOVERY_PHASE_NR];
+	/* ktime_get_seconds() when the last export went away; 0 = in use,
+	 * NID_STATS_DISPOSE = being freed
+	 */
+	timeout_t		 nid_last_idle;
+	/* freed via RCU: hash readers may still be walking this entry */
+	struct rcu_head		 nid_rcu;
 };
 
 #define nidstat_getref(nidstat)	\

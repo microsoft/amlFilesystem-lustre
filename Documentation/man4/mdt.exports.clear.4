@@ -1,0 +1,56 @@
+.TH MDT.EXPORTS.CLEAR 4 2026-09-08 "Lustre" "Lustre Kernel Interfaces"
+.SH NAME
+mdt.exports.clear, obdfilter.exports.clear \- clear per-NID export statistics
+.SH SYNOPSIS
+.SY
+.BI "lctl set_param mdt." FSNAME "*.exports.clear=" VALUE
+.SY
+.BI "lctl set_param obdfilter." FSNAME "*.exports.clear=" VALUE
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Per MDT and OST device.
+.TP
+.B Config
+.br
+Always present.
+.SH DESCRIPTION
+Writing any value to
+.B exports.clear
+resets
+.BI exports. NID .stats
+for every NID that has exports on the device.
+The LDLM counters in
+.BI exports. NID .ldlm_stats
+are not reset.
+.PP
+Since release 2.18.0, it also immediately frees the statistics of every idle
+NID (one with no exports left), however long it has been idle.
+The background scan controlled by
+.BR nid_stats_idle_time (4)
+only frees entries that have been idle for longer than that timeout.
+.PP
+The value written is not otherwise interpreted.
+.SH EXAMPLES
+Clear the NID statistics on every MDT of the
+.B testfs
+filesystem:
+.EX
+.RB mds# " lctl set_param mdt.testfs-*.exports.clear=1"
+.EE
+.SH AVAILABILITY
+.B mdt.exports.clear
+is part of the
+.BR lustre (7)
+filesystem package since release 1.8.0.
+.\" Added in commit 1.6.0-1131-g0521288fde
+.SH SEE ALSO
+.BR mdt.nid_stats_idle_time (4),
+.BR lustre (7),
+.BR lctl (8)

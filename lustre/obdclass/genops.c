@@ -398,6 +398,7 @@ struct obd_device *class_newdev(const char *type_name, const char *name,
 	INIT_LIST_HEAD(&newdev->obd_delayed_exports);
 	newdev->obd_exports_timed.rb_node = NULL;
 	INIT_LIST_HEAD(&newdev->obd_nid_stats);
+	INIT_LIST_HEAD(&newdev->obd_nid_stats_idle);
 	spin_lock_init(&newdev->obd_nid_lock);
 	spin_lock_init(&newdev->obd_dev_lock);
 	mutex_init(&newdev->obd_dev_mutex);
@@ -424,6 +425,7 @@ struct obd_device *class_newdev(const char *type_name, const char *name,
 	kref_init(&newdev->obd_refcount);
 
 	atomic_set(&newdev->obd_conn_inprogress, 0);
+	atomic_set(&newdev->obd_nid_stats_inprogress, 0);
 
 	strscpy(newdev->obd_uuid.uuid, uuid, sizeof(newdev->obd_uuid.uuid));
 
@@ -601,6 +603,15 @@ int class_register_device(struct obd_device *new_obd)
 				       obd_name_hash_params);
 		goto out_unlock;
 	}
+
+	/* MGS is left out on purpose: its per-NID stats only count
+	 * connects, target registrations and config lock traffic,
+	 * which tell nothing useful about a client. They should be
+	 * removed from the MGS altogether rather than aged out here.
+	 */
+	if (strcmp(new_obd->obd_type->typ_name, LUSTRE_MDT_NAME) == 0 ||
+	    strcmp(new_obd->obd_type->typ_name, LUSTRE_OST_NAME) == 0)
+		__xa_set_mark(&obd_devs, dev_no, OBD_DEVICE_TAG_TARGET);
 
 	class_incref(new_obd, "obd_device_list", new_obd);
 	new_obd->obd_minor = dev_no;

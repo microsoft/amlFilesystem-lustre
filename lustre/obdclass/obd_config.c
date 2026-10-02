@@ -16,7 +16,6 @@
 #define DEBUG_SUBSYSTEM S_CLASS
 
 #include <linux/ctype.h>
-#include <linux/delay.h>
 #include <linux/kobject.h>
 #include <linux/string.h>
 #include <linux/umh.h>
@@ -277,48 +276,87 @@ static const struct rhashtable_params nid_stats_hash_params = {
 	.automatic_shrinking	= true,
 };
 
-struct nid_stat *obd_nid_stats_get(struct obd_device *obd, struct nid_stat *ns)
+struct nid_stat *obd_nid_stats_insert(struct obd_device *obd,
+				      struct nid_stat *ns)
 {
+	unsigned long deadline = jiffies + cfs_time_seconds(obd_timeout);
 	struct rhlist_head *exports, *pos;
-	struct nid_stat *ns2 = NULL, *tmp;
+	struct nid_stat *tmp, *ret;
+	long timeout;
+	int rc;
 
+retry:
+	ret = NULL;
+	/* lookup and insert under obd_nid_lock, so that two connects from
+	 * the same NID cannot both miss the lookup and insert twice
+	 */
+	spin_lock(&obd->obd_nid_lock);
 	rcu_read_lock();
 	exports = rhltable_lookup(&obd->obd_nid_stats_hash, &ns->nid,
 				  nid_stats_hash_params);
-	if (!exports)
-		goto insert_key;
-
-	rhl_for_each_entry_rcu(tmp, pos, exports, nid_hash) {
-		if (obd == tmp->nid_obd) {
-			nidstat_getref(tmp);
-			ns2 = tmp;
-			goto unlock;
+	if (exports) {
+		rhl_for_each_entry_rcu(tmp, pos, exports, nid_hash) {
+			if (obd == tmp->nid_obd) {
+				ret = tmp;
+				break;
+			}
 		}
 	}
 
-	if (!ns2) {
-		int rc;
-insert_key:
+	if (ret && ret->nid_last_idle == NID_STATS_DISPOSE) {
+		ret = ERR_PTR(-EBUSY);
+	} else if (ret) {
+		nidstat_getref(ret);
+		ret->nid_last_idle = 0;
+		list_move_tail(&ret->nid_list, &obd->obd_nid_stats);
+	} else {
 		nidstat_getref(ns);
 		rc = rhltable_insert_key(&obd->obd_nid_stats_hash, &ns->nid,
 					 &ns->nid_hash, nid_stats_hash_params);
 		if (rc < 0) {
 			nidstat_putref(ns);
-			ns2 = ERR_PTR(rc);
+			ret = ERR_PTR(rc);
 		} else {
-			ns2 = ns;
+			list_move_tail(&ns->nid_list, &obd->obd_nid_stats);
+			ret = ns;
 		}
 	}
-unlock:
 	rcu_read_unlock();
+	spin_unlock(&obd->obd_nid_lock);
 
-	return ns2;
+	if (PTR_ERR_OR_ZERO(ret) != -EBUSY)
+		return ret;
+
+	if (time_after_eq(jiffies, deadline)) {
+		CERROR("%s: NID stats for %s still disposing after %us: rc = %ld\n",
+		       obd->obd_name, libcfs_nidstr(&ns->nid), obd_timeout,
+		       PTR_ERR(ret));
+		return ret;
+	}
+
+	/* a DISPOSE entry leaves the hash before its disposer drops
+	 * obd_nid_stats_inprogress, so wait for that. Use a signed
+	 * timeout, jiffies may already be past deadline.
+	 */
+	timeout = (long)(deadline - jiffies);
+	if (timeout > 0)
+		wait_var_event_timeout(&obd->obd_nid_stats_inprogress,
+				!atomic_read(&obd->obd_nid_stats_inprogress),
+				timeout);
+	goto retry;
 }
-EXPORT_SYMBOL(obd_nid_stats_get);
+EXPORT_SYMBOL(obd_nid_stats_insert);
 
-void obd_nid_stats_put(struct obd_device *obd, struct nid_stat *ns)
+void obd_nid_stats_remove(struct obd_device *obd, struct nid_stat *ns)
 {
 	int rc;
+
+	LASSERT(list_empty(&ns->nid_list));
+
+	/* remove debugfs while still hashed, so a concurrent insert of this
+	 * NID waits on the DISPOSE entry instead of hitting -EEXIST
+	 */
+	debugfs_remove_recursive(ns->nid_debugfs);
 
 	rcu_read_lock();
 	rc = rhltable_remove(&obd->obd_nid_stats_hash, &ns->nid_hash,
@@ -327,7 +365,7 @@ void obd_nid_stats_put(struct obd_device *obd, struct nid_stat *ns)
 		nidstat_putref(ns);
 	rcu_read_unlock();
 }
-EXPORT_SYMBOL(obd_nid_stats_put);
+EXPORT_SYMBOL(obd_nid_stats_remove);
 
 #endif /* CONFIG_LUSTRE_FS_SERVER */
 
@@ -1007,6 +1045,14 @@ int class_cleanup(struct obd_device *obd, struct lustre_cfg *lcfg)
 	wait_var_event(&obd->obd_conn_inprogress,
 		       atomic_read(&obd->obd_conn_inprogress) == 0);
 	smp_rmb();
+
+	/* wait for idle NID stats disposers before debugfs goes away. The
+	 * smp_mb() pairs with their atomic_inc_return(); wait_var_event()
+	 * checks the condition without a barrier of its own.
+	 */
+	smp_mb();
+	wait_var_event(&obd->obd_nid_stats_inprogress,
+		       atomic_read(&obd->obd_nid_stats_inprogress) == 0);
 
 	if (lcfg->lcfg_bufcount >= 2 && LUSTRE_CFG_BUFLEN(lcfg, 1) > 0) {
 		for (flag = lustre_cfg_string(lcfg, 1); *flag != 0; flag++)

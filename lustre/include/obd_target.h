@@ -28,6 +28,7 @@ struct obd_device_target {
 	__u64			obt_mount_count;
 	struct obd_job_stats	obt_jobstats;
 	struct nm_config_file	*obt_nodemap_config_file;
+	timeout_t		obt_nid_stats_idle_time;
 };
 
 #define OBJ_SUBDIR_COUNT 32 /* set to zero for no subdirs */
@@ -102,6 +103,19 @@ static inline struct obd_device_target *obd2obt(struct obd_device *obd)
 	return obt;
 }
 
+#define NID_STATS_IDLE_DEFAULT 3600
+
+/* 0 until obd_obt_init(): the target mark is set at attach, before setup */
+static inline timeout_t obd_nid_stats_idle_time(struct obd_device *obd)
+{
+	struct obd_device_target *obt = (void *)&obd->u;
+
+	if (obt->obt_magic != OBT_MAGIC)
+		return 0;
+
+	return obt->obt_nid_stats_idle_time;
+}
+
 static inline struct obd_device_target *obd_obt_init(struct obd_device *obd)
 {
 	struct obd_device_target *obt;
@@ -109,6 +123,7 @@ static inline struct obd_device_target *obd_obt_init(struct obd_device *obd)
 	obt = (void *)&obd->u;
 	obt->obt_magic = OBT_MAGIC;
 	obt->obt_instance = 0;
+	obt->obt_nid_stats_idle_time = NID_STATS_IDLE_DEFAULT;
 
 	return obt;
 }

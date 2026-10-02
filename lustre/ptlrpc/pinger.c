@@ -20,6 +20,7 @@
 #include <linux/workqueue.h>
 #include <obd_support.h>
 #include <obd_class.h>
+#include <obd_target.h>
 #include "ptlrpc_internal.h"
 
 static int suppress_pings;
@@ -412,6 +413,11 @@ void ptlrpc_pinger_wake_up(void)
 #define PET_READY     1
 #define PET_TERMINATE 2
 
+/* granularity of the idle NID stats GC pass below - also the effective lower
+ * bound on nid_stats_idle_time
+ */
+#define PET_GC_PERIOD 60
+
 static int pet_refcount;
 static int pet_state;
 static wait_queue_head_t pet_waitq;
@@ -440,11 +446,36 @@ int ping_evictor_wake(struct obd_export *exp)
 	return 0;
 }
 
+static void ping_evict_idle_nid_stats(void)
+{
+	struct obd_device *obd;
+	unsigned long devno;
+
+	obd_device_lock();
+	obd_device_for_each_target(devno, obd) {
+		if (obd_nid_stats_idle_time(obd) <= 0)
+			continue;
+
+		class_incref(obd, "idle_evictor", obd);
+		obd_device_unlock();
+
+		/* may drop the last ref and class_free_dev() sleeps, so not
+		 * under obd_device_lock(); the walk resumes from devno
+		 */
+		lprocfs_evict_idle_nid_stats(obd);
+		class_decref(obd, "idle_evictor", obd);
+
+		obd_device_lock();
+	}
+	obd_device_unlock();
+}
+
 static int ping_evictor_main(void *arg)
 {
 	struct obd_device *obd;
 	struct obd_export *exp;
 	time64_t current_time;
+	unsigned long next_gc;
 	struct lu_env env;
 	int rc;
 
@@ -462,14 +493,27 @@ static int ping_evictor_main(void *arg)
 	unshare_fs_struct();
 	CDEBUG(D_HA, "Starting Ping Evictor\n");
 	pet_state = PET_READY;
+	next_gc = jiffies + cfs_time_seconds(PET_GC_PERIOD);
 	while (1) {
-		wait_event_idle(pet_waitq,
-				(!list_empty(&pet_list)) ||
-				(pet_state == PET_TERMINATE));
+		wait_event_idle_timeout(pet_waitq,
+					(!list_empty(&pet_list)) ||
+					(pet_state == PET_TERMINATE),
+					cfs_time_seconds(PET_GC_PERIOD));
 
 		/* loop until all obd's will be removed */
 		if ((pet_state == PET_TERMINATE) && list_empty(&pet_list))
 			break;
+
+		if (time_after_eq(jiffies, next_gc)) {
+			/* fixed schedule: pet_list is rarely empty on a busy
+			 * cluster, so don't wait for it to drain
+			 */
+			ping_evict_idle_nid_stats();
+			next_gc = jiffies + cfs_time_seconds(PET_GC_PERIOD);
+		}
+
+		if (list_empty(&pet_list))
+			continue;
 
 		rc = lu_env_refill(&env);
 		if (unlikely(rc)) {
