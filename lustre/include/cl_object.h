@@ -1905,6 +1905,11 @@ struct cl_io {
 			 */
 			struct cl_page *ec_wait_page;
 			loff_t ec_inode_size;
+			/* the raid set that parity cannot rebuild, read by
+			 * waiting for its OSTs (ci_ec_wait)
+			 */
+			loff_t ec_wait_start;
+			loff_t ec_wait_end;
 			/* set by lov_io_ec_rd_start when recovery is
 			 * impossible (err_nr > pcount); tells
 			 * vvp_io_ec_rd_end to skip generic_file_read_iter
@@ -2099,6 +2104,10 @@ struct cl_io {
 			     ci_hybrid_switched:1,
 	/* this IO is to a parity mirror */
 			     ci_parity_io:1,
+	/* EC parity cannot rebuild the read: read the stripes and wait for
+	 * their OSTs, as for a file without parity
+	 */
+			     ci_ec_wait:1,
 	/* LNet route supports PCI P2P DMA */
 			     ci_p2pdma_unsupported:1,
 	/* Switch to CIT_EC_RD */

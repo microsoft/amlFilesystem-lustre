@@ -897,10 +897,15 @@ int cl_io_loop(const struct lu_env *env, struct cl_io *io)
 		result = rc;
 
 	/* ci_ndelay is cleared once all mirrors were tried, so check that
-	 * first, or an -EAGAIN of that round would reach the caller
+	 * before ci_ndelay, or an -EAGAIN of that round would reach the
+	 * caller. ci_ec_wait goes first: a CIT_EC_RD that tried all mirrors
+	 * must still restart to wait for the OSTs parity cannot replace
 	 */
 	if (result == -EAGAIN && !io->ci_iocb_nowait) {
-		if (io->ci_tried_all_mirrors) {
+		if (io->ci_ec_wait) {
+			io->ci_need_restart = 1;
+			result = 0;
+		} else if (io->ci_tried_all_mirrors) {
 			result = -EIO;
 		} else if (io->ci_ndelay) {
 			io->ci_need_restart = 1;

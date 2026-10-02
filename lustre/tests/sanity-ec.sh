@@ -5207,14 +5207,15 @@ drop_client_cache() {
 
 test_29a() {
 	# With 2+1 EC, losing 2 OSTs exceeds parity tolerance.
-	# Read must fail (not return corrupt data). This test should
-	# pass today -- we expect an error, and we get one.
+	# The read must wait for them rather than fail or return bad data.
 	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
 	enable_ec
 
 	local tf=$DIR/$tfile
+	local got=$TMP/$tfile.md5
+	local sum pid mode
 
-	stack_trap "rm -f $tf" EXIT
+	stack_trap "rm -f $tf $got"
 
 	# 2+1 EC: can only tolerate 1 failure
 	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
@@ -5223,6 +5224,7 @@ test_29a() {
 	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
 	$LFS mirror resync $tf || error "resync failed"
 	verify_flr_state $tf "ro"
+	sum=$(dd if=$tf bs=4M 2> /dev/null | md5sum)
 
 	# Identify two distinct OSTs used by the data stripe
 	local ost_indices=($($LFS getstripe $tf |
@@ -5231,27 +5233,268 @@ test_29a() {
 	local facet1=ost$((ost_indices[0] + 1))
 	local facet2=ost$((ost_indices[1] + 1))
 
-	echo "Stopping $facet1 and $facet2 (exceeds 2+1 parity tolerance)"
-	stop $facet1
-	stop $facet2
-	wait_osc_import_state client $facet1 "\(DISCONN\|IDLE\)"
-	wait_osc_import_state client $facet2 "\(DISCONN\|IDLE\)"
-	drop_client_cache
+	for mode in buffered direct; do
+		local iflag=""
 
-	# Read must fail -- returning success with wrong data would be
-	# catastrophic. Either an I/O error or timeout is acceptable.
-	if md5sum $tf 2>/dev/null; then
-		error "read should have failed with 2 OSTs down on 2+1 EC"
-	else
-		echo "Read correctly failed when losses exceed parity tolerance"
-	fi
+		[[ $mode == direct ]] && iflag="iflag=direct"
+		echo "$mode read, stopping $facet1 and $facet2 (over parity)"
+		stop $facet1 || error "stop $facet1 failed"
+		stop $facet2 || error "stop $facet2 failed"
+		stack_trap "facet_up $facet1 || \
+			start $facet1 $(ostdevname $((ost_indices[0] + 1))) \
+			$OST_MOUNT_OPTS; \
+			facet_up $facet2 || \
+			start $facet2 $(ostdevname $((ost_indices[1] + 1))) \
+			$OST_MOUNT_OPTS"
+		wait_osc_import_state client $facet1 "\(DISCONN\|IDLE\)"
+		wait_osc_import_state client $facet2 "\(DISCONN\|IDLE\)"
+		drop_client_cache
 
-	start $facet1 $(ostdevname $((ost_indices[0] + 1))) $OST_MOUNT_OPTS
-	start $facet2 $(ostdevname $((ost_indices[1] + 1))) $OST_MOUNT_OPTS
-	wait_recovery_complete $facet1
-	wait_recovery_complete $facet2
+		# As for a file without parity, the read waits for the stopped
+		# OSTs to return (e.g. an OSS failover), then returns the data
+		dd if=$tf bs=4M $iflag 2> /dev/null | md5sum > $got &
+		pid=$!
+		sleep 10
+		kill -0 $pid 2> /dev/null ||
+			error "$mode read did not wait with 2 OSTs down"
+
+		start $facet1 $(ostdevname $((ost_indices[0] + 1))) \
+			$OST_MOUNT_OPTS || error "start $facet1 failed"
+		start $facet2 $(ostdevname $((ost_indices[1] + 1))) \
+			$OST_MOUNT_OPTS || error "start $facet2 failed"
+		wait_recovery_complete $facet1
+		wait_recovery_complete $facet2
+
+		wait $pid || error "$mode read failed after the OSTs returned"
+		[[ "$(cat $got)" == "$sum" ]] ||
+			error "$mode read after the OSTs returned wrong data"
+	done
 }
-run_test 29a "EC read fails when OST losses exceed parity tolerance"
+run_test 29a "EC read with OST losses over parity waits for them"
+
+test_29b() {
+	(( OSTCOUNT >= 6 )) || skip "need >= 6 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local got=$TMP/$tfile.md5
+	local sum pid mode
+
+	stack_trap "rm -f $tf $got"
+
+	# two 2+1 raid sets: data stripes 0,1 and 2,3, one parity stripe each
+	$LFS setstripe -E -1 -S 1M -c 4 --ec 2+1 $tf ||
+		error "setstripe --ec 2+1 failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+	sum=$(dd if=$tf bs=4M 2> /dev/null | md5sum)
+
+	# the data component is listed first, then the parity component
+	local all=($($LFS getstripe $tf | awk '/l_ost_idx:/ { print $5 }' |
+		tr -d ','))
+	local data=(${all[@]:0:4})
+
+	(( ${#all[@]} == 6 )) || error "bad layout: OSTs ${all[*]}"
+	(( $(printf '%s\n' "${all[@]}" | sort -u | wc -l) == 6 )) ||
+		skip "data and parity objects share OSTs: ${all[*]}"
+
+	local facet1=ost$((data[0] + 1))
+	local facet2=ost$((data[1] + 1))
+	local saved=$($LCTL get_param -n osc.*.resend_count | head -n1)
+
+	# raid set 1 loses stripe 2, which its parity can rebuild; fail its
+	# reads on the OST as ec_deactivate_ost() does (defined after this)
+	(( data[2] < 16 )) || skip "OST index ${data[2]} over fault mask"
+	$LCTL set_param -n osc.*.resend_count=1
+	stack_trap "$LCTL set_param -n osc.*.resend_count=$saved"
+	#define OBD_FAIL_OST_BRW_READ_BULK	0x20f
+	do_nodes $(osts_nodes) $LCTL set_param -n fail_loc=0x20f \
+		fail_val=$((0x10000 | (1 << data[2]))) ||
+		error "set fail_loc on OST failed"
+	stack_trap "do_nodes $(osts_nodes) $LCTL set_param -n \
+		fail_loc=0 fail_val=0"
+
+	for mode in buffered direct; do
+		local iflag=""
+
+		[[ $mode == direct ]] && iflag="iflag=direct"
+		echo "$mode read, stopping $facet1 and $facet2 (raid set 0)"
+		stop $facet1 || error "stop $facet1 failed"
+		stop $facet2 || error "stop $facet2 failed"
+		stack_trap "facet_up $facet1 || \
+			start $facet1 $(ostdevname $((data[0] + 1))) \
+			$OST_MOUNT_OPTS; \
+			facet_up $facet2 || \
+			start $facet2 $(ostdevname $((data[1] + 1))) \
+			$OST_MOUNT_OPTS"
+		wait_osc_import_state client $facet1 "\(DISCONN\|IDLE\)"
+		wait_osc_import_state client $facet2 "\(DISCONN\|IDLE\)"
+		drop_client_cache
+
+		# raid set 0 waits for its OSTs, raid set 1 is still rebuilt
+		dd if=$tf bs=4M $iflag 2> /dev/null | md5sum > $got &
+		pid=$!
+		sleep 10
+		kill -0 $pid 2> /dev/null ||
+			error "$mode read did not wait for raid set 0"
+
+		start $facet1 $(ostdevname $((data[0] + 1))) \
+			$OST_MOUNT_OPTS || error "start $facet1 failed"
+		start $facet2 $(ostdevname $((data[1] + 1))) \
+			$OST_MOUNT_OPTS || error "start $facet2 failed"
+		wait_recovery_complete $facet1
+		wait_recovery_complete $facet2
+
+		wait $pid || error "$mode read failed after the OSTs returned"
+		[[ "$(cat $got)" == "$sum" ]] ||
+			error "$mode read of rebuilt raid set 1 wrong data"
+	done
+}
+run_test 29b "EC read rebuilds a later raid set after waiting"
+
+test_29c() {
+	(( OSTCOUNT >= 6 )) || skip "need >= 6 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local got=$TMP/$tfile.md5
+	local sum pid mode i
+
+	stack_trap "rm -f $tf $got"
+
+	# two 2+1 raid sets: data stripes 0,1 and 2,3, one parity stripe each
+	$LFS setstripe -E -1 -S 1M -c 4 --ec 2+1 $tf ||
+		error "setstripe --ec 2+1 failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+	sum=$(dd if=$tf bs=4M 2> /dev/null | md5sum)
+
+	# the data component is listed first, then the parity component
+	local all=($($LFS getstripe $tf | awk '/l_ost_idx:/ { print $5 }' |
+		tr -d ','))
+	local data=(${all[@]:0:4})
+
+	(( ${#all[@]} == 6 )) || error "bad layout: OSTs ${all[*]}"
+	(( $(printf '%s\n' "${all[@]}" | sort -u | wc -l) == 6 )) ||
+		skip "data and parity objects share OSTs: ${all[*]}"
+
+	# raid set 0 loses stripe 0, which its parity can rebuild, and
+	# raid set 1 loses stripes 2 and 3, which its parity cannot
+	local idx=(${data[0]} ${data[2]} ${data[3]})
+	local facets=() devs=()
+
+	for i in ${idx[@]}; do
+		facets+=(ost$((i + 1)))
+		devs+=($(ostdevname $((i + 1))))
+	done
+
+	for mode in buffered direct; do
+		local iflag=""
+
+		[[ $mode == direct ]] && iflag="iflag=direct"
+		echo "$mode read, stopping ${facets[*]}"
+		for i in 0 1 2; do
+			stop ${facets[i]} || error "stop ${facets[i]} failed"
+			stack_trap "facet_up ${facets[i]} || \
+				start ${facets[i]} ${devs[i]} $OST_MOUNT_OPTS"
+		done
+		for i in 0 1 2; do
+			wait_osc_import_state client ${facets[i]} \
+				"\(DISCONN\|IDLE\)"
+		done
+		drop_client_cache
+
+		dd if=$tf bs=4M $iflag 2> /dev/null | md5sum > $got &
+		pid=$!
+		sleep 10
+		kill -0 $pid 2> /dev/null ||
+			error "$mode read did not wait for raid set 1"
+
+		# only raid set 1's OSTs return: raid set 0 is still rebuilt
+		# from parity, so the read must not wait for ${facets[0]}
+		for i in 1 2; do
+			start ${facets[i]} ${devs[i]} $OST_MOUNT_OPTS ||
+				error "start ${facets[i]} failed"
+		done
+		wait_recovery_complete ${facets[1]}
+		wait_recovery_complete ${facets[2]}
+
+		for i in {1..60}; do
+			kill -0 $pid 2> /dev/null || break
+			sleep 1
+		done
+		if kill -0 $pid 2> /dev/null; then
+			start ${facets[0]} ${devs[0]} $OST_MOUNT_OPTS
+			wait $pid
+			error "$mode read waited for ${facets[0]} of raid set 0"
+		fi
+		wait $pid || error "$mode read failed after the OSTs returned"
+		[[ "$(cat $got)" == "$sum" ]] ||
+			error "$mode read of rebuilt raid set 0 wrong data"
+
+		start ${facets[0]} ${devs[0]} $OST_MOUNT_OPTS ||
+			error "start ${facets[0]} failed"
+		wait_recovery_complete ${facets[0]}
+	done
+}
+run_test 29c "EC read rebuilds an earlier raid set before waiting"
+
+test_29d() {
+	# Parity that is stale after a write cannot rebuild a lost stripe.
+	# The read must wait for its OST rather than fail.
+	(( OSTCOUNT >= 3 )) || skip "need >= 3 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local got=$TMP/$tfile.md5
+	local sum pid mode ost facet
+
+	stack_trap "rm -f $tf $got"
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	# the parity is stale until the next resync
+	dd if=/dev/urandom of=$tf bs=1M count=1 conv=notrunc,fsync ||
+		error "rewrite failed"
+	[[ -n "$($LFS getstripe --component-flags=stale,parity -I $tf)" ]] ||
+		error "parity is not stale after the rewrite"
+	sum=$(dd if=$tf bs=4M 2> /dev/null | md5sum)
+
+	ost=$($LFS getstripe $tf | awk '/l_ost_idx:/ { print $5; exit }' |
+	      tr -d ',')
+	facet=ost$((ost + 1))
+
+	for mode in buffered direct; do
+		local iflag=""
+
+		[[ $mode == direct ]] && iflag="iflag=direct"
+		echo "$mode read, stopping $facet with stale parity"
+		stop $facet || error "stop $facet failed"
+		stack_trap "facet_up $facet || \
+			start $facet $(ostdevname $((ost + 1))) $OST_MOUNT_OPTS"
+		wait_osc_import_state client $facet "\(DISCONN\|IDLE\)"
+		drop_client_cache
+
+		dd if=$tf bs=4M $iflag 2> /dev/null | md5sum > $got &
+		pid=$!
+		sleep 10
+		kill -0 $pid 2> /dev/null ||
+			error "$mode read did not wait with stale parity"
+
+		start $facet $(ostdevname $((ost + 1))) $OST_MOUNT_OPTS ||
+			error "start $facet failed"
+		wait_recovery_complete $facet
+
+		wait $pid || error "$mode read failed after the OST returned"
+		[[ "$(cat $got)" == "$sum" ]] ||
+			error "$mode read after the OST returned wrong data"
+	done
+}
+run_test 29d "EC read with stale parity waits for a lost OST"
 
 test_30b() {
 	# Test resync after parity OST recovery. Write data (parity

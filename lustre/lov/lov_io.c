@@ -647,7 +647,6 @@ static loff_t lov_io_top_file_size(const struct lu_env *env,
 static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 			      struct lov_object *obj, struct cl_io *io)
 {
-	struct lov_device *dev = lov_object_dev(obj);
 	struct lov_layout_composite *comp = &obj->u.composite;
 	bool skipped_parity = false;
 	int index = -ENOENT;
@@ -660,13 +659,23 @@ static int lov_io_mirror_init(const struct lu_env *env, struct lov_io *lio,
 		if (lov_find_comp_with_ec(lio, obj, &index)) {
 			lio->lis_mirror_index = index;
 			GOTO(ndelay_retry, result);
-		} else {
-			result = -EIO;
-			CWARN("%s: "DFID": no updated parity component to restore data: rc = %d\n",
-			      lov2obd(dev->ld_lov)->obd_name,
-			      PFID(lu_object_fid(lov2lu(obj))), result);
-			RETURN(result);
 		}
+
+		/* no parity in sync can rebuild the data, e.g. after a write
+		 * before a resync, so read the stripes and wait for their
+		 * OSTs, as for a file without parity.  A nowait read gets
+		 * -EAGAIN, to be retried where it may block.
+		 */
+		if (io->ci_iocb_nowait)
+			RETURN(-EAGAIN);
+
+		CDEBUG(D_VFSTRACE, DFID": no parity in sync, wait for OSTs\n",
+		       PFID(lu_object_fid(lov2lu(obj))));
+		io->u.ci_ec.ec_wait_start = lio->lis_pos;
+		io->u.ci_ec.ec_wait_end = lio->lis_endpos;
+		io->ci_ec_wait = 1;
+		io->ci_need_restart = 1;
+		RETURN(-ENODATA);
 	}
 
 	if (!lov_is_flr(obj)) {
@@ -3474,8 +3483,9 @@ static int lov_io_ec_rd_start(const struct lu_env *env,
 		 * even when the pre-check was OK (a second OST can die mid-IO,
 		 * or all_states reveals more error stripes than lso_status
 		 * predicted).
-		 * Bail out cleanly so vvp_io_ec_rd_end skips the cache read
-		 * and we return -EAGAIN instead of zeros.
+		 * Bail out cleanly so vvp_io_ec_rd_end skips the cache read,
+		 * and restart as a read that waits for the stripes' OSTs, as
+		 * for a file without parity, instead of returning zeros.
 		 */
 		if (err_nr >= LOV_EC_MAX_CODING_STRIPES || err_nr > pcount) {
 			CWARN("%s: "DFID": too many unrecoverable stripes in raid set %u at %lld: err_nr %d > pcount %d: rc = %d\n",
@@ -3483,6 +3493,9 @@ static int lov_io_ec_rd_start(const struct lu_env *env,
 			      PFID(lu_object_fid(lov2lu(lov))),
 			      raid_set, soff, err_nr, pcount, -EIO);
 			io->u.ci_ec.ec_recovery_failed = true;
+			io->u.ci_ec.ec_wait_start = soff;
+			io->u.ci_ec.ec_wait_end = eoff;
+			io->ci_ec_wait = 1;
 			GOTO(rg_cleanup, rc = -EAGAIN);
 		}
 
@@ -3544,7 +3557,10 @@ static int lov_io_ec_rd_start(const struct lu_env *env,
 				      par_stripes_used, err_nr, -EIO);
 				/* plist cleanup handled by rg_cleanup: path */
 				io->u.ci_ec.ec_recovery_failed = true;
-				GOTO(rg_cleanup, rc = -EIO);
+				io->u.ci_ec.ec_wait_start = soff;
+				io->u.ci_ec.ec_wait_end = eoff;
+				io->ci_ec_wait = 1;
+				GOTO(rg_cleanup, rc = -EAGAIN);
 			}
 
 			/* Init recovery tables; allocates working buffers

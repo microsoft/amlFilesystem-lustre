@@ -2323,6 +2323,9 @@ ll_file_io_generic(const struct lu_env *env, struct vvp_io_args *args,
 	int retries = RETRY_ATTEMPTS;
 	size_t per_bytes;
 	bool partial_io;
+	bool ec_wait = false;
+	loff_t ec_wait_start = 0;
+	loff_t ec_wait_end = 0;
 	int rc2 = 0;
 	int rc = 0;
 	enum cl_io_type acct_iot; /* accounting/logical IO type */
@@ -2380,10 +2383,40 @@ restart:
 		per_bytes = max_io_bytes;
 		partial_io = true;
 	}
-	if (switch_ec && iot == CIT_READ)
+	if (switch_ec && iot == CIT_READ) {
 		iot = CIT_EC_RD;
+	} else if (ec_wait && *ppos < ec_wait_start) {
+		/* rebuild the raid sets before [ec_wait_start, ec_wait_end)
+		 * from parity, so the waiting read below only reads the raid
+		 * set that parity cannot rebuild
+		 */
+		iot = CIT_EC_RD;
+		if (*ppos + per_bytes > ec_wait_start) {
+			per_bytes = ec_wait_start - *ppos;
+			partial_io = true;
+		}
+	} else if (ec_wait) {
+		/* wait only for the raid set parity cannot rebuild */
+		iot = CIT_READ;
+		if (ec_wait_end > *ppos && *ppos + per_bytes > ec_wait_end) {
+			per_bytes = ec_wait_end - *ppos;
+			partial_io = true;
+		}
+	}
+	/* a failed sync direct read freed its aio for CIT_EC_RD */
+	if (ec_wait && iot == CIT_READ && flags & IOCB_DIRECT &&
+	    !ci_dio_aio) {
+		ci_dio_aio = cl_dio_aio_alloc(args->u.normal.via_iocb,
+					      ll_i2info(inode)->lli_clob,
+					      false);
+		if (!ci_dio_aio)
+			GOTO(out, rc = -ENOMEM);
+	}
 	io = vvp_env_new_io(env);
 	ll_io_init(io, file, iot, args);
+	/* parity cannot rebuild the data: wait for the stripes' OSTs */
+	if (ec_wait && iot == CIT_READ)
+		io->ci_ndelay = 0;
 	io->ci_dio_aio = ci_dio_aio;
 	io->ci_dio_lock = dio_lock;
 	io->ci_ndelay_tried = retried;
@@ -2465,6 +2498,12 @@ restart:
 		rc2 = cl_sync_io_wait_recycle(env, anchor, 0, 0);
 		if (rc2 < 0)
 			rc = rc2;
+
+		/* the read that waits for the OSTs must not fall back to
+		 * CIT_EC_RD
+		 */
+		if (ec_wait)
+			io->ci_cross_ec = 0;
 
 		/* DIO read failed on an EC file -- the BRW error arrives
 		 * after cl_io_end, so the synchronous -EAGAIN handling in
@@ -2580,6 +2619,16 @@ out:
 		 */
 		retried = io->ci_bytes ? 0 : io->ci_ndelay_tried;
 		switch_ec = io->ci_switch_ec_io;
+		if (io->ci_ec_wait) {
+			switch_ec = false;
+			ec_wait = true;
+			ec_wait_start = io->u.ci_ec.ec_wait_start;
+			ec_wait_end = io->u.ci_ec.ec_wait_end;
+		} else if (ec_wait && *ppos >= ec_wait_end) {
+			/* later raid sets may be rebuilt from parity again */
+			ec_wait = false;
+			retried = 0;
+		}
 		dio_lock = io->ci_dio_lock;
 		goto restart;
 	}
