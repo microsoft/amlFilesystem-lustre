@@ -39,6 +39,7 @@
 
 #define DEBUG_SUBSYSTEM S_LDLM
 
+#include <linux/delay.h>
 #include <linux/fs_struct.h>
 #include <lustre_errno.h>
 #include <lustre_dlm.h>
@@ -2524,8 +2525,14 @@ static int replay_lock_interpret(const struct lu_env *env,
 	ptlrpc_import_recovery_state_machine(req->rq_import);
 	ldlm_lock_put(lock);
 out:
-	if (rc != ELDLM_OK || CFS_FAIL_CHECK(OBD_FAIL_PTLRPC_FAIL_REPLAY))
+	if (rc != ELDLM_OK || CFS_FAIL_CHECK(OBD_FAIL_PTLRPC_FAIL_REPLAY)) {
+		/* test_170: let the woken lock replay thread pass its
+		 * REPLAY_LOCKS check before the import starts reconnecting
+		 */
+		if (CFS_FAIL_PRECHECK(OBD_FAIL_PTLRPC_FAIL_REPLAY))
+			msleep(200);
 		ptlrpc_connect_import(req->rq_import);
+	}
 
 	RETURN(rc);
 }
@@ -2609,6 +2616,11 @@ static int replay_one_lock(struct obd_import *imp, struct ldlm_lock *lock)
 	aa = ptlrpc_req_async_args(aa, req);
 	aa->lock_handle = body->lock_handle[0];
 	req->rq_interpret_reply = replay_lock_interpret;
+	/* test_170: hand the replay to ptlrpcd only after a concurrent
+	 * reconnect has changed the import state
+	 */
+	if (CFS_FAIL_PRECHECK(OBD_FAIL_PTLRPC_FAIL_REPLAY))
+		msleep(500);
 	ptlrpcd_add_req(req);
 
 	RETURN(0);

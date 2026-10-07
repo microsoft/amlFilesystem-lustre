@@ -3881,43 +3881,99 @@ test_163() {
 }
 run_test 163 "changelog check for fail write and processing records"
 
+# Print the current state of every OST0000 OSC import on this client, one per line.
+lu18154_osc_states() {
+	$LCTL get_param -n osc.$FSNAME-OST0000-osc-[^M]*.state |
+		awk '/current_state:/ { print $2 }' | sort -u
+}
+
+# LU18154_IDLE selects how the OST0000 import reaches the LU-18154 precondition (imp_initiated_at == imp_generation):
+#   yes   (default) a real read reconnects it from IDLE, as on a production client
+#   param setting idle_timeout=0 on the IDLE import reconnects it; no request is ever delayed
+#   no    control: a fresh import that never reconnects from IDLE, so recovery must complete even unfixed
 test_170() {
 	remote_ost_nodsh && skip "remote OST with nodsh"
-	(( "$OST1_VERSION" >= $(version_code 2.17.53) )) ||
-		skip "Need OST version at least 2.17.53"
 	[[ $(facet_host client) != $(facet_host ost1) ]] ||
 		skip "need ost1 and client on different nodes"
 	local num_files=20
+	local maxtime=120
+	local oscs="osc.$FSNAME-OST0000-osc-[^M]*"
+	local idle=${LU18154_IDLE:-yes}
+	local hist
+	local state
 	local i
 
 	mkdir $DIR/$tdir || error "mkdir $MOUNT/$tdir failed"
 	$LFS setstripe -i 0 $DIR/$tdir || error "setstripe $tdir failed"
-
-	echo "$tfile" >  $DIR/$tdir/$tfile
+	echo "$tfile" > $DIR/$tdir/$tfile
 	sync
+
+	# keep every OST lock so lock replay has work to do
+	local old_cancel=$($LCTL get_param -n ldlm.cancel_unused_locks_before_replay)
+	$LCTL set_param ldlm.cancel_unused_locks_before_replay=0
+	stack_trap "$LCTL set_param ldlm.cancel_unused_locks_before_replay=$old_cancel" EXIT
+
+	if [[ $idle == yes || $idle == param ]]; then
+		local old_idle=$($LCTL get_param -n $oscs.idle_timeout | head -n1)
+		stack_trap "$LCTL set_param $oscs.idle_timeout=$old_idle" EXIT
+		# an import holding any LDLM lock never goes idle
+		cancel_lru_locks osc
+		$LCTL set_param $oscs.idle_timeout=5
+		for ((i = 0; i < 60; i++)); do
+			[[ "$(lu18154_osc_states)" == IDLE ]] && break
+			sleep 1
+		done
+		[[ "$(lu18154_osc_states)" == IDLE ]] || error "OST0000 import did not go IDLE"
+		if [[ $idle == yes ]]; then
+			# reconnect from IDLE with a real read: its RPC waits on the delayed list until the import is FULL
+			cat $DIR/$tdir/$tfile > /dev/null || error "read $DIR/$tdir/$tfile failed"
+		fi
+		# stay connected so the import takes part in recovery; with LU18154_IDLE=param this is also the
+		# reconnect from IDLE, but by a request that is freed unsent rather than delayed
+		$LCTL set_param $oscs.idle_timeout=0
+	else
+		remount_client $MOUNT || error "remount $MOUNT failed"
+		local old_idle=$($LCTL get_param -n $oscs.idle_timeout | head -n1)
+		stack_trap "$LCTL set_param $oscs.idle_timeout=$old_idle" EXIT
+		$LCTL set_param $oscs.idle_timeout=0
+	fi
+
 	replay_barrier ost1
 
 	for ((i = 0; i < num_files; i++)); do
-		local file=$DIR/$tdir/$tfile-$i
-		dd if=/dev/urandom of=$file count=1 bs=4096 ||
-			error "write failed: $file"
+		dd if=/dev/urandom of=$DIR/$tdir/$tfile-$i count=1 bs=4096 ||
+			error "write failed: $DIR/$tdir/$tfile-$i"
 	done
 
-	#define OBD_FAIL_PTLRPC_FAIL_REPLAY  0x537
+	hist=$($LCTL get_param $oscs.state)
+	echo "$hist"
+	if [[ $idle != no ]]; then
+		grep -q IDLE <<< "$hist" || error "precondition not met: no IDLE in import history"
+	else
+		! grep -q IDLE <<< "$hist" || error "control invalid: import was IDLE"
+	fi
 
-	#delay REPLAY_LOCKS phase to accumulate reqs at client side
-	do_facet ost1 "$LCTL set_param fail_loc=0x0000537 fail_val=10"
-	#at client simulate error reply and reconnect
+	#define OBD_FAIL_PTLRPC_FAIL_REPLAY  0x537
+	# server: delay the lock replay stage so lock replays accumulate at the client
+	do_facet ost1 "$LCTL set_param fail_loc=0x537 fail_val=10"
+	stack_trap "do_facet ost1 $LCTL set_param fail_loc=0 fail_val=0" EXIT
+	# client: treat the first lock replay reply as failed and reconnect
 	$LCTL set_param fail_loc=0x80000537
+	stack_trap "$LCTL set_param fail_loc=0" EXIT
 	fail_nodf ost1
 
-	stack_trap "$LCTL get_param osc.*OST0000-osc-*.state" EXIT
-	#should be reconnection and new recovery, at client state
-	#REPLAY_LOCKS
-	#CONNECTING
-	#REPLAY..
+	for ((i = 0; i < maxtime; i++)); do
+		state=$(lu18154_osc_states | tr '\n' ' ')
+		[[ "$state" =~ ^((FULL|IDLE)\ )+$ ]] && break
+		sleep 1
+	done
 
-	wait_clients_import_state ${HOSTNAME} ost1 "\(FULL\|IDLE\)" 60
+	hist=$($LCTL get_param $oscs.state)
+	echo "$hist"
+	awk '/REPLAY_LOCKS/ { rl = 1; next } rl && /CONNECTING/ { found = 1 } END { exit !found }' <<< "$hist" ||
+		error "fault injection did not fire (no REPLAY_LOCKS -> CONNECTING); result is not valid"
+	[[ "$state" =~ ^((FULL|IDLE)\ )+$ ]] ||
+		error "OST0000 import stuck in '$state' ${maxtime}s after failover (LU-18154)"
 }
 run_test 170 "Reconnect after REPLAY_LOCKS hangs (LU-18154)"
 
