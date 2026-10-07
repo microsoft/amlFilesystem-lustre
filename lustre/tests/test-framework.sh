@@ -13577,17 +13577,17 @@ zfs_or_rotational() {
 
 ost_fid2_objpath() {
 	local facet=$1
-	local fid=${2/[\[\]]/}
+	local fid=${2//[\[\]]/}
 	local seq
 	local oidhex
 	local ver
 	local oid
 
-	IFS=: read seq oidhex ver <<< $fid
+	IFS=: read -r seq oidhex ver <<< "$fid"
 	seq=${seq#0x}
 	oid=${oidhex#0x}
 
-	(( seq == 1 )) && {
+	(( 16#$seq == 1 )) && {
 		if [[ $(facet_fstype $facet) == ldiskfs ]]; then
 			oid=$((16#$oid))
 			echo "O/1/d$((oid%32))/$((oid))"

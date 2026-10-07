@@ -2096,6 +2096,8 @@ struct thandle {
 				th_wait_submit:1,
 	/* complex transaction to track updates on all targets including OSTs */
 				th_complex:1,
+	/* bypass the LOD space check, but not backend allocation errors */
+				th_skip_space_check:1,
 	/* whether ignore quota */
 				th_ignore_quota:1,
 	/* whether restart transaction */

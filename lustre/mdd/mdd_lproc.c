@@ -34,6 +34,39 @@ static ssize_t uuid_show(struct kobject *kobj, struct attribute *attr,
 }
 LUSTRE_RO_ATTR(uuid);
 
+static ssize_t pfid_update_attempts_show(struct kobject *kobj,
+					 struct attribute *attr, char *buf)
+{
+	struct mdd_device *mdd = container_of(kobj, struct mdd_device,
+					      mdd_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n", (long long)
+			 atomic64_read(&mdd->mdd_pfid_update_attempts));
+}
+LUSTRE_RO_ATTR(pfid_update_attempts);
+
+static ssize_t pfid_update_failures_show(struct kobject *kobj,
+					 struct attribute *attr, char *buf)
+{
+	struct mdd_device *mdd = container_of(kobj, struct mdd_device,
+					      mdd_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n", (long long)
+			 atomic64_read(&mdd->mdd_pfid_update_failures));
+}
+LUSTRE_RO_ATTR(pfid_update_failures);
+
+static ssize_t pfid_update_enospc_show(struct kobject *kobj,
+				       struct attribute *attr, char *buf)
+{
+	struct mdd_device *mdd = container_of(kobj, struct mdd_device,
+					      mdd_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n", (long long)
+			 atomic64_read(&mdd->mdd_pfid_update_enospc));
+}
+LUSTRE_RO_ATTR(pfid_update_enospc);
+
 static ssize_t atime_diff_show(struct kobject *kobj, struct attribute *attr,
 			       char *buf)
 {
@@ -771,6 +804,9 @@ static struct ldebugfs_vars ldebugfs_mdd_obd_vars[] = {
 
 static struct attribute *mdd_attrs[] = {
 	&lustre_attr_uuid.attr,
+	&lustre_attr_pfid_update_attempts.attr,
+	&lustre_attr_pfid_update_failures.attr,
+	&lustre_attr_pfid_update_enospc.attr,
 	&lustre_attr_atime_diff.attr,
 	&lustre_attr_changelog_size.attr,
 	&lustre_attr_changelog_gc.attr,

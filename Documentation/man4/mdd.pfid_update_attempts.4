@@ -1,0 +1,63 @@
+.TH MDD.PFID_UPDATE_ATTEMPTS 4 2026-11-06 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+mdd.pfid_update_attempts \- PFID update counters
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param mdd." MDT_NAME .pfid_update_attempts
+.SY
+.BI "lctl get_param mdd." MDT_NAME .pfid_update_failures
+.SY
+.BI "lctl get_param mdd." MDT_NAME .pfid_update_enospc
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 444 " | " -r--r--r--
+.TP
+.B Scope
+.br
+Per-MDT device.
+.TP
+.B Config
+.br
+Always present for MDT devices.
+.SH DESCRIPTION
+After a layout merge, split, or swap, the MDT attempts to update the parent
+FID (PFID) and component information stored in the affected OST objects.
+These counters report PFID replacement attempts per file, rather than the
+number of OST objects or objects awaiting repair.
+The counters are reset to zero when the MDT is mounted.
+.TP
+.B pfid_update_attempts
+Number of PFID replacement attempts, including failures to create a transaction.
+.TP
+.B pfid_update_failures
+Number of attempts that returned an error, including transaction-stop errors.
+.TP
+.B pfid_update_enospc
+Number of failed attempts that returned ENOSPC.
+.PP
+A PFID update failure does not undo the preceding layout operation or report
+that completed operation as failed to the client.
+The counters do not indicate whether a later operation or layout LFSCK repaired
+the affected objects.
+.SH EXAMPLES
+Read the counters for all MDTs mounted on this server:
+.EX
+.RB "mds# " "lctl get_param 'mdd.*.pfid_update_*'"
+.EE
+.SH AVAILABILITY
+.B pfid_update_attempts
+is part of the
+.BR lustre (7)
+filesystem package since release 2.18.0.
+.\" Added in commit 2.17.61-1 (LU-21122).
+.SH SEE ALSO
+.BR lfs-migrate (1),
+.BR lfs-mirror-extend (1),
+.BR lfs-mirror-split (1),
+.BR lfs-swap_layouts (1),
+.BR lustre (7),
+.BR lctl-get_param (8),
+.BR lctl-lfsck_start (8)

@@ -90,6 +90,8 @@ struct thandle *lod_sub_get_thandle(const struct lu_env *env,
 		RETURN(sub_th);
 	sub_th->th_ignore_quota = th->th_ignore_quota;
 	sub_th->th_ignore_root_proj_quota = th->th_ignore_root_proj_quota;
+	sub_th->th_skip_space_check = th->th_skip_space_check &&
+				      type == LU_SEQ_RANGE_OST;
 
 	if (tth->tt_multiple_thandle != NULL && record_update != NULL &&
 	    th->th_result == 0)

@@ -123,6 +123,9 @@ static int mdd_init0(const struct lu_env *env, struct mdd_device *mdd,
 	ENTRY;
 
 	/* LU-8040 Set defaults here, before values configs */
+	atomic64_set(&mdd->mdd_pfid_update_attempts, 0);
+	atomic64_set(&mdd->mdd_pfid_update_failures, 0);
+	atomic64_set(&mdd->mdd_pfid_update_enospc, 0);
 	mdd->mdd_cl.mc_flags = 0; /* off by default */
 	/* per-server mask is set via parameters if needed */
 	mdd->mdd_cl.mc_proc_mask = CHANGELOG_MINMASK;

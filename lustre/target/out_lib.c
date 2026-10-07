@@ -742,6 +742,9 @@ static int out_tx_xattr_set_exec(const struct lu_env *env,
 	if (!lu_object_exists(&dt_obj->do_lu) ||
 	    CFS_FAIL_PRECHECK(OBD_FAIL_OUT_OBJECT_MISS)) {
 		rc = -ENOENT;
+	} else if (strcmp(arg->u.xattr_set.name, XATTR_NAME_FID) == 0 &&
+		   CFS_FAIL_CHECK(OBD_FAIL_OUT_ENOSPC)) {
+		rc = -ENOSPC;
 	} else {
 		struct linkea_data ldata = { 0 };
 		bool linkea;

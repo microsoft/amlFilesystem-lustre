@@ -148,6 +148,10 @@ struct mdd_device {
 	char				 mdd_append_pool[LOV_MAXPOOLNAME + 1];
 	struct local_oid_storage	*mdd_los;
 	struct mdd_generic_thread	 mdd_orphan_cleanup_thread;
+	/* Per-file PFID update attempts, not counts of pending objects. */
+	atomic64_t			 mdd_pfid_update_attempts;
+	atomic64_t			 mdd_pfid_update_failures;
+	atomic64_t			 mdd_pfid_update_enospc;
 	struct kobject			 mdd_kobj;
 	struct kobj_type		 mdd_ktype;
 	struct completion		 mdd_kobj_unregister;

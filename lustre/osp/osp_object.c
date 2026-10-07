@@ -1192,6 +1192,8 @@ int osp_declare_xattr_set(const struct lu_env *env, struct dt_object *dt,
  * the transaction stop. And if the OSP attributes cache is initialized, then
  * check whether the name extended attribute entry exists in the cache or not.
  * If yes, replace it; otherwise, add the extended attribute to the cache.
+ * Xattrs of OST objects are not cached, and a cached entry is dropped, so a
+ * set rejected by the OST is seen by the next read.
  *
  * Return:
  * * %0 for success
@@ -1220,8 +1222,11 @@ int osp_xattr_set(const struct lu_env *env, struct dt_object *dt,
 		RETURN(rc);
 
 	/* Do not cache linkEA that may be self-adjusted by peers
-	 * under EA overflow case. */
-	if (strcmp(name, XATTR_NAME_LINK) == 0) {
+	 * under EA overflow case, nor OST xattrs: a rejected set is not
+	 * undone in the cache, and OST updates have no update llog to
+	 * redo them, so the next PFID update must read the OST.
+	 */
+	if (strcmp(name, XATTR_NAME_LINK) == 0 || is_ost_obj(&dt->do_lu)) {
 		oxe = osp_oac_xattr_find(o, name, true);
 		if (oxe != NULL)
 			osp_oac_xattr_put(oxe);

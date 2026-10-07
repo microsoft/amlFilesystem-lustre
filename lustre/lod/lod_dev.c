@@ -1734,6 +1734,9 @@ static int lod_trans_space_check(const struct lu_env *env,
 		if (st->st_sub_th == top_th->tt_master_sub_thandle)
 			continue;
 
+		if (st->st_sub_th->th_skip_space_check)
+			continue;
+
 		sub_dt = st->st_sub_th->th_dev;
 		rc = dt_statfs(env, sub_dt, sfs);
 		/* a reconnecting target returns its cached state */

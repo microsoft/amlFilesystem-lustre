@@ -3818,7 +3818,7 @@ test_70a() {
 }
 run_test 70a "flr mode fsx test"
 
-test_71() {
+test_71a() {
 	remote_ost_nodsh && skip "remote OST with nodsh"
 	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only test"
 
@@ -3864,7 +3864,201 @@ test_71() {
 		error "parent $parent of OST object $fid is not $pfid"
 	}
 }
-run_test 71 "check mirror extend parent fid"
+run_test 71a "check mirror extend parent fid"
+
+test_71b() {
+	(( MDS1_VERSION >= $(version_code 2.17.61) )) ||
+		skip "need MDS >= 2.17.61 for PFID updates on full OSTs"
+	[[ $PARALLEL != yes ]] || skip "fills an OST"
+	(( OSTCOUNT >= 2 )) || skip "need at least two OSTs"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+	[[ $(facet_fstype ost1) == ldiskfs ]] || skip "ldiskfs only test"
+	do_facet ost1 "command -v $DEBUGFS" || skip_env "debugfs required"
+	check_set_fallocate 0 || skip_env "fallocate not supported"
+
+	local td=$DIR/$tdir
+	local tf=$td/$tfile
+	local fill=$td.fill
+	local ost=$(ostname_from_index 0 $DIR)
+	local mdt=$(facet_svc mds1)
+	local param=lod.$mdt-mdtlov.dist_txn_check_space
+	local osp=osp.$ost-osc-${mdt##*-}
+	local check
+	local maxage
+
+	check=$(do_facet mds1 "$LCTL get_param -n $param") ||
+		error "read $param"
+	stack_trap "do_facet mds1 '$LCTL set_param $param=$check'"
+	do_facet mds1 "$LCTL set_param $param=1" || error "enable $param"
+	maxage=$(do_facet mds1 "$LCTL get_param -n $osp.maxage") ||
+		error "read $osp.maxage"
+
+	mkdir_on_mdt0 "$td" || error "mkdir $td"
+	# The MDT keeps OST0 marked full until the next statfs refresh,
+	# wait for it so that later subtests can allocate on OST0 again.
+	stack_trap "rm -rf '$td' '$fill'; wait_delete_completed 300; \
+		wait_update_facet mds1 \
+		'$LCTL get_param -n $osp.prealloc_status' 0 $((maxage * 2 + 5))"
+	$LFS setstripe -c1 -o0 "$tf" "$fill" || error "setstripe"
+	dd if=/dev/zero of="$tf" bs=1M count=1 conv=fsync status=none ||
+		error "write $tf"
+
+	# Fill OST0, including space held in client grants.
+	local df
+	local avail
+	local size
+	local out
+
+	df=$($LFS df "$td") || error "lfs df"
+	avail=$(awk -v ost="$ost" '$1 == ost "_UUID" {print $4}' <<< "$df")
+	[[ $avail =~ ^[0-9]+$ ]] && (( avail > 0 )) ||
+		error "invalid OST0 available space: $avail"
+	size=$((avail * 1024))
+	while out=$(LC_ALL=C timeout 1800 fallocate -l "$size" "$fill" 2>&1); do
+		size=$((size * 2))
+	done
+	[[ $out == *"No space left on device"* ]] ||
+		error "fallocate -l $size: expected ENOSPC, got '$out'"
+	# Let the MDT observe the full OST.
+	wait_update_facet mds1 "$LCTL get_param -n $osp.prealloc_status" \
+		-28 $((maxage * 2 + 5)) ||
+		error "$osp does not report $ost full"
+
+	local layout
+	local fid
+	local obj_file
+
+	layout=$($LFS getstripe --yaml -v "$tf") || error "getstripe $tf"
+	fid=$(awk '/l_fid:/ {print $2; exit}' <<< "$layout")
+	[[ -n $fid ]] || error "missing OST FID"
+	obj_file=$(ost_fid2_objpath ost1 "$fid") || error "OST object path"
+
+	local pfid_param=mdd.$(mdtname_from_index 0 $DIR).pfid_update
+	local -A before
+	local counter
+	local after
+
+	for counter in attempts failures enospc; do
+		before[$counter]=$(do_facet mds1 \
+			"$LCTL get_param -n ${pfid_param}_$counter") ||
+			error "read PFID $counter before mirror extend"
+	done
+
+	$LFS mirror extend -N -c1 -o1 "$tf" || error "mirror extend"
+	for counter in attempts failures enospc; do
+		after=$(do_facet mds1 \
+			"$LCTL get_param -n ${pfid_param}_$counter") ||
+			error "read PFID $counter after mirror extend"
+		if [[ $counter == attempts ]]; then
+			(( after > before[$counter] )) ||
+				error "$counter: $after <= ${before[$counter]}"
+		else
+			(( after == before[$counter] )) ||
+				error "$counter: $after != ${before[$counter]}"
+		fi
+	done
+
+	verify_mirror_count "$tf" 2
+	sync_all_data || error "sync after mirror extend"
+	layout=$($LFS getstripe --yaml -v "$tf") || error "getstripe $tf"
+
+	local expected=$(awk '/lcme_id:/ {print $NF; exit}' <<< "$layout")
+	local dev=$(ostdevname 1)
+	local ff
+	local comp
+
+	[[ $expected =~ ^(0x[0-9a-fA-F]+|[0-9]+)$ ]] &&
+		(( expected >> 16 > 0 )) || error "missing mirror ID: $expected"
+	# Read the original PFID before client I/O can repair it.
+	ff=$(do_facet ost1 "$DEBUGFS -c -R 'stat $obj_file' '$dev' \
+		2>/dev/null" | grep "component_id=")
+	if [[ -z $ff ]]; then
+		stop ost1
+		mount_fstype ost1
+		ff=$(do_facet ost1 $LL_DECODE_FILTER_FID \
+			$(facet_mntpt ost1)/$obj_file)
+		unmount_fstype ost1
+		start ost1 $dev $OST_MOUNT_OPTS
+		clients_up
+	fi
+	comp=$(sed -n 's/.*component_id=\([^ ]*\).*/\1/p' <<< "$ff")
+	[[ -n $comp ]] || error "$obj_file: no component_id in filter_fid: $ff"
+	echo "$obj_file: PFID component=$comp, layout component=$expected"
+	[[ $comp =~ ^(0x[0-9a-fA-F]+|[0-9]+)$ ]] &&
+		(( comp == expected )) ||
+		error "PFID component $comp != $expected"
+}
+run_test 71b "mirror extend updates PFID on a full OST"
+
+test_71c() {
+	(( MDS1_VERSION >= $(version_code 2.17.61) )) ||
+		skip "need MDS >= 2.17.61 for PFID update counters"
+	(( OST1_VERSION >= $(version_code 2.17.61) )) ||
+		skip "need OST >= 2.17.61 for PFID ENOSPC injection"
+	[[ $PARALLEL != yes ]] || skip "injects OST errors"
+	(( OSTCOUNT >= 2 )) || skip "need at least two OSTs"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+
+	local td=$DIR/$tdir
+	local pfid_param=mdd.$(mdtname_from_index 0 $DIR).pfid_update
+	local -A before
+	local -A mirrors
+	local fail_loc
+	local counter
+	local after
+	local expected
+	local rc
+
+	mkdir_on_mdt0 "$td" || error "mkdir $td"
+	stack_trap "rm -rf '$td'"
+	stack_trap "do_facet ost1 '$LCTL set_param fail_loc=0'"
+	# Fail the PFID read during declare, then its write at transaction stop.
+	# The second ENOSPC pass extends the same file again: the PFID left
+	# stale by the first failure must reach the OST, not be skipped
+	# because the MDT cached the rejected value.
+	#define OBD_FAIL_OUT_EIO 0x1709
+	#define OBD_FAIL_OUT_ENOSPC 0x1704
+	for fail_loc in 0x80001709 0x80001704 0x80001704; do
+		local tf=$td/$tfile.$fail_loc
+
+		if [[ ! -e $tf ]]; then
+			$LFS setstripe -c1 -o0 "$tf" || error "setstripe $tf"
+			dd if=/dev/zero of="$tf" bs=64K count=1 conv=fsync \
+				status=none || error "write $tf"
+			mirrors[$fail_loc]=1
+		fi
+		for counter in attempts failures enospc; do
+			before[$counter]=$(do_facet mds1 \
+				"$LCTL get_param -n ${pfid_param}_$counter") ||
+				error "read PFID $counter before $fail_loc"
+		done
+
+		do_facet ost1 "$LCTL set_param fail_loc=$fail_loc" ||
+			error "set $fail_loc"
+		rc=0
+		$LFS mirror extend -N -c1 -o1 "$tf" || rc=$?
+		do_facet ost1 "$LCTL set_param fail_loc=0" ||
+			error "reset $fail_loc"
+		(( rc == 0 )) || error "mirror extend $fail_loc: rc=$rc"
+		verify_mirror_count "$tf" $((++mirrors[$fail_loc]))
+
+		for counter in attempts failures enospc; do
+			after=$(do_facet mds1 \
+				"$LCTL get_param -n ${pfid_param}_$counter") ||
+				error "read PFID $counter after $fail_loc"
+			expected=${before[$counter]}
+			if [[ $counter != enospc ||
+			      $fail_loc == 0x80001704 ]]; then
+				expected=$((expected + 1))
+			fi
+			(( after == expected )) ||
+				error "$fail_loc $counter: $after != $expected"
+		done
+	done
+}
+run_test 71c "count failed PFID updates after mirror extend"
 
 # check component instantiation when appending to mirrored file $1, which
 # is empty with mirror 1 "-E1M -E2M -E3M -Eeof" and mirror 2 "-E2M -E4M

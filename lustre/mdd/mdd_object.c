@@ -1623,18 +1623,29 @@ free:
 	return rc;
 }
 
-static int mdd_object_pfid_replace(const struct lu_env *env,
-				   struct mdd_object *o)
+/**
+ * mdd_object_pfid_replace() - Update PFIDs after a layout change
+ * @env: execution environment
+ * @o: file whose OST objects need PFID updates
+ *
+ * The layout operation has already finished. Account PFID failures here,
+ * but do not report them as a failure of the preceding merge/split/swap:
+ * retrying that operation would not retry just the PFID replacement.
+ */
+static void mdd_object_pfid_replace(const struct lu_env *env,
+				    struct mdd_object *o)
 {
 	struct mdd_device *mdd = mdo2mdd(&o->mod_obj);
 	struct thandle *handle;
 	int rc;
 
+	atomic64_inc(&mdd->mdd_pfid_update_attempts);
 	handle = mdd_trans_create(env, mdd);
 	if (IS_ERR(handle))
-		RETURN(PTR_ERR(handle));
+		GOTO(account, rc = PTR_ERR(handle));
 
 	handle->th_complex = 1;
+	handle->th_skip_space_check = 1;
 
 	/* it doesn't need to track the PFID update via llog, because LFSCK
 	 * will repair it even it goes wrong
@@ -1653,8 +1664,15 @@ static int mdd_object_pfid_replace(const struct lu_env *env,
 		GOTO(out, rc);
 
 out:
-	mdd_trans_stop(env, mdd, rc, handle);
-	return rc;
+	rc = mdd_trans_stop(env, mdd, rc, handle);
+account:
+	if (rc) {
+		atomic64_inc(&mdd->mdd_pfid_update_failures);
+		if (rc == -ENOSPC)
+			atomic64_inc(&mdd->mdd_pfid_update_enospc);
+		CWARN("%s: PFID update for "DFID" failed: rc = %d\n",
+		      mdd_obj_dev_name(o), PFID(mdd_object_fid(o)), rc);
+	}
 }
 
 
@@ -1793,7 +1811,7 @@ stop:
 	 * has been changed by others.
 	 */
 	if (!rc)
-		(void) mdd_object_pfid_replace(env, obj);
+		mdd_object_pfid_replace(env, obj);
 	else if (rc == -EAGAIN && retried++ < MAX_TRANS_RETRIED)
 		GOTO(retry, retried);
 
@@ -2262,7 +2280,7 @@ stop:
 	 * has been changed by others.
 	 */
 	if (!rc)
-		(void) mdd_object_pfid_replace(env, obj);
+		mdd_object_pfid_replace(env, obj);
 	else if (rc == -EAGAIN && retried++ < MAX_TRANS_RETRIED)
 		GOTO(retry, retried);
 
@@ -3738,9 +3756,9 @@ stop:
 		 * with it, and may be on an OST that is not reachable
 		 */
 		if (!(fst_o->mod_flags & (ORPHAN_OBJ | VOLATILE_OBJ)))
-			(void) mdd_object_pfid_replace(env, fst_o);
+			mdd_object_pfid_replace(env, fst_o);
 		if (!(snd_o->mod_flags & (ORPHAN_OBJ | VOLATILE_OBJ)))
-			(void) mdd_object_pfid_replace(env, snd_o);
+			mdd_object_pfid_replace(env, snd_o);
 	} else if (rc == -EAGAIN && retried++ < MAX_TRANS_RETRIED) {
 		/**
 		 * -EAGAIN means transaction execution phase detect the layout
