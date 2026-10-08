@@ -1403,20 +1403,26 @@ static int ptlrpc_check_req(struct ptlrpc_request *req)
 		CDEBUG(D_RPCTRACE, "Dropping req %p for failed obd %s\n",
 			req, (obd != NULL) ? obd->obd_name : "unknown");
 		rc = -ENODEV;
-	} else if (lustre_msg_get_flags(req->rq_reqmsg) &
-		   (MSG_REPLAY | MSG_REQ_REPLAY_DONE) &&
-		   !test_bit(OBDF_RECOVERING, obd->obd_flags)) {
-		DEBUG_REQ(D_ERROR, req,
-			  "Invalid replay without recovery");
-		class_fail_export(req->rq_export);
-		rc = -ENODEV;
-	} else if (lustre_msg_get_transno(req->rq_reqmsg) != 0 &&
-		   !test_bit(OBDF_RECOVERING, obd->obd_flags)) {
-		DEBUG_REQ(D_ERROR, req,
-			  "Invalid req with transno %llu without recovery",
-			  lustre_msg_get_transno(req->rq_reqmsg));
-		class_fail_export(req->rq_export);
-		rc = -ENODEV;
+	} else if (!test_bit(OBDF_RECOVERING, obd->obd_flags)) {
+		__u32 flags = lustre_msg_get_flags(req->rq_reqmsg);
+
+		if (lustre_msg_get_opc(req->rq_reqmsg) == OBD_PING &&
+		    flags & MSG_LOCK_REPLAY_DONE &&
+		    req->rq_export->exp_replay_done) {
+			/* final ping resent after reconnect, raced recovery */
+			DEBUG_REQ(D_HA, req, "final ping after recovery");
+		} else if (flags & (MSG_REPLAY | MSG_REQ_REPLAY_DONE)) {
+			DEBUG_REQ(D_ERROR, req,
+				  "Invalid replay without recovery");
+			class_fail_export(req->rq_export);
+			rc = -ENODEV;
+		} else if (lustre_msg_get_transno(req->rq_reqmsg) != 0) {
+			DEBUG_REQ(D_ERROR, req,
+				  "Invalid req with transno %llu without recovery",
+				  lustre_msg_get_transno(req->rq_reqmsg));
+			class_fail_export(req->rq_export);
+			rc = -ENODEV;
+		}
 	}
 
 	if (unlikely(rc < 0)) {

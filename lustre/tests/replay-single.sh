@@ -3429,6 +3429,48 @@ test_93b() {
 }
 run_test 93b "replay + reconnect on mds"
 
+test_93c() {
+	(( OST1_VERSION >= $(version_code 2.17.59.1) )) ||
+		skip "need OST >= 2.17.59.1 for late final ping"
+	[[ $(facet_host client) != $(facet_host ost1) ]] ||
+		skip_env "need ost1 and client on different nodes"
+
+	local imp="osc.$FSNAME-OST0000-osc-[-0-9a-f]*.ost_server_uuid"
+	local before=$(dmesg | grep -c "evicted by $FSNAME-OST0000")
+	local at_max_saved=$(at_max_get client)
+	local cfs_failed=0x40000000
+	local after
+	local fl
+
+	$LFS setstripe -i 0 -c 1 $DIR/$tfile || error "setstripe failed"
+	dd if=/dev/zero of=$DIR/$tfile bs=1024 count=1 || error "dd failed"
+
+	# AT learns the 40s hold below; cap it so the final ping times out
+	at_max_set 20 client
+	stack_trap "at_max_set $at_max_saved client"
+
+	# hold the final ping without early replies, so the client reconnects
+	# and sends it again while recovery is still running
+	#define OBD_FAIL_TGT_REPLAY_RECONNECT     0x715
+	do_facet ost1 "$LCTL set_param fail_val=40 fail_loc=0x715"
+	stack_trap "do_facet ost1 $LCTL set_param fail_loc=0 fail_val=0"
+	fail_nodf ost1
+	wait_import_state REPLAY_WAIT $imp
+
+	# the second final ping then arrives after recovery has finished
+	#define OBD_FAIL_PTLRPC_DELAY_FINAL_PING 0x53a
+	$LCTL set_param fail_val=45 fail_loc=0x8000053a
+	stack_trap "$LCTL set_param fail_loc=0 fail_val=0"
+	wait_import_state "(FULL|IDLE|EVICTED)" $imp 300
+	fl=$($LCTL get_param -n fail_loc)
+	(( (fl & cfs_failed) != 0 )) ||
+		error "no second final ping was sent, fail_loc=$fl"
+
+	after=$(dmesg | grep -c "evicted by $FSNAME-OST0000")
+	(( after == before )) || error "client evicted by OST0000"
+}
+run_test 93c "late final ping after reconnect during recovery"
+
 striped_dir_check_100() {
 	local striped_dir=$DIR/$tdir/striped_dir
 	local stripe_count=$($LFS getdirstripe -c $striped_dir)

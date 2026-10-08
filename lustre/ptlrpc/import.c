@@ -1789,6 +1789,8 @@ static int signal_completed_replay(struct obd_import *imp)
 		req->rq_timeout *= 3;
 	req->rq_no_delay = 1;
 	req->rq_interpret_reply = completed_replay_interpret;
+	if (CFS_FAIL_CHECK(OBD_FAIL_PTLRPC_DELAY_FINAL_PING))
+		req->rq_sent = ktime_get_real_seconds() + cfs_fail_val;
 
 	ptlrpcd_add_req(req);
 	RETURN(0);
