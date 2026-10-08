@@ -199,6 +199,7 @@ extern struct req_format RQF_MDS_SYNC;
 extern struct req_format RQF_MDS_GETXATTR;
 extern struct req_format RQF_MDS_GETATTR;
 extern struct req_format RQF_OUT_UPDATE;
+extern struct req_format RQF_LDLM_INTENT_MDT_READ;
 
 /*
  * This is format of direct (non-intent) MDS_GETATTR_NAME request.

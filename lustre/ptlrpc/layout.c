@@ -854,6 +854,7 @@ static struct req_format *req_formats[] = {
 	&RQF_MDS_RMFID,
 #ifdef CONFIG_LUSTRE_FS_SERVER
 	&RQF_OUT_UPDATE,
+	&RQF_LDLM_INTENT_MDT_READ,
 #endif
 	&RQF_OST_CONNECT,
 	&RQF_OST_DISCONNECT,
@@ -2993,6 +2994,25 @@ struct req_format RQF_OUT_UPDATE =
 	DEFINE_REQ_FMT0("OUT_UPDATE", mds_update_client,
 			mds_update_server);
 EXPORT_SYMBOL(RQF_OUT_UPDATE);
+
+/* MDT-to-MDT lock enqueue with read-only OUT updates of the locked object */
+static const struct req_msg_field *ldlm_intent_mdt_read_client[] = {
+	&RMF_PTLRPC_BODY,
+	&RMF_DLM_REQ,
+	&RMF_LDLM_INTENT,
+	&RMF_OUT_UPDATE_HEADER,
+};
+
+static const struct req_msg_field *ldlm_intent_mdt_read_server[] = {
+	&RMF_PTLRPC_BODY,
+	&RMF_DLM_REP,
+	&RMF_OUT_UPDATE_REPLY,
+};
+
+struct req_format RQF_LDLM_INTENT_MDT_READ =
+	DEFINE_REQ_FMT0("LDLM_INTENT_MDT_READ", ldlm_intent_mdt_read_client,
+			ldlm_intent_mdt_read_server);
+EXPORT_SYMBOL(RQF_LDLM_INTENT_MDT_READ);
 
 int req_check_sepol(struct req_capsule *pill)
 {

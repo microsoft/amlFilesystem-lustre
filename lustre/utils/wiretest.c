@@ -4026,6 +4026,7 @@ void lustre_assert_wire_constants(void)
 	BUILD_BUG_ON(IT_QUOTA_CONN != 0x00001000);
 	BUILD_BUG_ON(IT_GLIMPSE != 0x00004000);
 	BUILD_BUG_ON(IT_BRW != 0x00008000);
+	BUILD_BUG_ON(IT_MDT_TO_MDT_READ != 0x00040000);
 
 	/* Checks for struct ldlm_resource_desc */
 	LASSERTF((int)sizeof(struct ldlm_resource_desc) == 40, "found %lld\n",

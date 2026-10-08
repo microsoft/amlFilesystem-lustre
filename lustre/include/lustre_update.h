@@ -16,6 +16,9 @@
 #include <lustre_net.h>
 #include <obj_update.h>
 
+#define OUT_UPDATE_REPLY_SIZE		4096
+/* most reads one IT_MDT_TO_MDT_READ can carry */
+#define OUT_READS_MAX			32
 #define OUT_BULK_BUFFER_SIZE		4096
 
 struct dt_key;

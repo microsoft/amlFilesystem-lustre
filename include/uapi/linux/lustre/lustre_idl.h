@@ -2729,7 +2729,20 @@ enum ldlm_intent_flags {
 /*	IT_SETXATTR    = 0x00002000, Obsolete. */
 	IT_GLIMPSE     = 0x00004000,
 	IT_BRW	       = 0x00008000,
+/*	0x00010000 and 0x00020000 are taken by WBC (LU-13021). */
+	IT_MDT_TO_MDT_READ = 0x00040000, /* OUT reads under the lock */
 };
+
+/*
+ * IT_MDT_TO_MDT_READ carries read-only OUT updates (OUT_INDEX_LOOKUP,
+ * OUT_ATTR_GET, OUT_XATTR_GET) of the locked object, as an
+ * object_update_request inline in RMF_OUT_UPDATE_HEADER.  The MDT owning the
+ * object may run them under the lock it grants, and returns their results in
+ * RMF_OUT_UPDATE_REPLY with DISP_IT_EXECD set.  It may also decline, for any
+ * reason, and grant the lock the normal way; the requester then reads what it
+ * needs with OUT_UPDATE.  DISP_IT_EXECD is the only sign of which happened.
+ * Unlike OUT_UPDATE, a read that fails does not stop the reads after it.
+ */
 
 struct ldlm_intent {
 	__u64 opc;
