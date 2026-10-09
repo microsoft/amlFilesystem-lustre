@@ -1036,11 +1036,11 @@ __must_hold(&conn->ibc_lock)
 
 		if (frd && !frd->frd_posted) {
 			/* The local invalidate becomes invalid (has been
-			 * successfully used) if the post succeeds or the
-			 * failing wr was not the invalidate.
+			 * successfully used) if the post succeeds or a wr
+			 * after the invalidate failed.
 			 */
-			frd->frd_valid =
-				!(rc == 0 || (bad != &frd->frd_inv_wr.wr));
+			frd->frd_valid = !(rc == 0 ||
+					   (bad && bad != &frd->frd_inv_wr.wr));
 		}
 	}
 

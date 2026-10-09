@@ -1711,6 +1711,13 @@ static int kiblnd_alloc_fmr_pool(struct kib_fmr_poolset *fps,
 }
 #endif /* HAVE_OFED_FMR_POOL_API */
 
+static struct ib_mr *
+kiblnd_alloc_frd_mr(struct kib_fmr_pool *fpo)
+{
+	return ib_alloc_mr(fpo->fpo_hdev->ibh_pd, fpo->fast_reg.fpo_mr_type,
+			   IBLND_MAX_RDMA_FRAGS);
+}
+
 static int kiblnd_alloc_freg_pool(struct kib_fmr_poolset *fps,
 				  struct kib_fmr_pool *fpo,
 				  enum kib_dev_caps dev_caps)
@@ -1746,10 +1753,9 @@ static int kiblnd_alloc_freg_pool(struct kib_fmr_poolset *fps,
 			CWARN("using IB_MR_TYPE_SG_GAPS, expect a performance drop\n");
 			fastreg_gaps = true;
 		}
-		frd->frd_mr = ib_alloc_mr(fpo->fpo_hdev->ibh_pd,
-					  fastreg_gaps ? IB_MR_TYPE_SG_GAPS :
-							 IB_MR_TYPE_MEM_REG,
-					  IBLND_MAX_RDMA_FRAGS);
+		fpo->fast_reg.fpo_mr_type = fastreg_gaps ? IB_MR_TYPE_SG_GAPS :
+							   IB_MR_TYPE_MEM_REG;
+		frd->frd_mr = kiblnd_alloc_frd_mr(fpo);
 		if (IS_ERR(frd->frd_mr)) {
 			rc = PTR_ERR(frd->frd_mr);
 			CERROR("Failed to allocate ib_fast_reg_mr: %d\n", rc);
@@ -1922,6 +1928,24 @@ kiblnd_map_tx_pages(struct kib_tx *tx, struct kib_rdma_desc *rd)
 }
 #endif
 
+/* Replace the MR of @frd with a new one, because the HCA state of the old
+ * one is unknown.
+ */
+static int
+kiblnd_renew_frd_mr(struct kib_fmr_pool *fpo,
+		    struct kib_fast_reg_descriptor *frd)
+{
+	struct ib_mr *mr;
+
+	mr = kiblnd_alloc_frd_mr(fpo);
+	if (IS_ERR(mr))
+		return PTR_ERR(mr);
+
+	ib_dereg_mr(frd->frd_mr);
+	frd->frd_mr = mr;
+	return 0;
+}
+
 void
 kiblnd_fmr_pool_unmap(struct kib_fmr *fmr, int status)
 {
@@ -1954,11 +1978,28 @@ kiblnd_fmr_pool_unmap(struct kib_fmr *fmr, int status)
 		struct kib_fast_reg_descriptor *frd = fmr->fmr_frd;
 
 		if (frd) {
+			/* A flush can drop the posted invalidate and
+			 * registration, so the HCA can still hold the old key.
+			 */
+			int rc = 0;
+
+			if (status && frd->frd_posted)
+				rc = kiblnd_renew_frd_mr(fpo, frd);
+
 			frd->frd_posted = false;
 			fmr->fmr_frd = NULL;
+			if (rc) {
+				CWARN("%s: can't renew a FastReg MR: rc = %d\n",
+				      fps->fps_net->ibn_dev->ibd_ifname, rc);
+				ib_dereg_mr(frd->frd_mr);
+				LIBCFS_FREE(frd, sizeof(*frd));
+			}
 			spin_lock(&fps->fps_lock);
-			list_add_tail(&frd->frd_list,
-				      &fpo->fast_reg.fpo_pool_list);
+			if (rc)
+				fpo->fast_reg.fpo_pool_size--;
+			else
+				list_add_tail(&frd->frd_list,
+					      &fpo->fast_reg.fpo_pool_list);
 			spin_unlock(&fps->fps_lock);
 		}
 	}

@@ -405,6 +405,7 @@ struct kib_fmr_pool {
 		struct { /* For fast registration */
 			struct list_head  fpo_pool_list;
 			int		  fpo_pool_size;
+			enum ib_mr_type	  fpo_mr_type;
 		} fast_reg;
 #ifdef HAVE_OFED_FMR_POOL_API
 	};
