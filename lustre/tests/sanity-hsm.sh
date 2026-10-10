@@ -4797,12 +4797,12 @@ test_251() {
 	local fid=$(create_empty_file "$f")
 
 	cdt_disable
-	# to have a short test
 	local old_to=$(get_hsm_param active_request_timeout)
-	set_hsm_param active_request_timeout 1
+	stack_trap "set_hsm_param active_request_timeout $old_to"
 	# to be sure the cdt will wake up frequently so
 	# it will be able to cancel the "old" request
 	local old_loop=$(get_hsm_param loop_period)
+	stack_trap "set_hsm_param loop_period $old_loop"
 	set_hsm_param loop_period 1
 	cdt_enable
 
@@ -4814,10 +4814,8 @@ test_251() {
 	wait_request_state $fid ARCHIVE STARTED
 
 	# Let the request timeout
+	set_hsm_param active_request_timeout 1
 	wait_request_state $fid ARCHIVE CANCELED
-
-	set_hsm_param active_request_timeout $old_to
-	set_hsm_param loop_period $old_loop
 }
 run_test 251 "Coordinator request timeout"
 
