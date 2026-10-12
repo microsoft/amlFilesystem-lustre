@@ -83,11 +83,9 @@ module_param(router_ping_timeout, int, 0644);
 MODULE_PARM_DESC(router_ping_timeout, "Seconds to wait for the reply to a router health query");
 
 /*
- * A value between 0 and 100. 0 meaning that even if router's interfaces
- * have the worse health still consider the gateway usable.
- * 100 means that at least one interface on the route's remote net is 100%
- * healthy to consider the route alive.
- * The default is set to 100 to ensure we maintain the original behavior.
+ * Deprecated. This value has no effect. Route aliveness depends
+ * only on the NI status. The parameter remains so that existing
+ * configurations and lnetctl commands still work.
  */
 unsigned int router_sensitivity_percentage = 100;
 static int rtr_sensitivity_set(const char *val, const struct kernel_param *kp);

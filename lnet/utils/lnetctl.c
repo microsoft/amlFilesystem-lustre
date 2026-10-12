@@ -253,8 +253,7 @@ command_t set_cmds[] = {
 	{"recovery_interval", jt_set_recov_intrv, 0, "interval to ping in seconds (at least 1)\n"
 	 "\t>0 - time in seconds between pings\n"},
 	{"router_sensitivity", jt_set_rtr_sensitivity, 0, "router sensitivity %\n"
-	 "\t100 - router interfaces need to be fully healthy to be used\n"
-	 "\t<100 - router interfaces can be used even if not healthy\n"},
+	 "\tDeprecated: this value has no effect\n"},
 	{"response_tracking", jt_set_response_tracking, 0,
 	 "Set the behavior of response tracking\n"
 	 "\t0 - Only LNet pings and discovery pushes utilize response tracking\n"

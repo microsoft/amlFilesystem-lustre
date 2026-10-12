@@ -951,8 +951,9 @@ lnet_health_check(struct lnet_msg *msg)
 
 		/* For remote failures, health/recovery/resends are not needed
 		 * if the peer only has a single interface. Special case for
-		 * routers where we rely on health feature to manage route and
-		 * peer aliveness. NB: unlike pb_nnis above, lp_nnis does _not_
+		 * routers: keep the peer NI health, because it ranks gateways
+		 * and MR forwarding paths. Route aliveness does not use it;
+		 * that depends only on the NI status. NB: lp_nnis does _not_
 		 * include the lolnd, so a single-rail node would have
 		 * lp_nnis == 1.
 		 */

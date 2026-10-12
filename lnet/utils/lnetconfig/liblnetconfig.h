@@ -417,8 +417,8 @@ int lustre_lnet_show_recov_intrv(int seq_no, struct cYAML **show_rc,
 
 /*
  * lustre_lnet_config_rtr_sensitivity
- *   sets the router sensitivity percentage. If the percentage health
- *   of a router interface drops below that it's considered failed
+ *   sets the router sensitivity percentage. Deprecated: this
+ *   value has no effect
  *
  *   sen - sensitivity value to configure
  *   seq_no - sequence number of the request

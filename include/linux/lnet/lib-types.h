@@ -1877,7 +1877,7 @@ struct lnet_route {
 	struct lnet_nid		lr_nid;		/* NID used to add route */
 	__u32			lr_net;		/* remote network number */
 	__u32			lr_lnet;	/* local network number */
-	int			lr_seq;		/* sequence for round-robin */
+	u64			lr_seq;		/* sequence for round-robin */
 	__u32			lr_hops;	/* how far I am */
 	unsigned int		lr_priority;	/* route priority */
 	atomic_t		lr_alive;	/* cached route aliveness */
