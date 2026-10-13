@@ -170,8 +170,7 @@ int wbcfs_enable_quota(struct mkfs_opts *mop)
 	return -EOPNOTSUPP;
 }
 
-int wbcfs_prepare_lustre(struct mkfs_opts *mop,
-			 char *wanted_mountopts, size_t len)
+int wbcfs_prepare_lustre(struct mkfs_opts *mop)
 {
 	return 0;
 }

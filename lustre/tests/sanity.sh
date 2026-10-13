@@ -15281,11 +15281,10 @@ cleanup_test102() {
 }
 
 test_102a() {
-	[ "$UID" != 0 ] && skip "must run as root"
-	[ -z "$(lctl get_param -n mdc.*-mdc-*.connect_flags | grep xattr)" ] &&
-		skip_env "must have user_xattr"
-
-	[ -z "$(which setfattr 2>/dev/null)" ] &&
+	(( "$UID" == 0 )) || skip "must run as root"
+	$LCTL get_param -n llite.*.sbi_flags | grep -q user_xattr ||
+		skip_env "client not mounted with user_xattr"
+	[[ -n "$(which setfattr 2>/dev/null)" ]] ||
 		skip_env "could not find setfattr"
 
 	local testfile=$DIR/$tfile
@@ -15480,11 +15479,9 @@ test_102f() {
 run_test 102f "tar copy files, not keep osts"
 
 grow_xattr() {
-	[ -z "$(lctl get_param -n mdc.*.connect_flags | grep xattr)" ] &&
-		skip "must have user_xattr"
-	[ -z "$(which setfattr 2>/dev/null)" ] &&
+	[[ -n "$(which setfattr 2>/dev/null)" ]] ||
 		skip_env "could not find setfattr"
-	[ -z "$(which getfattr 2>/dev/null)" ] &&
+	[[ -n "$(which getfattr 2>/dev/null)" ]] ||
 		skip_env "could not find getfattr"
 
 	local xsize=${1:-1024}	# in bytes

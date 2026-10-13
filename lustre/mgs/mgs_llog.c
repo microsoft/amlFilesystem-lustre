@@ -3876,7 +3876,7 @@ static int mgs_write_log_ost(const struct lu_env *env,
 
 	/*
 	 * attach obdfilter ost1 ost1_UUID
-	 * setup /dev/loop2 ldiskfs f|n errors=remount-ro,user_xattr
+	 * setup /dev/loop2 ldiskfs f|n errors=remount-ro
 	 */
 	if (class_find_param(ptr, PARAM_FAILMODE, &ptr) == 0)
 		failout = (strncmp(ptr, "failout", 7) == 0);

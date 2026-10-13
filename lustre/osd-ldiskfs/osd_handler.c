@@ -8506,6 +8506,7 @@ static int osd_mount(const struct lu_env *env,
 	if (opts != NULL) {
 		/* strip out the options for back compatiblity */
 		static const char * const sout[] = {
+			"acl",
 			"extents",
 			"iopen",
 			"iopen_nopriv",
@@ -8513,6 +8514,8 @@ static int osd_mount(const struct lu_env *env,
 			"mballoc",
 			"noacl",
 			"noextents",
+			"nouser_xattr",
+			"user_xattr",
 			/* strip out option we processed in osd */
 			"bigendian_extents",
 			"force_over_128tb",
@@ -8537,13 +8540,13 @@ static int osd_mount(const struct lu_env *env,
 				if (*str == ',' || *str == '\0') {
 					*str == ',' ? str++ : str;
 					memmove(op, str, strlen(str) + 1);
+					str = op;
+					continue;
 				}
 			}
 			for (str = op; *str != ',' && *str != '\0'; str++)
 				;
 		}
-	} else {
-		strncat(options, "user_xattr,acl", PAGE_SIZE);
 	}
 
 	/* Glom up mount options */

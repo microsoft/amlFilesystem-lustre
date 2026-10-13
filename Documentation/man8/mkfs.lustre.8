@@ -5,7 +5,7 @@
 .\"
 .\" This file may be copied under the terms of the GNU Public License.
 .\"
-.TH MKFS.LUSTRE 8 2026-08-13 Lustre "Lustre Configuration Utilities"
+.TH MKFS.LUSTRE 8 2026-09-17 Lustre "Lustre Configuration Utilities"
 .SH NAME
 mkfs.lustre \- format a disk for a Lustre service
 .SH SYNOPSIS
@@ -120,17 +120,16 @@ Set persistent mount options that will be used when mounting Lustre targets.
 WARNING: unlike earlier versions of
 .BR mkfs.lustre ,
 this version completely replaces the default mount options
-with those specified on the command line,
-issuing a warning on stderr if any of the default mount options are omitted.
+with those specified on the command line.
 The defaults for
 .I LDISKFS
 are:
 .TP 10
 .B OST:
-.I errors=remount-ro,mballoc,extents
+.I errors=remount-ro
 .TP
 .B MGS/MDT:
-.I errors=remount-ro,user_xattr
+.I errors=remount-ro
 .PP
 .B DO NOT
 alter the default mount options unless you know what you are doing.

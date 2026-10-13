@@ -188,7 +188,6 @@ int check_mtab_entry(char *spec1, char *spec2, char *mntpt, char *type);
 int update_mtab_entry(char *spec, char *mtpt, char *type, char *opts,
 		      int flags, int freq, int pass);
 int update_utab_entry(struct mount_opts *mop);
-int check_mountfsoptions(char *mountopts, char *wanted_mountopts);
 void trim_mountfsoptions(char *s);
 char *convert_hostnames(char *buf, bool mount);
 char *convert_fsname(char *s1);
@@ -214,8 +213,7 @@ int osd_is_lustre(char *dev, unsigned *mount_type);
 void osd_modprobe(enum ldd_mount_type mount_type);
 bool osd_module_loaded(enum ldd_mount_type mount_type);
 int osd_make_lustre(struct mkfs_opts *mop);
-int osd_prepare_lustre(struct mkfs_opts *mop,
-		       char *wanted_mountopts, size_t len);
+int osd_prepare_lustre(struct mkfs_opts *mop);
 int osd_fix_mountopts(struct mkfs_opts *mop, char *mountopts, size_t len);
 int osd_tune_lustre(char *dev, struct mount_opts *mop);
 int osd_label_lustre(struct mount_opts *mop);
@@ -235,8 +233,7 @@ struct module_backfs_ops {
 	void	(*print_ldd_params)(struct mkfs_opts *mop);
 	int	(*is_lustre)(char *dev, enum ldd_mount_type *mount_type);
 	int	(*make_lustre)(struct mkfs_opts *mop);
-	int	(*prepare_lustre)(struct mkfs_opts *mop,
-				  char *wanted_mountopts, size_t len);
+	int	(*prepare_lustre)(struct mkfs_opts *mop);
 	int	(*fix_mountopts)(struct mkfs_opts *mop,
 				 char *mountopts, size_t len);
 	int	(*tune_lustre)(char *dev, struct mount_opts *mop);

@@ -39,7 +39,7 @@ MDT_DEVNAME=$(mdsdevname ${SINGLEMDS//mds/})
 START_NAMESPACE="${RLCTL} lfsck_start -M ${MDT_DEV} -t namespace"
 STOP_LFSCK="${RLCTL} lfsck_stop -M ${MDT_DEV} -A"
 SHOW_NAMESPACE="${RLCTL} get_param -n mdd.${MDT_DEV}.lfsck_namespace"
-MNTOPTS_NOSCRUB="-o user_xattr,noscrub"
+MNTOPTS_NOSCRUB="-o noscrub"
 remote_mds && ECHOCMD=${RCMD} || ECHOCMD="eval"
 
 if [ ${NTHREADS} -eq 0 ]; then

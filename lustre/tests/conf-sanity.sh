@@ -8147,7 +8147,7 @@ test_88b() {
 		error "default mount options is missing"
 
 	add mds1 $(mkfs_opts mds1 $(mdsdevname 1)) \
-		--mountfsoptions="user_xattr,errors=panic" \
+		--mountfsoptions="errors=panic" \
 		--reformat $(mdsdevname 1) || error "add mds1 failed"
 
 	do_facet mds1 "$TUNEFS $(mdsdevname 1) |

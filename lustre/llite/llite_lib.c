@@ -466,7 +466,7 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 				  OBD_CONNECT_OPEN_BY_FID |
 				  OBD_CONNECT_DIR_STRIPE |
 				  OBD_CONNECT_BULK_MBITS | OBD_CONNECT_CKSUM |
-				  OBD_CONNECT_SUBTREE |
+				  OBD_CONNECT_SUBTREE | OBD_CONNECT_XATTR |
 				  OBD_CONNECT_MULTIMODRPCS |
 				  OBD_CONNECT_GRANT_PARAM |
 				  OBD_CONNECT_GRANT_SHRINK |
@@ -516,9 +516,6 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 
 	data->ocd_ibits_known = MDS_INODELOCK_FULL;
 	data->ocd_version = LUSTRE_VERSION_CODE;
-
-	if (test_bit(LL_SBI_USER_XATTR, sbi->ll_flags))
-		data->ocd_connect_flags |= OBD_CONNECT_XATTR;
 
 	sb->s_flags |= SB_I_VERSION | SB_NOSEC;
 	sbi->ll_fop = ll_select_file_operations(sbi, true);

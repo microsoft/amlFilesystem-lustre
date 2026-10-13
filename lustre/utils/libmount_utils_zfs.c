@@ -832,8 +832,7 @@ int zfs_enable_quota(struct mkfs_opts *mop)
 	return ENOSYS;
 }
 
-int zfs_prepare_lustre(struct mkfs_opts *mop,
-			      char *wanted_mountopts, size_t len)
+int zfs_prepare_lustre(struct mkfs_opts *mop)
 {
 	if (osd_check_zfs_setup() == 0)
 		return EINVAL;

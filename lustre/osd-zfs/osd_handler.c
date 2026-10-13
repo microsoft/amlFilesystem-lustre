@@ -630,9 +630,7 @@ static void osd_conf_get(const struct lu_env *env,
 	param->ddp_symlink_max	= PATH_MAX;
 	param->ddp_mount_type	= LDD_MT_ZFS;
 
-	param->ddp_mntopts	= MNTOPT_USERXATTR;
-	if (osd->od_posix_acl)
-		param->ddp_mntopts |= MNTOPT_ACL;
+	param->ddp_mntopts	= MNTOPT_USERXATTR | MNTOPT_ACL;
 	/* Previously DXATTR_MAX_ENTRY_SIZE */
 	param->ddp_max_ea_size	= OBD_MAX_EA_SIZE;
 
@@ -1304,10 +1302,6 @@ static int osd_mount(const struct lu_env *env,
 	if (!osd_dmu_userobj_accounting_available(o))
 		CWARN("%s: dnode accounting not enabled: enable feature@userobj_accounting in pool\n",
 		      o->od_mntdev);
-
-	/* parse mount option "noacl", and enable ACL by default */
-	if (opts == NULL || strstr(opts, "noacl") == NULL)
-		o->od_posix_acl = 1;
 
 	osd_unlinked_drain(env, o);
 

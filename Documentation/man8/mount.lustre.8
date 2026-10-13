@@ -5,7 +5,7 @@
 .\"
 .\" This file may be copied under the terms of the GNU Public License v2.
 .\"
-.TH MOUNT.LUSTRE 8 2026-09-06 Lustre "Lustre Configuration Utilities"
+.TH MOUNT.LUSTRE 8 2026-09-17 Lustre "Lustre Configuration Utilities"
 .SH NAME
 mount.lustre, mount.lustre_tgt \- mount helper for Lustre client/target service
 .SH SYNOPSIS
@@ -222,10 +222,10 @@ Disables
 .BR flock (2)
 support entirely. Applications calling
 .BR flock (2)
-will get an
+on files in this mountpoint will get an
 .B ENOSYS
-error. It is possible to mount clients with different options,
-and only those mounted with
+error. It is possible to mount on clients (possibly more than once)
+with different options, and only those mounted with
 .B flock
 will be coherent amongst each other.
 .TP
@@ -321,11 +321,6 @@ In addition to the standard mount options and backing disk type
 Lustre understands the following
 .B server-specific
 options:
-.TP
-.BI acl
-Enable POSIX Access Control List support for all clients. See the
-.BR acl (5)
-manual page.
 .TP
 .BI no_create
 Do not allow objects to be created on an OST, or new directories

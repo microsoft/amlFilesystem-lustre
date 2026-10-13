@@ -1073,10 +1073,8 @@ int ldiskfs_make_lustre(struct mkfs_opts *mop)
 	return ret;
 }
 
-int ldiskfs_prepare_lustre(struct mkfs_opts *mop,
-			   char *wanted_mountopts, size_t len)
+int ldiskfs_prepare_lustre(struct mkfs_opts *mop)
 {
-	struct lustre_disk_data *ldd = &mop->mo_ldd;
 	int ret;
 
 	/* Set MO_IS_LOOP to indicate a loopback device is needed */
@@ -1086,9 +1084,6 @@ int ldiskfs_prepare_lustre(struct mkfs_opts *mop,
 	} else if (ret == 0) {
 		mop->mo_flags |= MO_IS_LOOP;
 	}
-
-	if (IS_MDT(ldd) || IS_MGS(ldd))
-		strscat(wanted_mountopts, ",user_xattr", len);
 
 	return 0;
 }

@@ -302,11 +302,6 @@ int osd_xattr_get(const struct lu_env *env, struct dt_object *dt,
 	int rc, size = 0;
 
 	ENTRY;
-	if (!osd_obj2dev(obj)->od_posix_acl &&
-	    (strcmp(name, XATTR_NAME_POSIX_ACL_ACCESS) == 0 ||
-	     strcmp(name, XATTR_NAME_POSIX_ACL_DEFAULT) == 0))
-		RETURN(-EOPNOTSUPP);
-
 	down_read(&obj->oo_guard);
 	if (unlikely(!dt_object_exists(dt) || obj->oo_destroyed))
 		GOTO(out, rc = -ENOENT);
@@ -895,11 +890,6 @@ int osd_xattr_set(const struct lu_env *env, struct dt_object *dt,
 	LASSERT(handle != NULL);
 	LASSERT(osd_invariant(obj));
 
-	if (!osd_obj2dev(obj)->od_posix_acl &&
-	    (strcmp(name, XATTR_NAME_POSIX_ACL_ACCESS) == 0 ||
-	     strcmp(name, XATTR_NAME_POSIX_ACL_DEFAULT) == 0))
-		RETURN(-EOPNOTSUPP);
-
 	oh = container_of(handle, struct osd_thandle, ot_super);
 
 	down_write(&obj->oo_guard);
@@ -1056,11 +1046,6 @@ int osd_xattr_del(const struct lu_env *env, struct dt_object *dt,
 	oh = container_of(handle, struct osd_thandle, ot_super);
 	LASSERT(oh->ot_tx != NULL);
 
-	if (!osd_obj2dev(obj)->od_posix_acl &&
-	    (strcmp(name, XATTR_NAME_POSIX_ACL_ACCESS) == 0 ||
-	     strcmp(name, XATTR_NAME_POSIX_ACL_DEFAULT) == 0))
-		RETURN(-EOPNOTSUPP);
-
 	down_write(&obj->oo_guard);
 	if (unlikely(!dt_object_exists(dt) || obj->oo_destroyed))
 		GOTO(out, rc = -ENOENT);
@@ -1183,11 +1168,6 @@ osd_sa_xattr_list(const struct lu_env *env, struct osd_object *obj,
 	while ((nvp = nvlist_next_nvpair(obj->oo_sa_xattr, nvp)) != NULL) {
 		const char *name = nvpair_name(nvp);
 
-		if (!osd_obj2dev(obj)->od_posix_acl &&
-		    (strcmp(name, XATTR_NAME_POSIX_ACL_ACCESS) == 0 ||
-		     strcmp(name, XATTR_NAME_POSIX_ACL_DEFAULT) == 0))
-			continue;
-
 		len = strlen(name);
 		if (lb->lb_buf != NULL) {
 			if (counted + len + 1 > lb->lb_len)
@@ -1230,13 +1210,6 @@ int osd_xattr_list(const struct lu_env *env, struct dt_object *dt,
 		GOTO(out, rc);
 
 	while ((rc = -zap_cursor_retrieve(zc, za)) == 0) {
-		if (!osd_obj2dev(obj)->od_posix_acl &&
-		    (strcmp(za->za_name, XATTR_NAME_POSIX_ACL_ACCESS) == 0 ||
-		     strcmp(za->za_name, XATTR_NAME_POSIX_ACL_DEFAULT) == 0)) {
-			zap_cursor_advance(zc);
-			continue;
-		}
-
 		rc = strlen(za->za_name);
 		if (lb->lb_buf != NULL) {
 			if (counted + rc + 1 > lb->lb_len)

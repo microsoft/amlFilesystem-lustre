@@ -816,7 +816,6 @@ int main(int argc, char *const argv[])
 #endif
 	struct lustre_disk_data *ldd = &mop.mo_ldd;
 	char *mountopts = NULL;
-	char wanted_mountopts[512] = "";
 	char old_fsname[16] = "";
 	char mountdata_arg[PATH_MAX] = "";
 	unsigned int mount_type;
@@ -1014,9 +1013,7 @@ int main(int argc, char *const argv[])
 	}
 #endif
 
-	/* These are the permanent mount options (always included) */
-	ret = osd_prepare_lustre(&mop,
-				 wanted_mountopts, sizeof(wanted_mountopts));
+	ret = osd_prepare_lustre(&mop);
 	if (ret != 0) {
 		fatal();
 		fprintf(stderr, "unable to prepare backend (%d)\n", ret);
@@ -1025,23 +1022,8 @@ int main(int argc, char *const argv[])
 
 	if (mountopts) {
 		trim_mountfsoptions(mountopts);
-		if (check_mountfsoptions(mountopts, wanted_mountopts)) {
-			ret = EINVAL;
-			goto out;
-		}
 		snprintf(ldd->ldd_mount_opts, sizeof(ldd->ldd_mount_opts),
 			 "%s", mountopts);
-	} else {
-#ifdef TUNEFS
-		if (ldd->ldd_mount_opts[0] == 0)
-		/* use the defaults unless old opts exist */
-#endif
-		{
-			snprintf(ldd->ldd_mount_opts,
-				 sizeof(ldd->ldd_mount_opts),
-				 "%s", wanted_mountopts);
-			trim_mountfsoptions(ldd->ldd_mount_opts);
-		}
 	}
 
 	ret = osd_fix_mountopts(&mop, ldd->ldd_mount_opts,

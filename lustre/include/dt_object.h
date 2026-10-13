@@ -44,16 +44,16 @@ struct niobuf_local;
 struct niobuf_remote;
 struct ldlm_enqueue_info;
 
-typedef enum {
+enum dt_mntopts {
 	MNTOPT_USERXATTR        = 0x00000001,
 	MNTOPT_ACL              = 0x00000002,
-} mntopt_t;
+};
 
 struct dt_device_param {
 	unsigned int	 ddp_max_name_len;
 	unsigned int	 ddp_max_nlink;
 	unsigned int	 ddp_symlink_max;
-	mntopt_t	 ddp_mntopts;
+	enum dt_mntopts	 ddp_mntopts;
 	unsigned int	 ddp_max_ea_size;
 	unsigned int	 ddp_mount_type;
 	unsigned long long ddp_maxbytes;

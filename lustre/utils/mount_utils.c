@@ -321,52 +321,6 @@ int update_mtab_entry(char *spec, char *mtpt, char *type, char *opts,
 	return rc;
 }
 
-/* Search for opt in mntlist, returning true if found.
- */
-static int in_mntlist(char *opt, char *mntlist)
-{
-	char *ml, *mlp, *item, *ctx = NULL;
-
-	if (!(ml = strdup(mntlist))) {
-		fprintf(stderr, "%s: out of memory\n", progname);
-		exit(1);
-	}
-	mlp = ml;
-	while ((item = strtok_r(mlp, ",", &ctx))) {
-		if (!strcmp(opt, item))
-			break;
-		mlp = NULL;
-	}
-	free(ml);
-	return (item != NULL);
-}
-
-/* Issue a message on stderr for every item in wanted_mountopts that is not
- * present in mountopts.  The justwarn boolean toggles between error and
- * warning message.  Return an error count.
- */
-int check_mountfsoptions(char *mountopts, char *wanted_mountopts)
-{
-	char *ml, *mlp, *item, *ctx = NULL;
-	int errors = 0;
-
-	if (!(ml = strdup(wanted_mountopts))) {
-		fprintf(stderr, "%s: out of memory\n", progname);
-		exit(1);
-	}
-	mlp = ml;
-	while ((item = strtok_r(mlp, ",", &ctx))) {
-		if (!in_mntlist(item, mountopts)) {
-			fprintf(stderr, "%s: Error: mandatory mount option"
-				" '%s' is missing\n", progname, item);
-			errors++;
-		}
-		mlp = NULL;
-	}
-	free(ml);
-	return errors;
-}
-
 /* Trim embedded white space, leading and trailing commas from string s.
  */
 void trim_mountfsoptions(char *s)
@@ -809,15 +763,13 @@ int osd_make_lustre(struct mkfs_opts *mop)
 	return ret;
 }
 
-int osd_prepare_lustre(struct mkfs_opts *mop,
-		       char *wanted_mountopts, size_t len)
+int osd_prepare_lustre(struct mkfs_opts *mop)
 {
 	struct lustre_disk_data *ldd = &mop->mo_ldd;
 	int ret;
 
 	if (backfs_mount_type_okay(ldd->ldd_mount_type))
-		ret = backfs_ops[ldd->ldd_mount_type]->prepare_lustre(mop,
-							wanted_mountopts, len);
+		ret = backfs_ops[ldd->ldd_mount_type]->prepare_lustre(mop);
 	else
 		ret = EINVAL;
 

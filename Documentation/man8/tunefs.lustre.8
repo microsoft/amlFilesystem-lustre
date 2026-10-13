@@ -5,7 +5,7 @@
 .\"
 .\" This file may be copied under the terms of the GNU Public License, v2.
 .\"
-.TH TUNEFS.LUSTRE 8 2026-08-13 Lustre "Lustre Configuration Utilities"
+.TH TUNEFS.LUSTRE 8 2026-09-17 Lustre "Lustre Configuration Utilities"
 .SH NAME
 tunefs.lustre \- modify the Lustre configuration information on a disk
 .SH SYNOPSIS
@@ -60,14 +60,13 @@ Set the persistent mount options that will be used when Lustre fs.
 WARNING: unlike earlier versions of
 .BR tunefs.lustre ,
 this version completely replaces the existing mount options with those
-specified on the command line, issuing a warning on stderr if any of the default
-mount options are omitted. The defaults for ldiskfs are
+specified on the command line. The defaults for ldiskfs are
 .TP
 .B OST :
-.I errors=remount-ro,mballoc,extents
+.I errors=remount-ro
 .TP
 .BR MGS/MDT :
-.I errors=remount-ro,user_xattr
+.I errors=remount-ro
 .PP
 .B DO NOT
 alter the default mount options unless you know what you are doing.

@@ -71,9 +71,8 @@ static void usage(FILE *out)
 		"\t-V|--version: output build version of the utility and exit\n"
 		"\tdefault options are marked below with '*'\n"
 		"\t\t(no)flock: disable* or enable POSIX flock support\n"
-		"\t\t(no)user_xattr: disable or enable* user xattr namespace\n"
+		"\t\t(no)user_xattr: disable* or enable user xattr namespace\n"
 		"\t<srvopt>: one or more comma separated server options:\n"
-		"\t\t(no)acl: disable or enable* POSIX ACL support completely\n"
 		"\t\tabort_recov: abort server recovery handling\n"
 		"\t\tnosvc: only start MGC/MGS without starting MDS/OSS\n"
 		"\t\tnomgs: only start target MDS/OSS, using existing MGS\n"
@@ -427,7 +426,6 @@ out:
 
 static int clear_update_ondisk(char *source, struct lustre_disk_data *ldd)
 {
-	char wanted_mountopts[512] = "";
 	struct mkfs_opts mkop;
 	int ret;
 	int ret2;
@@ -443,8 +441,7 @@ static int clear_update_ondisk(char *source, struct lustre_disk_data *ldd)
 	}
 	strncpy(mkop.mo_device, source, sizeof(mkop.mo_device));
 
-	ret = osd_prepare_lustre(&mkop,
-				 wanted_mountopts, sizeof(wanted_mountopts));
+	ret = osd_prepare_lustre(&mkop);
 	if (ret) {
 		fatal();
 		fprintf(stderr, "Can't prepare device %s: %s\n",

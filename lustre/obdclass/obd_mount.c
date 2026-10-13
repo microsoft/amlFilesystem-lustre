@@ -1399,19 +1399,22 @@ int lustre_parse_monolithic(struct fs_context *fc, void *lmd2_data)
 		args[0].from = NULL;
 		token = match_token(s1, lmd_flags_table, args);
 		if (token == LMD_NUM_MOUNT_OPT) {
-			if (match_wildcard("iam", s1) ||
+			/* skip obsolete options */
+			if (match_wildcard("acl", s1) ||
+			    match_wildcard("noacl", s1) ||
+			    match_wildcard("iam", s1) ||
 			    match_wildcard("hsm", s1))
 				continue;
 
 			/* Normally we would error but client and
-			 * server mounting is intertwine. So pass
+			 * server mounting is intertwined. So pass
 			 * off unknown args to ll_options instead.
 			 */
 			continue;
 		} else {
 			/* We found a known server option. Filter out
 			 * the result out of the options string. The
-			 * reset will be stored in lmd_opts.
+			 * rest will be stored in lmd_opts.
 			 */
 			char *tmp = strstr(options, s1);
 
@@ -1425,7 +1428,7 @@ int lustre_parse_monolithic(struct fs_context *fc, void *lmd2_data)
 
 		/*
 		 * Client options are parsed in ll_options: eg. flock,
-		 * user_xattr, acl
+		 * user_xattr
 		 */
 
 		/*
