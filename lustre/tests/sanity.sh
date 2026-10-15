@@ -2525,6 +2525,44 @@ test_27y() {
 }
 run_test 27y "create files while OST0 is degraded and the rest inactive"
 
+test_27ya() {
+	(( MDS1_VERSION >= $(version_code 2.17.59) )) ||
+		skip "need MDS >= 2.17.59 for OST disconnect detection"
+	(( OSTCOUNT >= 2 )) || skip_env "needs >= 2 OSTs"
+	[ $PARALLEL == "yes" ] && skip "skip parallel run"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+
+	local dir=$DIR/$tdir
+	local param="lod.$FSNAME-MDT0000*.target_obd"
+	local uuid=$(ostuuid_from_index 0)
+	# \\\$NF: survive do_node -> bash -c "..." so awk sees $NF (status)
+	local cmd="$LCTL get_param -n $param | awk '/$uuid/ { print \\\$NF }'"
+
+	# only MDT0000 is checked for the disconnect below
+	mkdir_on_mdt0 $dir || error "mkdir $dir failed"
+	stop ost1
+	stack_trap "start ost1 $(ostdevname 1) $OST_MOUNT_OPTS || true" EXIT
+
+	# umount only raises IMP_EVENT_DISCON, LOD must still see it as down
+	wait_osc_import_state mds1 ost1 DISCONN
+	wait_update_facet mds1 "$cmd" "INACTIVE" 5 ||
+		error "OST0000 not INACTIVE after disconnect"
+
+	# precreated objects must not be used on disconnected OST0000
+	$LFS setstripe -c -1 $dir/f1 || error "setstripe with OST0000 down"
+	$LFS getstripe $dir/f1
+	! $LFS getstripe $dir/f1 | awk '$1 ~ /^[0-9]+$/ { print $1 }' |
+		grep -qx 0 || error "allocated on disconnected OST0000"
+
+	start ost1 $(ostdevname 1) $OST_MOUNT_OPTS || error "start ost1 failed"
+	wait_recovery_complete ost1
+	wait_osc_import_ready mds1 ost1
+	wait_update_facet mds1 "$cmd" "ACTIVE" 10 ||
+		error "OST0000 not ACTIVE after restart"
+}
+run_test 27ya "LOD marks OST inactive after OST umount (LU-20963)"
+
 test_27z() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	remote_ost_nodsh && skip "remote OST with nodsh"
@@ -2944,8 +2982,16 @@ test_27F() { # LU-5346/LU-7975
 	wait $catpid || error "cat failed"
 
 	cmp /etc/hosts $DIR/$tdir/f0 || error "cmp failed"
-	[[ $($LFS getstripe -c $DIR/$tdir/f0) == 2 ]] ||
-		error "wrong stripecount"
+
+	# the resend may create the layout before all OSTs have reconnected,
+	# but it must not keep a stale or duplicate stripe from the failure
+	local count=$($LFS getstripe -c $DIR/$tdir/f0)
+	local osts=$($LFS getstripe $DIR/$tdir/f0 |
+		awk '$1 ~ /^[0-9]+$/ { print $1 }' | sort -u | wc -l)
+
+	$LFS getstripe $DIR/$tdir/f0
+	(( count >= 1 && count <= 2 && osts == count )) ||
+		error "wrong stripecount $count on $osts OSTs"
 
 }
 run_test 27F "Client resend delayed layout creation with non-zero size"

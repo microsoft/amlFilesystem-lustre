@@ -1625,9 +1625,10 @@ static int lod_statfs(const struct lu_env *env, struct dt_device *dev,
 	 */
 	lod_getref(&lod->lod_ost_descs);
 	lod_foreach_ost(lod, tgt) {
+		memset(&ost_sfs, 0, sizeof(ost_sfs));
 		rc = dt_statfs(env, tgt->ltd_tgt, &ost_sfs);
-		/* ignore errors */
-		if (rc || ost_sfs.os_bsize == 0)
+		/* ignore errors, but count a disconnected OST's cached space */
+		if ((rc && rc != -ENOTCONN) || ost_sfs.os_bsize == 0)
 			continue;
 		if (!ost_files) {
 			/*
@@ -1725,9 +1726,11 @@ static int lod_trans_space_check(const struct lu_env *env,
 		if (rc) {
 			CDEBUG(D_INFO, "%s: fail - statfs error: rc = %d\n",
 			       sub_dt->dd_lu_dev.ld_obd->obd_name, rc);
-			/* statfs may fail during recovery, skip check */
-			if (!lod->lod_recovery_completed)
-				rc = 0;
+			/* statfs may fail during recovery or while a target
+			 * is disconnected, skip that target
+			 */
+			if (!lod->lod_recovery_completed || rc == -ENOTCONN)
+				continue;
 			return rc;
 		}
 

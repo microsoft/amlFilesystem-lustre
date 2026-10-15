@@ -110,6 +110,12 @@ static int lod_statfs_and_check(const struct lu_env *env, struct lod_device *d,
 			       tgt->ltd_exp->exp_obd->obd_name);
 		}
 		spin_unlock(&d->lod_lock);
+	} else if (rc && tgt->ltd_discon != (rc == -ENOTCONN)) {
+		/* already inactive (e.g. ENOSPC), connection state changed */
+		spin_lock(&d->lod_lock);
+		if (!tgt->ltd_active)
+			tgt->ltd_discon = rc == -ENOTCONN;
+		spin_unlock(&d->lod_lock);
 	} else if (rc == 0 && !tgt->ltd_active) {
 		/* turned active? */
 		spin_lock(&d->lod_lock);
