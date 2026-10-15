@@ -25,12 +25,6 @@ if [[ $mds1_FSTYPE == "zfs" ]]; then
 	# LU-2829 / LU-2887 - make allowances for ZFS slowness
 	TEST33_NFILES=${TEST33_NFILES:-1000}
 fi
-if [[ $ost1_FSTYPE == "zfs" ]]; then
-	# test_56b causes OOM in test_70/71 in 1/40 run since using ZFS 2.4
-	(($(do_facet ost1 "cat /proc/meminfo" |
-	    awk '/MemTotal:/ { print $2 }') > 15500000)) ||
-		always_except LU-20276 56b
-fi
 
 #                                  23   (min)"
 [ "$SLOW" = "no" ] && EXCEPT_SLOW="33a"
@@ -4097,8 +4091,14 @@ run_test 55g "rename: race with trylock"
 
 test_56a() {
 	$LFS setstripe -c 1 $MOUNT/$tfile || error "creating $MOUNT/$tfile"
-	stack_trap "rm -f $MOUNT/$tfile"
+
+	# flush writes & reclaim space
+	stack_trap zfs_wait_free_osts
+	# Delete file first; before calling zfs_wait_free_osts
+	stack_trap "rm -f $MOUNT/$tfile; wait_delete_completed"
+
 	echo "run_llverdev $MOUNT/$tfile -p -s $((16000000)) -c 4k"
+
 	run_llverdev $MOUNT/$tfile -p -s $((16000000)) -c 4k ||
 		error "llverdev failed with rc=$?"
 }
@@ -4106,8 +4106,14 @@ run_test 56a "test llverdev with single large stripe"
 
 test_56b() {
 	$LFS setstripe -C 2000 $MOUNT/$tfile || error "creating $MOUNT/$tfile"
-	stack_trap "rm -f $MOUNT/$tfile"
+
+	# flush writes & reclaim space
+	stack_trap zfs_wait_free_osts
+	# Delete file first; before calling zfs_wait_free_osts
+	stack_trap "rm -f $MOUNT/$tfile; wait_delete_completed"
+
 	echo "run_llverdev $MOUNT/$tfile -p -s $((16000000 * OSTCOUNT)) -c 4k"
+
 	run_llverdev $MOUNT/$tfile -p -s $((16000000 * OSTCOUNT)) -c 4k ||
 		error "llverdev failed with rc=$?"
 }

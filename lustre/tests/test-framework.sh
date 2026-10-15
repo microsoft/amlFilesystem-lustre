@@ -13412,3 +13412,25 @@ get_test_project() {
 
 	echo "$TSTUSR" "$tstid"
 }
+
+# Wait for ZFS to finish reclaiming
+zfs_wait_free_osts() {
+	local i
+	local pids=""
+
+	# Force a TXG commit on all OSTs so pending frees are queued
+	sync_all_data_osts
+
+	# Wait for deferred frees; this ensures all freed capacity is available
+	# and the IO pipeline has released any memory required to process the
+	# frees.
+	for (( i=1; i <= OSTCOUNT; i++ )); do
+		[ "$(facet_fstype ost$i)" = zfs ] || continue
+		echo "[ost$i] [$ZPOOL] wait -t free $(zpool_name ost$i)"
+		# timeout at 10 mins (should be large enough)
+		do_facet ost$i
+			"timeout 600 $ZPOOL wait -t free $(zpool_name ost$i)" &
+		pids+=" $!"
+	done
+	[ -n "$pids" ] && wait $pids || true
+}
