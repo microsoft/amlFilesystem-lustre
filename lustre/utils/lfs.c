@@ -17366,6 +17366,12 @@ static int lfs_pcc_attach(int argc, char **argv)
 		return CMD_HELP;
 	}
 
+	if (type == LU_PCC_READWRITE) {
+		rc = llapi_pcc_rw_ok(argv[0]);
+		if (rc)
+			return rc;
+	}
+
 	while (optind < argc) {
 		int rc2;
 
@@ -17450,6 +17456,12 @@ static int lfs_pcc_attach_fid(int argc, char **argv)
 	if (argc <= optind) {
 		fprintf(stderr, "%s: must specify one or more fids\n", argv[0]);
 		return CMD_HELP;
+	}
+
+	if (type == LU_PCC_READWRITE) {
+		rc = llapi_pcc_rw_ok(argv[0]);
+		if (rc)
+			return rc;
 	}
 
 	while (optind < argc) {
