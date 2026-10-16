@@ -640,8 +640,22 @@ static int vvp_io_write_lock(const struct lu_env *env,
 
 static int vvp_io_setattr_iter_init(const struct lu_env *env,
 				    const struct cl_io_slice *ios)
-
 {
+	struct cl_io *io = ios->cis_io;
+	struct cl_object *obj = io->ci_obj;
+	struct cl_attr *attr = vvp_env_new_attr(env);
+	struct cl_setattr_io *sa = &io->u.ci_setattr;
+
+	/* per field: ll_merge_attr() merges mtime and atime separately */
+	cl_object_attr_lock(obj);
+	if (cl_object_attr_get(env, obj, attr) == 0) {
+		sa->sa_cur_mtime = max_t(time64_t, sa->sa_cur_mtime,
+					 attr->cat_mtime);
+		sa->sa_cur_atime = max_t(time64_t, sa->sa_cur_atime,
+					 attr->cat_atime);
+	}
+	cl_object_attr_unlock(obj);
+
 	return 0;
 }
 
@@ -672,17 +686,9 @@ static int vvp_io_setattr_lock(const struct lu_env *env,
 		lock_start = io->u.ci_setattr.sa_falloc_offset;
 		lock_end = io->u.ci_setattr.sa_falloc_end - 1;
 	} else {
-		unsigned int valid = io->u.ci_setattr.sa_avalid;
-
-		if (!(valid & TIMES_SET_FLAGS))
-			return 0;
-
-		if ((!(valid & ATTR_MTIME) ||
-		     io->u.ci_setattr.sa_attr.lvb_mtime >=
-		     io->u.ci_setattr.sa_attr.lvb_ctime) &&
-		    (!(valid & ATTR_ATIME) ||
-		     io->u.ci_setattr.sa_attr.lvb_atime >=
-		     io->u.ci_setattr.sa_attr.lvb_ctime))
+		/* Extent lock only when setting mtime/atime into the past. */
+		if (!(io->u.ci_setattr.sa_avalid & TIMES_SET_FLAGS) ||
+		    !cl_io_setattr_time_backward(io))
 			return 0;
 	}
 

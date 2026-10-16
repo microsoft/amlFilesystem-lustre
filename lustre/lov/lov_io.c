@@ -1868,12 +1868,31 @@ static int lov_io_ec_rd_iter_init(const struct lu_env *env,
 	RETURN(rc);
 }
 
+/*
+ * Client OST_SETATTR only carries times/flags; UID/GID/PROJID are pushed by
+ * MDS osp_sync and ll_merge_attr() takes max(MDT, OST) times, so it need not
+ * block on a down OST when the new times are >= known times (LU-20287).
+ * Still block for truncate/fallocate, times earlier than ctime or than old
+ * inode/cached OST times (else a skipped OST keeps a newer value that max()
+ * never drops), and OP_XVALID_FLAGS (MDS never pushes flags to OSTs).
+ */
+static bool lov_io_setattr_ndelay(const struct cl_io *io)
+{
+	const struct cl_setattr_io *sa = &io->u.ci_setattr;
+
+	return !cl_io_is_trunc(io) && !cl_io_is_fallocate(io) &&
+	       !cl_io_setattr_time_backward(io) &&
+	       !(sa->sa_xvalid & OP_XVALID_FLAGS);
+}
+
 static int lov_io_setattr_iter_init(const struct lu_env *env,
 				    const struct cl_io_slice *ios)
 {
 	struct lov_io *lio = cl2lov_io(env, ios);
 	struct cl_io *io = ios->cis_io;
+	struct lov_io_sub *sub;
 	int index;
+	int rc;
 
 	ENTRY;
 
@@ -1884,7 +1903,16 @@ static int lov_io_setattr_iter_init(const struct lu_env *env,
 			RETURN(io->ci_result = -ENODATA);
 	}
 
-	RETURN(lov_io_iter_init(env, ios));
+	rc = lov_io_iter_init(env, ios);
+	if (rc)
+		RETURN(rc);
+
+	/* sub-IOs only: avoid the read ndelay walk in lov_io_mirror_init() */
+	if (lov_io_setattr_ndelay(io))
+		list_for_each_entry(sub, &lio->lis_active, sub_linkage)
+			sub->sub_io.ci_ndelay = 1;
+
+	RETURN(0);
 }
 
 static int lov_io_call(const struct lu_env *env, struct lov_io *lio,

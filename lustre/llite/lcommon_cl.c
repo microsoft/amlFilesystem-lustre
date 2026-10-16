@@ -45,8 +45,22 @@ __u16 cl_inode_fini_refcheck;
  */
 static DEFINE_MUTEX(cl_inode_fini_guard);
 
+/**
+ * cl_setattr_ost() - Send setattr to OSTs via CLIO
+ * @inode: file inode
+ * @attr: attributes to set (times, size, etc.)
+ * @xvalid: Lustre-extended ATTR bits (OP_XVALID_*)
+ * @attr_flags: file attribute flags for OST_SETATTR
+ * @prior_mtime: inode mtime before MDT setattr (0 if unused)
+ * @prior_atime: inode atime before MDT setattr (0 if unused)
+ *
+ * Return:
+ * * %0: Success
+ * * %-ERRNO: Failure
+ */
 int cl_setattr_ost(struct inode *inode, const struct iattr *attr,
-		   enum op_xvalid xvalid, unsigned int attr_flags)
+		   enum op_xvalid xvalid, unsigned int attr_flags,
+		   time64_t prior_mtime, time64_t prior_atime)
 {
 	struct cl_object *obj;
 	struct lu_env *env;
@@ -73,6 +87,9 @@ int cl_setattr_ost(struct inode *inode, const struct iattr *attr,
 	io->u.ci_setattr.sa_avalid = attr->ia_valid;
 	io->u.ci_setattr.sa_xvalid = xvalid;
 	io->u.ci_setattr.sa_parent_fid = lu_object_fid(&obj->co_lu);
+	/* Baseline for ndelay; vvp adds cached OST times at iter_init. */
+	io->u.ci_setattr.sa_cur_mtime = prior_mtime;
+	io->u.ci_setattr.sa_cur_atime = prior_atime;
 	if (attr->ia_valid & ATTR_SIZE) {
 		io->u.ci_setattr.sa_subtype = CL_SETATTR_TRUNC;
 		io->u.ci_setattr.sa_attr_uid =

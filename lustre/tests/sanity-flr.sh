@@ -3892,6 +3892,117 @@ test_72() {
 }
 run_test 72 "check append on FLR file"
 
+# check_ost_obj_ids <file> <uid> <gid> <projid|""> <ostidx>...
+# After osp_sync, verify OST object uid/gid(/projid) via debugfs.
+check_ost_obj_ids() {
+	local file=$1 uid=$2 gid=$3 projid=$4
+	local idx facet fid objpath u g p
+
+	shift 4
+	sync_all_data
+	wait_mds_ost_sync || error "wait_mds_ost_sync failed"
+	do_nodes $(all_osts_nodes) "sync; echo 3 > /proc/sys/vm/drop_caches"
+
+	for idx in "$@"; do
+		facet=ost$((idx + 1))
+		fid=$($LFS getstripe -y $file | awk -v want=$idx '
+			/l_ost_idx:/ { i = $NF; gsub(/,/, "", i) }
+			/l_fid:/ && i == want { print $2; exit }')
+		[[ -n "$fid" ]] || error "no object on OST$idx for $file"
+		objpath=$(ost_fid2_objpath $facet $fid)
+		read -r u g p < <(do_facet $facet "$DEBUGFS -c -R \
+			'stat $objpath' $(ostdevname $((idx + 1)))" |
+			awk '/^User:/ { print $2, $4, $6 }')
+
+		[[ "$u:$g" == "$uid:$gid" ]] ||
+			error "OST$idx uid:gid $u:$g != $uid:$gid"
+		[[ -z "$projid" || "$p" == "$projid" ]] ||
+			error "OST$idx projid $p != $projid"
+	done
+}
+
+# LU-20287: setattr must not block on a stopped OST of the preferred mirror
+test_100a() {
+	(( OSTCOUNT >= 2 )) || skip "needs >= 2 OSTs"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+
+	local tf=$DIR/$tfile
+	local old_mtime=946684800
+	local cmd pid mtime
+
+	# preferred mirror 1 on OST0, mirror 2 on OST1
+	$LFS mirror create -N -c1 -i0 --flags=prefer -N -c1 -i1 $tf ||
+		error "create mirrored file $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=1 conv=notrunc ||
+		error "dd $tf failed"
+	$LFS mirror resync $tf || error "resync $tf failed"
+	verify_flr_state $tf "ro"
+
+	stack_trap "facet_up ost1 || start ost1 $(ostdevname 1) $OST_MOUNT_OPTS"
+	# keep size cache; avoid glimpse hang if the other mirror is unusable
+	stop ost1 || error "stop ost1 failed"
+	wait_osc_import_state client ost1 "\(DISCONN\|IDLE\)"
+
+	for cmd in "chown $RUNAS_ID:$RUNAS_GID" "chmod 640" "touch"; do
+		timeout 30 $cmd $tf || error "'$cmd' timed out or failed"
+	done
+	[[ "$(stat -c '%u:%g:%a' $tf)" == "$RUNAS_ID:$RUNAS_GID:640" ]] ||
+		error "MDT attrs $(stat -c '%u:%g:%a' $tf) wrong"
+
+	# mtime moved backwards must wait for the OST
+	touch -m -d @$old_mtime $tf &
+	pid=$!
+	sleep 10
+	kill -0 $pid 2>/dev/null ||
+		error "touch -d returned before ost1 restart"
+
+	start ost1 $(ostdevname 1) $OST_MOUNT_OPTS || error "start ost1 failed"
+	wait_recovery_complete ost1
+	wait $pid || error "touch -d failed: rc=$?"
+
+	cancel_lru_locks osc
+	mtime=$(stat -c %Y $tf)
+	(( mtime == old_mtime )) || error "mtime $mtime != $old_mtime"
+}
+run_test 100a "setattr does not block on stopped preferred mirror OST"
+
+# LU-20287: resync re-pushes UID/GID/PROJID after missed stripe setattr
+test_100b() {
+	(( MDS1_VERSION >= $(version_code 2.17.59.69) )) ||
+		skip "Need MDS >= 2.17.59.69 for resync ID repair"
+	(( OSTCOUNT >= 2 )) || skip "needs >= 2 OSTs"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only"
+
+	local tf=$DIR/$tfile
+	local old_projid=
+	local new_projid=
+
+	$LFS mirror create -N -c1 -i0 -N -c1 -i1 $tf ||
+		error "create mirrored file $tf failed"
+	if is_project_quota_supported; then
+		old_projid=$($LFS project -d $tf | awk '{ print $1 }')
+		new_projid=$((old_projid + 42))
+	fi
+
+	# Skip stripe setattr so MDT owns the new IDs but OST objects do not
+	#define OBD_FAIL_LFSCK_BAD_OWNER 0x1613
+	do_facet $SINGLEMDS $LCTL set_param fail_loc=0x1613
+	stack_trap "do_facet $SINGLEMDS $LCTL set_param fail_loc=0"
+	chown $RUNAS_ID:$RUNAS_GID $tf || error "chown $tf failed"
+	[[ -z "$new_projid" ]] || $LFS project -p $new_projid $tf ||
+		error "lfs project -p $new_projid $tf failed"
+	do_facet $SINGLEMDS $LCTL set_param fail_loc=0
+	check_ost_obj_ids $tf $(id -u) $(id -g) "$old_projid" 0 1
+
+	# Dirty the file so resync runs, then RESYNC_DONE re-pushes IDs
+	dd if=/dev/urandom of=$tf bs=1M count=1 conv=notrunc ||
+		error "dd $tf failed"
+	$LFS mirror resync $tf || error "resync $tf failed"
+	check_ost_obj_ids $tf $RUNAS_ID $RUNAS_GID "$new_projid" 0 1
+}
+run_test 100b "mirror resync repairs OST UID/GID/PROJID after missed setattr"
+
 write_file_200() {
 	local tf=$1
 

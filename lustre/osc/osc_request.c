@@ -188,9 +188,12 @@ out:
 	RETURN(rc);
 }
 
+/* seconds a no-delay setattr may wait for an import to (re)connect */
+#define NDELAY_SETATTR_LIMIT	5
+
 int osc_setattr_async(struct obd_export *exp, struct obdo *oa,
 		      obd_enqueue_update_f upcall, void *cookie,
-		      struct ptlrpc_request_set *rqset)
+		      struct ptlrpc_request_set *rqset, bool ndelay)
 {
 	struct ptlrpc_request *req;
 	struct osc_setattr_args *sa;
@@ -211,6 +214,16 @@ int osc_setattr_async(struct obd_export *exp, struct obdo *oa,
 	osc_pack_req_body(req, oa);
 
 	ptlrpc_request_set_replen(req);
+
+	/*
+	 * Bound wait while idle import reconnects (no_delay is ignored then).
+	 * Not a hard timer: only checked when the delayed request is
+	 * re-examined (e.g. on import state change).
+	 */
+	if (ndelay) {
+		req->rq_no_delay = req->rq_no_resend = 1;
+		req->rq_delay_limit_ns = ktime_set(NDELAY_SETATTR_LIMIT, 0);
+	}
 
 	/* do mds to ost setattr asynchronously */
 	if (!rqset) {

@@ -11545,4 +11545,3 @@ run_test 312 "buffered designated parity read is refused"
 complete_test $SECONDS
 check_and_cleanup_lustre
 exit_status
-

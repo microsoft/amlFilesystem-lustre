@@ -2409,6 +2409,8 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 	struct ll_inode_info *lli = ll_i2info(inode);
 	struct md_op_data *op_data = NULL;
 	ktime_t kstart = ktime_get();
+	time64_t prior_mtime;
+	time64_t prior_atime;
 	int rc = 0;
 
 	ENTRY;
@@ -2507,6 +2509,9 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 	op_data->op_attr = *attr;
 	op_data->op_xvalid = xvalid;
 
+	/* ll_md_setattr() overwrites inode times with the new MDT values */
+	prior_mtime = inode_get_mtime_sec(inode);
+	prior_atime = inode_get_atime_sec(inode);
 	rc = ll_md_setattr(dentry, op_data);
 	if (rc)
 		GOTO(out, rc);
@@ -2614,7 +2619,8 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 					attr->ia_size = ref_attr.cat_size;
 				}
 			}
-			rc = cl_setattr_ost(inode, attr, xvalid, flags);
+			rc = cl_setattr_ost(inode, attr, xvalid, flags,
+					    prior_mtime, prior_atime);
 		}
 	}
 
@@ -3516,7 +3522,7 @@ static int fileattr_set(struct inode *inode, int flags)
 	if (attr == NULL)
 		RETURN(-ENOMEM);
 
-	rc = cl_setattr_ost(inode, attr, OP_XVALID_FLAGS, flags);
+	rc = cl_setattr_ost(inode, attr, OP_XVALID_FLAGS, flags, 0, 0);
 
 	OBD_FREE_PTR(attr);
 	RETURN(rc);

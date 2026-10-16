@@ -6576,6 +6576,93 @@ test_39u() {
 }
 run_test 39u "stat race"
 
+# LU-20287: plain-file setattr must not block on a stopped OST, unless it
+# sets times earlier than ctime or than a known (possibly ahead) mtime.
+# Keep size cache (no cancel_lru_locks); avoid chmod/stat (they glimpse).
+test_39v() {
+	(( OSTCOUNT >= 2 )) || skip "needs >= 2 OSTs"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+	statx_supported || skip_env "statx() required to verify attrs without glimpse"
+
+	local tf=$DIR/$tfile
+	local tf2=$DIR/$tfile.2
+	local tf3=$DIR/$tfile.3
+	local old_mtime=946684800
+	local f facet=ost2 pid pids owner mtime before idx fid objpath u g
+
+	for f in $tf $tf2 $tf3; do
+		$LFS setstripe -c 2 -o 0,1 $f || error "setstripe $f failed"
+		dd if=/dev/zero of=$f bs=1M count=2 || error "dd $f failed"
+	done
+	# tf3: ahead mtime also in cached OST times
+	touch -m -d '+1 hour' $tf3 || error "touch +1h $tf3 failed"
+	stack_trap "rm -f $tf $tf2 $tf3"
+	stack_trap "chattr -a $tf2 2>/dev/null || true"
+	stack_trap "facet_up $facet || start $facet $(ostdevname 2) $OST_MOUNT_OPTS"
+
+	stop $facet || error "stop $facet failed"
+	wait_osc_import_state client $facet "\(DISCONN\|IDLE\)"
+
+	timeout 30 chown $RUNAS_ID:$RUNAS_GID $tf ||
+		error "chown timed out or failed"
+	timeout 30 touch $tf || error "touch timed out or failed"
+	# atime is merged on its own, the ahead mtime is not its baseline
+	timeout 30 touch -a $tf3 || error "touch -a timed out or failed"
+	owner=$($STATX -c %u:%g $tf)
+	[[ "$owner" == "$RUNAS_ID:$RUNAS_GID" ]] ||
+		error "owner $owner != $RUNAS_ID:$RUNAS_GID"
+
+	# Must block until OST restarts (bg + still-alive check, not a long
+	# timeout). Separate files avoid inode-lock serialize.
+	before=$(date +%s)
+	touch -m -d @$old_mtime $tf &
+	pids=$!
+	chattr +a $tf2 &
+	pids+=" $!"
+	touch $tf3 &
+	pids+=" $!"
+	sleep 10
+	for pid in $pids; do
+		kill -0 $pid 2>/dev/null ||
+			error "setattr pid $pid returned before $facet restart"
+	done
+
+	start $facet $(ostdevname 2) $OST_MOUNT_OPTS || error "start $facet failed"
+	wait_recovery_complete $facet
+	for pid in $pids; do
+		wait $pid || error "setattr pid $pid failed: rc=$?"
+	done
+
+	cancel_lru_locks osc
+	mtime=$(stat -c %Y $tf)
+	(( mtime == old_mtime )) || error "mtime $mtime != $old_mtime"
+	[[ "$(lsattr $tf2 | awk '{ print $1 }')" == *a* ]] ||
+		error "$tf2 is not append-only: $(lsattr $tf2)"
+	# mtime is taken before touch blocks; +1h value must not survive
+	mtime=$(stat -c %Y $tf3)
+	(( mtime >= before - 5 && mtime < before + 1800 )) ||
+		error "$tf3 mtime $mtime not near touch start $before"
+
+	# osp_sync pushed IDs skipped while ost2 was down
+	[[ "$ost1_FSTYPE" == "ldiskfs" ]] || return 0
+	sync_all_data
+	wait_mds_ost_sync || error "wait_mds_ost_sync failed"
+	do_nodes $(all_osts_nodes) "sync; echo 3 > /proc/sys/vm/drop_caches"
+	for idx in 0 1; do
+		fid=$($LFS getstripe -y $tf | awk -v want=$idx '
+			/l_ost_idx:/ { i = $NF; gsub(/,/, "", i) }
+			/l_fid:/ && i == want { print $2; exit }')
+		[[ -n "$fid" ]] || error "no object on OST$idx for $tf"
+		objpath=$(ost_fid2_objpath ost$((idx + 1)) $fid)
+		read -r u g < <(do_facet ost$((idx + 1)) "$DEBUGFS -c -R \
+			'stat $objpath' $(ostdevname $((idx + 1)))" |
+			awk '/^User:/ { print $2, $4 }')
+		[[ "$u:$g" == "$RUNAS_ID:$RUNAS_GID" ]] ||
+			error "OST$idx uid:gid $u:$g != $RUNAS_ID:$RUNAS_GID"
+	done
+}
+run_test 39v "setattr blocking on stopped OST of plain file"
+
 test_40() {
 	dd if=/dev/zero of=$DIR/$tfile bs=4096 count=1
 	$RUNAS $OPENFILE -f O_WRONLY:O_TRUNC $DIR/$tfile &&

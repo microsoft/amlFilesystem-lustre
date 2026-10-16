@@ -845,7 +845,8 @@ static int osc_io_setattr_start(const struct lu_env *env,
 		} else {
 			result = osc_setattr_async(osc_export(cl2osc(obj)),
 						   oa, osc_async_upcall,
-						   cbargs, PTLRPCD_SET);
+						   cbargs, PTLRPCD_SET,
+						   io->ci_ndelay);
 		}
 		cbargs->opc_rpc_sent = result == 0;
 	}
@@ -867,7 +868,16 @@ void osc_io_setattr_end(const struct lu_env *env,
 
 	if (cbargs->opc_rpc_sent) {
 		wait_for_completion(&cbargs->opc_sync);
-		result = io->ci_result = cbargs->opc_rc;
+		result = cbargs->opc_rc;
+		/* no-delay setattr from LOV (LU-20287): skip unavailable OST */
+		if (io->ci_ndelay &&
+		    (result == -EAGAIN || result == -ENOTCONN ||
+		     result == -ESHUTDOWN || result == -ETIMEDOUT)) {
+			CDEBUG(D_INODE, DFID": ignore setattr on unavailable OST: rc = %d\n",
+			       PFID(lu_object_fid(&obj->co_lu)), result);
+			result = 0;
+		}
+		io->ci_result = result;
 	}
 
 	if (cl_io_is_trunc(io)) {

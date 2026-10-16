@@ -1929,6 +1929,9 @@ struct cl_io {
 			uid_t			 sa_attr_uid;
 			gid_t			 sa_attr_gid;
 			__u32			 sa_attr_projid;
+			/* max(prior inode, cached OST) for ndelay/lock */
+			time64_t		 sa_cur_mtime;
+			time64_t		 sa_cur_atime;
 		} ci_setattr;
 		struct cl_data_version_io {
 			u64 dv_data_version;
@@ -2567,6 +2570,20 @@ static inline int cl_io_is_fallocate(const struct cl_io *io)
 {
 	return (io->ci_type == CIT_SETATTR) &&
 	       (io->u.ci_setattr.sa_subtype == CL_SETATTR_FALLOCATE);
+}
+
+/* True if setattr sets mtime/atime earlier than ctime or its own known value */
+static inline bool cl_io_setattr_time_backward(const struct cl_io *io)
+{
+	const struct cl_setattr_io *sa = &io->u.ci_setattr;
+	time64_t ctime = sa->sa_attr.lvb_ctime;
+
+	return ((sa->sa_avalid & ATTR_MTIME) &&
+		sa->sa_attr.lvb_mtime < max_t(time64_t, ctime,
+					      sa->sa_cur_mtime)) ||
+	       ((sa->sa_avalid & ATTR_ATIME) &&
+		sa->sa_attr.lvb_atime < max_t(time64_t, ctime,
+					      sa->sa_cur_atime));
 }
 
 struct cl_io *cl_io_top(struct cl_io *io);

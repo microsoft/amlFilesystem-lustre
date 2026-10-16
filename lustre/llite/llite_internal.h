@@ -2083,7 +2083,8 @@ int ll_getparent(struct file *file, struct getparent __user *arg);
 
 /* lcommon_cl.c */
 int cl_setattr_ost(struct inode *inode, const struct iattr *attr,
-		   enum op_xvalid xvalid, unsigned int attr_flags);
+		   enum op_xvalid xvalid, unsigned int attr_flags,
+		   time64_t prior_mtime, time64_t prior_atime);
 
 extern struct lu_env *cl_inode_fini_env;
 extern __u16 cl_inode_fini_refcheck;

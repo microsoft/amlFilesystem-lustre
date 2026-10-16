@@ -55,7 +55,7 @@ int osc_match_base(const struct lu_env *env, struct obd_export *exp,
 
 int osc_setattr_async(struct obd_export *exp, struct obdo *oa,
 		      obd_enqueue_update_f upcall, void *cookie,
-		      struct ptlrpc_request_set *rqset);
+		      struct ptlrpc_request_set *rqset, bool ndelay);
 int osc_fallocate_base(struct obd_export *exp, struct obdo *oa,
 		       obd_enqueue_update_f upcall, void *cookie,
 		       int mode);

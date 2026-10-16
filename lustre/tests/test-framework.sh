@@ -13389,6 +13389,15 @@ ost_fid2_objpath() {
 		return
 	}
 
+	# IDIF FID [0x1IIIIOOOO:0xOOOOOOOO:0], from an OST with objects
+	# from an MDT without a FID sequence, holds a 48-bit object
+	# id that is stored in O/0 with a decimal name
+	(( (16#$seq >> 32) == 1 )) && {
+		oid=$((((16#$seq & 0xffff) << 32) | 16#$oid))
+		echo "O/0/d$((oid % 32))/$oid"
+		return
+	}
+
 	if [ $seq == 0 ] || [ $(facet_fstype $facet) == zfs ]; then
 		oid=$((16#$oid))
 	fi

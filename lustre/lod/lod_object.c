@@ -9247,7 +9247,8 @@ static int lod_declare_update_sync_pending(const struct lu_env *env,
 	lo->ldo_flr_state = LCM_FL_RDONLY;
 	lod_obj_inc_layout_gen(lo);
 
-	layout_attr->la_valid = LA_LAYOUT_VERSION;
+	/* re-push IDs to repair objects that missed setattr (LU-20287) */
+	layout_attr->la_valid = LA_LAYOUT_VERSION | LA_UID | LA_GID | LA_PROJID;
 	layout_attr->la_layout_version = 0;
 	rc = lod_declare_attr_set(env, &lo->ldo_obj, layout_attr, th);
 	if (rc)
@@ -10138,6 +10139,14 @@ static int lod_layout_change(const struct lu_env *env, struct dt_object *dt,
 	}
 
 	rc = lod_striped_create(env, dt, attr, NULL, th);
+	if (!rc && layout_attr->la_valid & LA_UID) {
+		rc = dt_attr_get(env, dt_object_child(dt), attr);
+		if (!rc) {
+			layout_attr->la_uid = attr->la_uid;
+			layout_attr->la_gid = attr->la_gid;
+			layout_attr->la_projid = attr->la_projid;
+		}
+	}
 	if (!rc && layout_attr->la_valid & LA_LAYOUT_VERSION) {
 		layout_attr->la_layout_version |= lo->ldo_layout_gen;
 		rc = lod_attr_set(env, dt, layout_attr, th);
