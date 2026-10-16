@@ -174,8 +174,12 @@ static int osc_setattr_interpret(const struct lu_env *env,
 
 	ENTRY;
 
-	if (rc != 0)
+	if (rc != 0) {
+		/* no-delay setattr failed locally, e.g. by failed reconnect */
+		if (req->rq_no_delay && !req->rq_replied)
+			rc = -EAGAIN;
 		GOTO(out, rc);
+	}
 
 	body = req_capsule_server_get(&req->rq_pill, &RMF_OST_BODY);
 	if (body == NULL)
@@ -188,9 +192,12 @@ out:
 	RETURN(rc);
 }
 
+/* seconds a no-delay setattr may wait for an import to (re)connect */
+#define NDELAY_SETATTR_LIMIT	5
+
 int osc_setattr_async(struct obd_export *exp, struct obdo *oa,
 		      obd_enqueue_update_f upcall, void *cookie,
-		      struct ptlrpc_request_set *rqset)
+		      struct ptlrpc_request_set *rqset, bool ndelay)
 {
 	struct ptlrpc_request *req;
 	struct osc_setattr_args *sa;
@@ -211,6 +218,16 @@ int osc_setattr_async(struct obd_export *exp, struct obdo *oa,
 	osc_pack_req_body(req, oa);
 
 	ptlrpc_request_set_replen(req);
+
+	/*
+	 * Bound wait while idle import reconnects (no_delay is ignored then).
+	 * Not a hard timer: only checked when the delayed request is
+	 * re-examined (e.g. on import state change).
+	 */
+	if (ndelay) {
+		req->rq_no_delay = req->rq_no_resend = 1;
+		req->rq_delay_limit_ns = ktime_set(NDELAY_SETATTR_LIMIT, 0);
+	}
 
 	/* do mds to ost setattr asynchronously */
 	if (!rqset) {

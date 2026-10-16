@@ -3484,7 +3484,7 @@ static ssize_t ll_lov_setstripe(struct inode *inode, struct file *file,
 			struct iattr attr = { 0 };
 
 			rc = cl_setattr_ost(inode, &attr, OP_XVALID_FLAGS,
-					    LUSTRE_ENCRYPT_FL);
+					    LUSTRE_ENCRYPT_FL, 0, 0);
 		}
 	}
 	cl_lov_delay_create_clear(&file->f_flags);
@@ -4773,7 +4773,8 @@ int ll_set_project(struct inode *inode, __u32 xflags, __u32 projid)
 	if (ll_i2info(inode)->lli_clob) {
 		struct iattr attr = { 0 };
 
-		rc = cl_setattr_ost(inode, &attr, OP_XVALID_FLAGS, xflags);
+		rc = cl_setattr_ost(inode, &attr, OP_XVALID_FLAGS, xflags,
+				    0, 0);
 	}
 
 out_fsxattr:
