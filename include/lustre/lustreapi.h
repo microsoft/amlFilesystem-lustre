@@ -555,6 +555,7 @@ struct find_work_queue {
 	struct find_work_unit *fwq_tail; /* ... add to tail */
 	pthread_mutex_t fwq_lock;
 	pthread_cond_t fwq_sleep_cond;
+	pthread_cond_t fwq_done_cond;	 /* Last unit done, or shutdown */
 	/* Atomic counter, active work units */
 #if HAS_STDATOMIC
 	atomic_int fwq_active_units;

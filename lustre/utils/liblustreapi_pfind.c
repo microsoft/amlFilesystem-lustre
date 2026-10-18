@@ -5074,6 +5074,8 @@ static void *find_worker(void *arg)
 			queue->fwq_error = -ENOMEM;
 		queue->fwq_shutdown = true;
 		pthread_cond_broadcast(&queue->fwq_sleep_cond);
+		/* the caller sleeps on fwq_done_cond */
+		pthread_cond_broadcast(&queue->fwq_done_cond);
 		pthread_mutex_unlock(&queue->fwq_lock);
 		return NULL;
 	}
@@ -5127,7 +5129,12 @@ static void *find_worker(void *arg)
 		}
 
 		work_unit_free(unit);
-		ll_atomic_fetch_sub(&queue->fwq_active_units, 1);
+		/* under fwq_lock, so the waiter cannot miss the wakeup */
+		pthread_mutex_lock(&queue->fwq_lock);
+		if (ll_atomic_fetch_sub(&queue->fwq_active_units, 1) == 1 ||
+		    queue->fwq_shutdown)
+			pthread_cond_signal(&queue->fwq_done_cond);
+		pthread_mutex_unlock(&queue->fwq_lock);
 	}
 
 	find_scratch_fini(&scratch);
@@ -5147,6 +5154,7 @@ static void find_work_queue_init(struct find_work_queue *queue,
 	queue->fwq_active_units = 0;
 	pthread_mutex_init(&queue->fwq_lock, NULL);
 	pthread_cond_init(&queue->fwq_sleep_cond, NULL);
+	pthread_cond_init(&queue->fwq_done_cond, NULL);
 	queue->fwq_shutdown = false;
 	queue->fwq_error = 0;
 	queue->fwq_cb_init = cb_init;
@@ -5556,13 +5564,18 @@ static int pfind_param_callback(char *path, struct find_param *param,
 		goto out;
 
 	/* Wait for all work to complete */
+	pthread_mutex_lock(&queue->fwq_lock);
 	while (ll_atomic_fetch_add(&queue->fwq_active_units, 0) > 0) {
 		/* if a worker hit an error, it forces shutdown... */
-		if (queue->fwq_shutdown)
+		if (queue->fwq_shutdown && queue->fwq_head) {
+			pthread_mutex_unlock(&queue->fwq_lock);
 			cleanup_work_queue(queue);
-		else
-			sched_yield();
+			pthread_mutex_lock(&queue->fwq_lock);
+			continue;
+		}
+		pthread_cond_wait(&queue->fwq_done_cond, &queue->fwq_lock);
 	}
+	pthread_mutex_unlock(&queue->fwq_lock);
 	/* collect error if one occurred... */
 	ret = queue->fwq_error;
 
@@ -5616,6 +5629,7 @@ cleanup:
 	free(threads);
 	pthread_mutex_destroy(&queue.fwq_lock);
 	pthread_cond_destroy(&queue.fwq_sleep_cond);
+	pthread_cond_destroy(&queue.fwq_done_cond);
 
 	return rc;
 }
