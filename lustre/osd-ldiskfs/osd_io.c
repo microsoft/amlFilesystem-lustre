@@ -421,6 +421,10 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 	int rc = 0;
 	struct blk_plug plug;
 	int blocks_left_page;
+	bool row_start;
+	/* RAID row (chunk if only stride set) in blocks for writes, else 0 */
+	unsigned long stripe = iobuf->dr_rw && LDISKFS_SB(sb)->s_stripe > 1 ?
+			       LDISKFS_SB(sb)->s_stripe : 0;
 
 	ENTRY;
 
@@ -489,7 +493,17 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 				 sector_bits))
 				nblocks++;
 
-			if (bio && can_be_merged(bio, sector) &&
+			/*
+			 * Start a new bio at each RAID row, so that no row is
+			 * split between two bios (partial-stripe write). Only
+			 * at a page start: T10-PI takes a bio segment's guards
+			 * from the start of its page.
+			 */
+			row_start = stripe &&
+				    blocks[block_idx + i] % stripe == 0 &&
+				    (block_idx + i) % blocks_per_page == 0;
+
+			if (bio && !row_start && can_be_merged(bio, sector) &&
 			    bio_add_folio(bio, folio, blocksize * nblocks,
 					  lnb_offset + page_offset) != 0)
 				continue;       /* added this frag OK */
