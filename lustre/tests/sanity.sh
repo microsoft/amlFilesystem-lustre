@@ -16589,6 +16589,42 @@ test_104d() {
 }
 run_test 104d "$RUNAS lctl dl test"
 
+test_104e() {
+	(( $RUNAS_ID != $UID )) ||
+		skip_env "RUNAS_ID = UID = $UID -- skipping"
+
+	(( $MDS1_VERSION >= $(version_code 2.17.59.70) &&
+	   $OST1_VERSION >= $(version_code 2.17.59.70) )) ||
+		skip "need MDS/OSS >= 2.17.59.70 for stats key table fix"
+
+	# non-root users cannot read the debugfs stats files, so
+	# lctl falls back to the LU-11850 Netlink interface
+	local facet
+	local params
+	local out
+	local i
+
+	for facet in mds1 ost1; do
+		if [[ $facet == mds1 ]]; then
+			params="mdt.$FSNAME-MDT0000.exports.*.stats"
+		else
+			params="obdfilter.$FSNAME-OST0000.exports.*.stats"
+		fi
+		# the Netlink source filter does not glob over IPv4 NIDs
+		params=$(do_facet $facet $LCTL list_param "$params")
+		[[ -n "$params" ]] || error "(0) $facet has no exports stats"
+
+		for ((i = 0; i < 20; i++)); do
+			out=$(do_facet $facet $RUNAS $LCTL get_param \
+			      $params 2>&1)
+		done
+		(( $(grep -c snapshot_time <<< "$out") ==
+		   $(wc -w <<< "$params") )) ||
+			error "(1) $facet missing stats from $params: $out"
+	done
+}
+run_test 104e "$RUNAS lctl get_param exports stats test"
+
 test_105a() {
 	# doesn't work on 2.4 kernels
 	touch $DIR/$tfile

@@ -812,14 +812,11 @@ int lustre_stats_dump(struct sk_buff *msg, struct netlink_callback *cb)
 			const struct ln_key_list **all;
 			struct ln_key_list *start;
 
-			/* enum lustre_stats_attrs defines one
-			 * LUSTRE_STATS_ATTR_DATASET. The stats have a
-			 * count of ls_num LUSTRE_STATS_ATTR_DATASET.
-			 * Since by default LUSTRE_STATS_ATTR_MAX covers
-			 * one LUSTRE_STATS_ATTR_DATASET we need to allocate
-			 * ls_num - 1 dataset attributes.
+			/* The key table has slots 0 to LUSTRE_STATS_ATTR_MAX,
+			 * which includes one LUSTRE_STATS_ATTR_DATASET, and
+			 * one more for each remaining counter.
 			 */
-			count = LUSTRE_STATS_ATTR_MAX + stats->ls_num - 1;
+			count = LUSTRE_STATS_ATTR_MAX + stats->ls_num;
 			len += sizeof(struct ln_key_props) * count;
 			OBD_ALLOC(start, len);
 			if (!start) {
@@ -827,10 +824,13 @@ int lustre_stats_dump(struct sk_buff *msg, struct netlink_callback *cb)
 					       "first key list allocation failure");
 				GOTO(out_cancel, rc = -ENOMEM);
 			}
-			*start = stats_list; /* Set initial values */
-			start->lkl_maxattr += stats->ls_num;
-			for (i = LUSTRE_STATS_ATTR_MAX + 1;
-			     i <= start->lkl_maxattr; i++)
+			/* A struct assignment is not guaranteed to copy
+			 * the flexible array member.
+			 */
+			for (i = 0; i <= LUSTRE_STATS_ATTR_MAX; i++)
+				start->lkl_list[i] = stats_list.lkl_list[i];
+			start->lkl_maxattr = count - 1;
+			for (; i <= start->lkl_maxattr; i++)
 				start->lkl_list[i] =
 					stats_list.lkl_list[LUSTRE_STATS_ATTR_DATASET];
 
