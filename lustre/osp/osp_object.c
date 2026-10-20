@@ -1775,6 +1775,7 @@ static int osp_it_fetch(const struct lu_env *env, struct osp_it *it)
 	struct ptlrpc_bulk_desc  *desc;
 	struct idx_info	 *ii;
 	int			  npages;
+	unsigned int		  nlupgs;
 	int			  rc;
 	int			  i;
 
@@ -1784,18 +1785,33 @@ static int osp_it_fetch(const struct lu_env *env, struct osp_it *it)
 	npages = min_t(unsigned int, OFD_MAX_BRW_SIZE, 1 << 20);
 	npages /= PAGE_SIZE;
 
-	OBD_ALLOC_PTR_ARRAY(folios, npages);
-	if (folios == NULL)
-		RETURN(-ENOMEM);
-
-	it->ooi_folios = folios;
-	it->ooi_total_npages = npages;
-	for (i = 0; i < npages; i++) {
-		folios[i] = folio_alloc(GFP_KERNEL, 0);
-		if (IS_ERR_OR_NULL(folios[i])) {
-			folios[i] = NULL;
+	/* the folios of the previous fetch, if any, are reused as they are */
+	folios = it->ooi_folios;
+	if (folios == NULL) {
+		OBD_ALLOC_PTR_ARRAY(folios, npages);
+		if (folios == NULL)
 			RETURN(-ENOMEM);
+
+		for (i = 0; i < npages; i++) {
+			/* GFP_NOFS, as the index is read while the caller
+			 * may hold a lock which the reclaim of this
+			 * filesystem needs
+			 */
+			folios[i] = folio_alloc(GFP_NOFS, 0);
+			if (IS_ERR_OR_NULL(folios[i])) {
+				while (--i >= 0)
+					folio_put(folios[i]);
+				OBD_FREE_PTR_ARRAY(folios, npages);
+				RETURN(-ENOMEM);
+			}
 		}
+		/* only a complete array is published, so that a retry of
+		 * the fetch never reuses a half filled one
+		 */
+		it->ooi_folios = folios;
+		it->ooi_total_npages = npages;
+	} else {
+		npages = it->ooi_total_npages;
 	}
 
 	req = ptlrpc_request_alloc(osp->opd_obd->u.cli.cl_import,
@@ -1860,16 +1876,19 @@ static int osp_it_fetch(const struct lu_env *env, struct osp_it *it)
 	if (ii->ii_magic != IDX_INFO_MAGIC)
 		 GOTO(out, rc = -EPROTO);
 
-	npages = (ii->ii_count + LU_PAGE_COUNT - 1) >>
-		 (PAGE_SHIFT - LU_PAGE_SHIFT);
-	if (npages > it->ooi_total_npages) {
-		CERROR("%s: returned more folios than expected, %u > %u\n",
-		       osp->opd_obd->obd_name, npages, it->ooi_total_npages);
+	nlupgs = ii->ii_count;
+	if (nlupgs > (unsigned int)it->ooi_total_npages * LU_PAGE_COUNT) {
+		CERROR("%s: returned more lu_pages than expected, %u > %u\n",
+		       osp->opd_obd->obd_name, nlupgs,
+		       (unsigned int)it->ooi_total_npages * LU_PAGE_COUNT);
 		GOTO(out, rc = -EINVAL);
 	}
 
+	npages = (nlupgs + LU_PAGE_COUNT - 1) >> (PAGE_SHIFT - LU_PAGE_SHIFT);
+
 	it->ooi_rec_size = ii->ii_recsize;
 	it->ooi_valid_npages = npages;
+	it->ooi_valid_nlupgs = nlupgs;
 	if (req_capsule_rep_need_swab(&req->rq_pill))
 		it->ooi_swab = 1;
 
@@ -1879,6 +1898,19 @@ out:
 	ptlrpc_req_put(req);
 
 	return rc;
+}
+
+/*
+ * A reply carries ii_count lu_pages, which is not necessarily a multiple of
+ * LU_PAGE_COUNT, and the server pads the tail of its own last system page
+ * only, which is nothing when its PAGE_SIZE equals LU_PAGE_SIZE. The tail of
+ * the last folio then still holds the previous fetch, magic and all.
+ */
+static inline bool osp_it_lu_page_valid(const struct osp_it *it)
+{
+	return it->ooi_pos_lu_page < LU_PAGE_COUNT &&
+	       it->ooi_pos_page * LU_PAGE_COUNT + it->ooi_pos_lu_page <
+	       it->ooi_valid_nlupgs;
 }
 
 /**
@@ -1905,7 +1937,6 @@ int osp_it_next_page(const struct lu_env *env, struct dt_it *di)
 	struct lu_idxpage	*idxpage;
 	struct folio		**folios;
 	int			rc;
-	int			i;
 
 	ENTRY;
 
@@ -1925,7 +1956,7 @@ finish_cur_idxpage:
 		it->ooi_pos_lu_page++;
 
 process_page:
-		if (it->ooi_pos_lu_page < LU_PAGE_COUNT) {
+		if (osp_it_lu_page_valid(it)) {
 			it->ooi_cur_idxpage = (void *)it->ooi_cur_kaddr +
 					 LU_PAGE_SIZE * it->ooi_pos_lu_page;
 			if (it->ooi_swab)
@@ -1961,20 +1992,14 @@ start:
 			goto process_page;
 		}
 
-		for (i = 0; i < it->ooi_total_npages; i++) {
-			if (folios[i] != NULL)
-				folio_put(folios[i]);
-		}
-		OBD_FREE_PTR_ARRAY(folios, it->ooi_total_npages);
-
+		/* the folios are kept for the next fetch of this iteration */
 		it->ooi_pos_page = 0;
-		it->ooi_total_npages = 0;
 		it->ooi_valid_npages = 0;
+		it->ooi_valid_nlupgs = 0;
 		it->ooi_swab = 0;
 		it->ooi_ent = NULL;
 		it->ooi_cur_kaddr = NULL;
 		it->ooi_cur_idxpage = NULL;
-		it->ooi_folios = NULL;
 	}
 
 	if (it->ooi_next == II_END_OFF)

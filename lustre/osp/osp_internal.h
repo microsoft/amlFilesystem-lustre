@@ -359,7 +359,8 @@ struct osp_it {
 	__u32			  ooi_rec_size;
 	int			  ooi_pos_ent;
 	int			  ooi_total_npages;
-	int			  ooi_valid_npages;
+	__u32			  ooi_valid_npages;
+	__u32			  ooi_valid_nlupgs;
 	unsigned int		  ooi_swab:1;
 	__u64			  ooi_next;
 	struct dt_object	 *ooi_obj;
