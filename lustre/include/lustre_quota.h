@@ -196,8 +196,7 @@ enum osd_quota_local_flags {
 };
 
 struct qsd_instance *qsd_init(const struct lu_env *env, char *svnname,
-			      struct dt_device *d, struct proc_dir_entry *proc,
-			      bool is_md, bool excl);
+			      struct dt_device *d, bool is_md, bool excl);
 int qsd_prepare(const struct lu_env *env, struct qsd_instance *qsd);
 int qsd_start(const struct lu_env *env, struct qsd_instance *qsd);
 void qsd_fini(const struct lu_env *env, struct qsd_instance *qsd);

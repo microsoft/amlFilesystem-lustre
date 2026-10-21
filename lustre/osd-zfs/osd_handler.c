@@ -1271,14 +1271,14 @@ static int osd_mount(const struct lu_env *env,
 	if (rc)
 		GOTO(err, rc);
 
-	rc = osd_procfs_init(o, o->od_svname);
+	rc = osd_tunables_init(o);
 	if (rc)
 		GOTO(err, rc);
 
 	/* currently it's no need to prepare qsd_instance_md for OST */
 	if (!o->od_is_ost) {
 		o->od_quota_slave_md = qsd_init(env, o->od_svname,
-						&o->od_dt_dev, o->od_proc_entry,
+						&o->od_dt_dev,
 						true, false);
 		if (IS_ERR(o->od_quota_slave_md)) {
 			rc = PTR_ERR(o->od_quota_slave_md);
@@ -1288,8 +1288,7 @@ static int osd_mount(const struct lu_env *env,
 	}
 
 	o->od_quota_slave_dt = qsd_init(env, o->od_svname, &o->od_dt_dev,
-					o->od_proc_entry, false, false);
-
+					false, false);
 	if (IS_ERR(o->od_quota_slave_dt)) {
 		if (o->od_quota_slave_md != NULL) {
 			qsd_fini(env, o->od_quota_slave_md);
@@ -1420,7 +1419,7 @@ static struct lu_device *osd_device_fini(const struct lu_env *env,
 	/* now with all the callbacks completed we can cleanup the remainings */
 	osd_shutdown(env, o);
 	osd_scrub_cleanup(env, o);
-	osd_procfs_fini(o);
+	osd_tunables_fini(o);
 
 	if (o->od_os)
 		osd_umount(env, o);
@@ -1690,8 +1689,9 @@ static int __init osd_init(void)
 	if (rc)
 		return rc;
 
-	rc = class_register_type(&osd_obd_device_ops, NULL, true,
-				 LUSTRE_OSD_ZFS_NAME, &osd_device_type);
+	rc = class_register_type(&osd_obd_device_ops, NULL,
+				 symlink_brw_stats, LUSTRE_OSD_ZFS_NAME,
+				 &osd_device_type);
 	if (rc)
 		lu_kmem_fini(osd_caches);
 	return rc;

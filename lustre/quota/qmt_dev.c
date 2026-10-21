@@ -55,6 +55,44 @@
 
 static const struct lu_device_operations qmt_lu_ops;
 
+static void qmt_tunables_fini(struct qmt_device *qmt)
+{
+	/* remove qmt debugfs entry */
+	debugfs_remove_recursive(qmt->qmt_debugfs);
+	qmt->qmt_debugfs = NULL;
+
+	kobject_put(qmt->qmt_kobj);
+}
+
+static int qmt_tunables_init(struct qmt_device *qmt)
+{
+	struct obd_type *type;
+	int rc = 0;
+
+	/* at the moment there is no linkage between lu_type and obd_type, so
+	 * we lookup obd_type this way
+	 */
+	type = class_search_type(LUSTRE_QMT_NAME);
+	LASSERT(type);
+
+	/* very simple kobject */
+	qmt->qmt_kobj = kobject_create_and_add(qmt->qmt_svname,
+					       &type->typ_kobj);
+	if (!qmt->qmt_kobj) {
+		rc = -ENOMEM;
+		goto out_put;
+	}
+
+	/* register debugfs directory associated with this qmt */
+	qmt->qmt_debugfs = debugfs_create_dir(qmt->qmt_svname,
+					      type->typ_debugfs_entry);
+out_put:
+	/* put reference taken by class_search_type */
+	kobject_put(&type->typ_kobj);
+
+	return rc;
+}
+
 /*
  * Release quota master target and all data structure associated with this
  * target.
@@ -81,11 +119,8 @@ static struct lu_device *qmt_device_fini(const struct lu_env *env,
 	/* kill pool instances, if any */
 	qmt_pool_fini(env, qmt);
 
-	/* remove qmt proc entry */
-	if (qmt->qmt_proc != NULL && !IS_ERR(qmt->qmt_proc)) {
-		lprocfs_remove(&qmt->qmt_proc);
-		qmt->qmt_proc = NULL;
-	}
+	/* clean up tunables */
+	qmt_tunables_fini(qmt);
 
 	/* stop rebalance thread */
 	if (!qmt->qmt_child->dd_rdonly)
@@ -193,7 +228,6 @@ static int qmt_device_init0(const struct lu_env *env, struct qmt_device *qmt,
 {
 	struct lu_device	*ld = qmt2lu_dev(qmt);
 	struct obd_device	*obd, *mdt_obd;
-	struct obd_type		*type;
 	char			*svname = lustre_cfg_string(cfg, 0);
 	int			 rc;
 
@@ -245,23 +279,9 @@ static int qmt_device_init0(const struct lu_env *env, struct qmt_device *qmt,
 		}
 	}
 
-	/* at the moment there is no linkage between lu_type and obd_type, so
-	 * we lookup obd_type this way */
-	type = class_search_type(LUSTRE_QMT_NAME);
-	LASSERT(type != NULL);
-
-	/* put reference taken by class_search_type */
-	kobject_put(&type->typ_kobj);
-
-	/* register proc directory associated with this qmt */
-	qmt->qmt_proc = lprocfs_register(qmt->qmt_svname, type->typ_procroot,
-					 NULL, NULL);
-	if (IS_ERR(qmt->qmt_proc)) {
-		rc = PTR_ERR(qmt->qmt_proc);
-		CERROR("%s: failed to create qmt proc entry (%d)\n",
-		       qmt->qmt_svname, rc);
+	rc = qmt_tunables_init(qmt);
+	if (rc < 0)
 		GOTO(out, rc);
-	}
 
 	/* initialize pool configuration */
 	rc = qmt_pool_init(env, qmt);
@@ -502,7 +522,7 @@ int qmt_glb_init(void)
 
 	ENTRY;
 
-	rc = class_register_type(&qmt_obd_ops, NULL, true,
+	rc = class_register_type(&qmt_obd_ops, NULL, false,
 				 LUSTRE_QMT_NAME, &qmt_device_type);
 	RETURN(rc);
 }

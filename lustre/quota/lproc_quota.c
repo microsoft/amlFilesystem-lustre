@@ -18,11 +18,10 @@
 #include <linux/seq_file.h>
 #include "lquota_internal.h"
 
-#ifdef CONFIG_PROC_FS
 /* structure allocated at seq_open time and release when seq_release is called.
  * It is passed to seq_start/stop/next/show which can thus use the same lu_env
  * to be used with the iterator API */
-struct lquota_procfs {
+struct lquota_debugfs {
 	struct dt_object *lqp_obj;
 	struct lu_env lqp_env;
 	struct dt_it *lqp_it;
@@ -31,9 +30,9 @@ struct lquota_procfs {
 };
 
 /* global shared environment */
-static void *lprocfs_quota_seq_start(struct seq_file *p, loff_t *pos)
+static void *ldebugfs_quota_seq_start(struct seq_file *p, loff_t *pos)
 {
-	struct lquota_procfs	*lqp = p->private;
+	struct lquota_debugfs	*lqp = p->private;
 	const struct dt_it_ops	*iops;
 	struct dt_it		*it;
 	loff_t			 offset = *pos;
@@ -92,9 +91,9 @@ not_found:
 	return NULL;
 }
 
-static void lprocfs_quota_seq_stop(struct seq_file *p, void *v)
+static void ldebugfs_quota_seq_stop(struct seq_file *p, void *v)
 {
-	struct lquota_procfs	*lqp = p->private;
+	struct lquota_debugfs	*lqp = p->private;
 	const struct dt_it_ops	*iops;
 	struct dt_it		*it;
 
@@ -108,9 +107,9 @@ static void lprocfs_quota_seq_stop(struct seq_file *p, void *v)
 	iops->put(&lqp->lqp_env, it);
 }
 
-static void *lprocfs_quota_seq_next(struct seq_file *p, void *v, loff_t *pos)
+static void *ldebugfs_quota_seq_next(struct seq_file *p, void *v, loff_t *pos)
 {
-	struct lquota_procfs	*lqp = p->private;
+	struct lquota_debugfs	*lqp = p->private;
 	const struct dt_it_ops	*iops;
 	struct dt_it		*it;
 	int			 rc;
@@ -122,7 +121,7 @@ static void *lprocfs_quota_seq_next(struct seq_file *p, void *v, loff_t *pos)
 		return NULL;
 
 	if (v == SEQ_START_TOKEN)
-		return lprocfs_quota_seq_start(p, pos);
+		return ldebugfs_quota_seq_start(p, pos);
 
 	if (lqp->lqp_it == NULL) /* reach the end */
 		return NULL;
@@ -170,9 +169,9 @@ static inline const char *oid2name(__u32 oid)
  * - id:      840000038
  *   usage:   { inodes:                    1, kbytes:             1048 }
  */
-static int lprocfs_quota_seq_show(struct seq_file *p, void *v)
+static int ldebugfs_quota_seq_show(struct seq_file *p, void *v)
 {
-	struct lquota_procfs		*lqp = p->private;
+	struct lquota_debugfs		*lqp = p->private;
 	struct lquota_thread_info	*qti = lquota_info(&lqp->lqp_env);
 	const struct dt_it_ops		*iops;
 	struct dt_it			*it;
@@ -245,44 +244,45 @@ static int lprocfs_quota_seq_show(struct seq_file *p, void *v)
 	return 0;
 }
 
-static const struct seq_operations lprocfs_quota_seq_sops = {
-	.start	= lprocfs_quota_seq_start,
-	.stop	= lprocfs_quota_seq_stop,
-	.next	= lprocfs_quota_seq_next,
-	.show	= lprocfs_quota_seq_show,
+static const struct seq_operations ldebugfs_quota_seq_sops = {
+	.start	= ldebugfs_quota_seq_start,
+	.stop	= ldebugfs_quota_seq_stop,
+	.next	= ldebugfs_quota_seq_next,
+	.show	= ldebugfs_quota_seq_show,
 };
 
-static int lprocfs_quota_seq_open(struct inode *inode, struct file *file)
+static int ldebugfs_quota_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file		*seq;
-	int			 rc;
-	struct lquota_procfs	*lqp;
-	const struct dt_it_ops	*iops;
+	struct dt_object *obj = inode->i_private;
+	const struct dt_it_ops *iops;
+	struct lquota_debugfs *lqp;
+	struct seq_file	*seq;
 	struct dt_it *it;
+	int rc;
 
-	/* Allocate quota procfs data. This structure will be passed to
-	 * seq_start/stop/next/show via seq->private */
+	/* Allocate quota debugfs data. This structure will be passed to
+	 * seq_start/stop/next/show via seq->private
+	 */
 	OBD_ALLOC_PTR(lqp);
-	if (lqp == NULL)
+	if (!lqp)
 		return -ENOMEM;
-
-	/* store pointer to object we would like to iterate over */
-	lqp->lqp_obj = (struct dt_object *)pde_data(inode);
 
 	/* Initialize the common environment to be used in the seq operations */
 	rc = lu_env_init(&lqp->lqp_env, LCT_LOCAL);
 	if (rc) {
 		char *obd_name = "quota";
 
-		if (lqp->lqp_obj != NULL)
-			obd_name = lqp->lqp_obj->do_lu.lo_dev->ld_obd->obd_name;
-
-		CERROR("%s: error initializing procfs quota env: rc = %d\n",
+		if (obj)
+			obd_name = obj->do_lu.lo_dev->ld_obd->obd_name;
+		CERROR("%s: error initializing debugfs quota env: rc = %d\n",
 		       obd_name, rc);
 		goto out_lqp;
 	}
 
-	rc = seq_open(file, &lprocfs_quota_seq_sops);
+	/* store pointer to object we would like to iterate over */
+	lqp->lqp_obj = obj;
+
+	rc = seq_open(file, &ldebugfs_quota_seq_sops);
 	if (rc)
 		goto out_env;
 
@@ -317,10 +317,10 @@ out_lqp:
 	return rc;
 }
 
-static int lprocfs_quota_seq_release(struct inode *inode, struct file *file)
+static int ldebugfs_quota_seq_release(struct inode *inode, struct file *file)
 {
 	struct seq_file		*seq = file->private_data;
-	struct lquota_procfs	*lqp = seq->private;
+	struct lquota_debugfs	*lqp = seq->private;
 	const struct dt_it_ops	*iops;
 
 	LASSERT(lqp);
@@ -334,11 +334,10 @@ static int lprocfs_quota_seq_release(struct inode *inode, struct file *file)
 	return seq_release(inode, file);
 }
 
-const struct proc_ops lprocfs_quota_seq_fops = {
-	PROC_OWNER(THIS_MODULE)
-	.proc_open	= lprocfs_quota_seq_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= lprocfs_quota_seq_release,
+const struct file_operations ldebugfs_quota_seq_fops = {
+	.owner		= THIS_MODULE,
+	.open		= ldebugfs_quota_seq_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= ldebugfs_quota_seq_release,
 };
-#endif /* CONFIG_PROC_FS */

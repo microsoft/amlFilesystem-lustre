@@ -43,9 +43,6 @@ struct qmt_device {
 	/* rw semaphore to protect pool list */
 	struct rw_semaphore	 qmt_pool_lock;
 
-	/* procfs root directory for this qmt */
-	struct proc_dir_entry	*qmt_proc;
-
 	/* dedicated thread in charge of space rebalancing */
 	struct task_struct	*qmt_reba_task;
 
@@ -59,6 +56,12 @@ struct qmt_device {
 	struct workqueue_struct *qmt_lvbo_free_wq;
 
 	unsigned long		 qmt_stopping:1; /* qmt is stopping */
+
+	/* debugfs root directory for this qmt */
+	struct dentry		*qmt_debugfs;
+
+	/* sysfs setup */
+	struct kobject		*qmt_kobj;
 };
 
 struct qmt_pool_info;
@@ -138,9 +141,6 @@ struct qmt_pool_info {
 	/* reference on lqe (ID 0) storing grace time. */
 	struct lquota_entry	*qpi_grace_lqe[LL_MAXQUOTAS];
 
-	/* procfs root directory for this pool */
-	struct proc_dir_entry	*qpi_proc;
-
 	/* pool directory where all indexes related to this pool instance are
 	 * stored */
 	struct dt_object	*qpi_root;
@@ -166,6 +166,15 @@ struct qmt_pool_info {
 	unsigned long		 qpi_soft_least_qunit;
 	struct rb_root		 qpi_lqa_rbroot;
 	rwlock_t		 qpi_lqa_lock;
+
+	/* debugfs root directory for this pool */
+	struct dentry		*qpi_debugfs;
+
+	/* sysfs setup */
+	const struct attribute	**qpi_def_attrs;
+	struct kobject		qpi_kobj;
+	struct kobj_type	qpi_ktype;
+	struct completion	qpi_kobj_unregister;
 };
 
 static inline enum qmt_stype qpi_primary_stype(struct qmt_pool_info *qpi)

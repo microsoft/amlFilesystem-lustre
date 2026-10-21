@@ -504,7 +504,7 @@ int qmt_glb_init(void);
 void qmt_glb_fini(void);
 
 /* lproc_quota.c */
-extern const struct proc_ops lprocfs_quota_seq_fops;
+extern const struct file_operations ldebugfs_quota_seq_fops;
 
 /* qsd_lib.c */
 int qsd_glb_init(void);

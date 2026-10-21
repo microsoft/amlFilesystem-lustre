@@ -610,7 +610,6 @@ static inline struct osd_oi *osd_fid2oi(struct osd_device *osd,
 	return osd->od_oi_table[osd_oi_fid2idx(osd, fid)];
 }
 
-#ifdef CONFIG_PROC_FS
 enum {
 	LPROC_OSD_READ_BYTES = 0,
 	LPROC_OSD_WRITE_BYTES = 1,
@@ -627,8 +626,14 @@ enum {
 
 extern struct kmem_cache *osd_zapit_cachep;
 /* osd_lproc.c */
-int osd_procfs_init(struct osd_device *osd, const char *name);
-void osd_procfs_fini(struct osd_device *osd);
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 18, 53, 0)
+extern int symlink_brw_stats;
+#else
+#define symlink_brw_stats false
+#define osd_symlink_brw_stats(osd) do {} while (0)
+#endif
+int osd_tunables_init(struct osd_device *osd);
+void osd_tunables_fini(struct osd_device *osd);
 
 /* osd_object.c */
 extern char *osd_obj_tag;
@@ -850,8 +855,6 @@ static inline uint32_t attrs_zfs2fs(const uint64_t flags)
 #endif
 		(flags & ZFS_IMMUTABLE	? LUSTRE_IMMUTABLE_FL	: 0);
 }
-
-#endif
 
 #define ZFS_OSD_USER_USER_MODIFIABLE	(LUSTRE_APPEND_FL | \
 					 LUSTRE_NODUMP_FL | \

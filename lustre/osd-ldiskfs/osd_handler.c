@@ -8662,7 +8662,7 @@ static struct lu_device *osd_device_fini(const struct lu_env *env,
 
 	osd_index_backup(env, o, false);
 	osd_shutdown(env, o);
-	osd_procfs_fini(o);
+	osd_tunables_fini(o);
 	if (o->od_oi_table != NULL)
 		osd_oi_fini(osd_oti_get(env), o);
 	if (o->od_extent_bytes_percpu)
@@ -8781,9 +8781,9 @@ static int osd_device_init0(const struct lu_env *env,
 	if (rc < 0)
 		GOTO(out_brw_stats, rc);
 
-	rc = osd_procfs_init(o, o->od_svname);
+	rc = osd_tunables_init(o);
 	if (rc != 0) {
-		CERROR("%s: can't initialize procfs: rc = %d\n",
+		CERROR("%s: can't initialize tunables: rc = %d\n",
 		       o->od_svname, rc);
 		GOTO(out_scrub, rc);
 	}
@@ -8795,7 +8795,7 @@ static int osd_device_init0(const struct lu_env *env,
 	/* currently it's no need to prepare qsd_instance_md for OST */
 	if (!o->od_is_ost) {
 		o->od_quota_slave_md = qsd_init(env, o->od_svname,
-						&o->od_dt_dev, o->od_proc_entry,
+						&o->od_dt_dev,
 						true, true);
 		if (IS_ERR(o->od_quota_slave_md)) {
 			rc = PTR_ERR(o->od_quota_slave_md);
@@ -8805,7 +8805,7 @@ static int osd_device_init0(const struct lu_env *env,
 	}
 
 	o->od_quota_slave_dt = qsd_init(env, o->od_svname, &o->od_dt_dev,
-					o->od_proc_entry, false, true);
+					false, true);
 
 	if (IS_ERR(o->od_quota_slave_dt)) {
 		if (o->od_quota_slave_md != NULL) {
@@ -8820,6 +8820,12 @@ static int osd_device_init0(const struct lu_env *env,
 
 	o->od_extent_bytes_percpu = alloc_percpu(unsigned int);
 	if (!o->od_extent_bytes_percpu) {
+		qsd_fini(env, o->od_quota_slave_md);
+		o->od_quota_slave_md = NULL;
+
+		qsd_fini(env, o->od_quota_slave_dt);
+		o->od_quota_slave_dt = NULL;
+
 		rc = -ENOMEM;
 		GOTO(out_procfs, rc);
 	}
@@ -8827,7 +8833,7 @@ static int osd_device_init0(const struct lu_env *env,
 	RETURN(0);
 
 out_procfs:
-	osd_procfs_fini(o);
+	osd_tunables_fini(o);
 out_scrub:
 	osd_scrub_cleanup(env, o);
 out_brw_stats:
@@ -9193,8 +9199,9 @@ static int __init osd_init(void)
 	if (rc)
 		return rc;
 
-	rc = class_register_type(&osd_obd_device_ops, NULL, true,
-				 LUSTRE_OSD_LDISKFS_NAME, &osd_device_type);
+	rc = class_register_type(&osd_obd_device_ops, NULL,
+				 symlink_brw_stats, LUSTRE_OSD_LDISKFS_NAME,
+				 &osd_device_type);
 	if (rc) {
 		lu_kmem_fini(ldiskfs_caches);
 		return rc;

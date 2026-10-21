@@ -55,8 +55,8 @@ LU_KEY_INIT_GENERIC(qsd);
 /* some procfs helpers */
 static int qsd_state_seq_show(struct seq_file *m, void *data)
 {
-	struct qsd_instance	*qsd = m->private;
-	char			 enabled[5];
+	struct qsd_instance *qsd = m->private;
+	char enabled[5];
 
 	LASSERT(qsd != NULL);
 
@@ -110,15 +110,15 @@ static int qsd_state_seq_show(struct seq_file *m, void *data)
 	}
 	return 0;
 }
-LPROC_SEQ_FOPS_RO(qsd_state);
+LDEBUGFS_SEQ_FOPS_RO(qsd_state);
 
-static int qsd_enabled_seq_show(struct seq_file *m, void *data)
+static ssize_t enabled_show(struct kobject *kobj, struct attribute *attr,
+			    char *buf)
 {
-	struct qsd_instance *qsd = m->private;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
 	char enabled[5] = "";
 	int types = 0;
-
-	LASSERT(qsd != NULL);
 
 	memset(enabled, 0, sizeof(enabled));
 	if (qsd_type_enabled(qsd, USRQUOTA))
@@ -130,36 +130,26 @@ static int qsd_enabled_seq_show(struct seq_file *m, void *data)
 	if (!types)
 		strscpy(enabled, "none", sizeof(enabled));
 
-	seq_printf(m, "%s\n", enabled);
-	return 0;
+	return scnprintf(buf, PAGE_SIZE, "%s\n", enabled);
 }
 
-static ssize_t qsd_enabled_seq_write(struct file *file,
-				     const char __user *buffer,
-				     size_t count, loff_t *off)
+static ssize_t enabled_store(struct kobject *kobj, struct attribute *attr,
+			     const char *buffer, size_t count)
 {
-	struct seq_file *m = file->private_data;
-	struct qsd_instance *qsd = m->private;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
 	char fsname[LUSTRE_MAXFSNAME + 1];
 	int enabled = 0;
-	char valstr[5];
 	int pool, rc;
 
-	if (count > 4)
-		return -E2BIG;
-
-	if (copy_from_user(valstr, buffer, count))
-		GOTO(out, count = -EFAULT);
-
-	valstr[sizeof(valstr) - 1] = 0;
-	if (strchr(valstr, 'u'))
+	if (strchr(buffer, 'u'))
 		enabled |= BIT(USRQUOTA);
-	if (strchr(valstr, 'g'))
+	if (strchr(buffer, 'g'))
 		enabled |= BIT(GRPQUOTA);
-	if (strchr(valstr, 'p'))
+	if (strchr(buffer, 'p'))
 		enabled |= BIT(PRJQUOTA);
 
-	if (enabled == 0 && strcmp(valstr, "none"))
+	if (enabled == 0 && !sysfs_streq(buffer, "none"))
 		GOTO(out, count = -EINVAL);
 
 	if (qsd->qsd_is_md)
@@ -170,30 +160,29 @@ static ssize_t qsd_enabled_seq_write(struct file *file,
 	if (server_name2fsname(qsd->qsd_svname, fsname, NULL))
 		GOTO(out, count = -EINVAL);
 
-	rc = qsd_config(valstr, fsname, pool);
+	rc = qsd_config(buffer, fsname, pool);
 	if (rc)
 		count = rc;
 out:
 	return count;
 }
-LPROC_SEQ_FOPS(qsd_enabled);
+LUSTRE_RW_ATTR(enabled);
 
 /* force reintegration procedure to be executed.
- * Used for test/debugging purpose */
-static ssize_t
-lprocfs_force_reint_seq_write(struct file *file, const char __user *buffer,
-				size_t count, loff_t *off)
+ * Used for test/debugging purpose
+ */
+static ssize_t force_reint_store(struct kobject *kobj, struct attribute *attr,
+				 const char *buffer, size_t count)
 {
-	struct seq_file	    *m = file->private_data;
-	struct qsd_instance *qsd = m->private;
-	int		     rc = 0, qtype;
-
-	LASSERT(qsd != NULL);
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
+	int rc = 0, qtype;
 
 	write_lock(&qsd->qsd_lock);
 	if (qsd->qsd_stopping) {
 		/* don't mess up with shutdown procedure, it is already
-		 * complicated enough */
+		 * complicated enough
+		 */
 		rc = -ESHUTDOWN;
 	} else if (!qsd->qsd_prepared) {
 		rc = -EAGAIN;
@@ -217,29 +206,26 @@ lprocfs_force_reint_seq_write(struct file *file, const char __user *buffer,
 	}
 	return rc == 0 ? count : rc;
 }
-LPROC_SEQ_FOPS_WR_ONLY(qsd, force_reint);
+LUSTRE_WO_ATTR(force_reint);
 
-static int qsd_timeout_seq_show(struct seq_file *m, void *data)
+static ssize_t timeout_show(struct kobject *kobj, struct attribute *attr,
+			    char *buf)
 {
-	struct qsd_instance *qsd = m->private;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
 
-	LASSERT(qsd != NULL);
-
-	seq_printf(m, "%d\n", qsd_wait_timeout(qsd));
-	return 0;
+	return scnprintf(buf, PAGE_SIZE, "%d\n", qsd_wait_timeout(qsd));
 }
 
-static ssize_t
-qsd_timeout_seq_write(struct file *file, const char __user *buffer,
-			size_t count, loff_t *off)
+static ssize_t timeout_store(struct kobject *kobj, struct attribute *attr,
+			     const char *buffer, size_t count)
 {
-	struct seq_file *m = file->private_data;
-	struct qsd_instance *qsd = m->private;
-	time64_t timeout;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
+	timeout_t timeout;
 	int rc;
 
-	LASSERT(qsd != NULL);
-	rc = kstrtoll_from_user(buffer, count, 0, &timeout);
+	rc = kstrtoint(buffer, 0, &timeout);
 	if (rc)
 		return rc;
 
@@ -249,30 +235,31 @@ qsd_timeout_seq_write(struct file *file, const char __user *buffer,
 	qsd->qsd_timeout = timeout;
 	return count;
 }
-LPROC_SEQ_FOPS(qsd_timeout);
+LUSTRE_RW_ATTR(timeout);
 
-static int qsd_ver_reint_timeout_seq_show(struct seq_file *m, void *data)
+static ssize_t version_mismatch_timeout_show(struct kobject *kobj,
+					     struct attribute *attr,
+					     char *buf)
 {
-	struct qsd_instance *qsd = m->private;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
 
-	LASSERT(qsd != NULL);
-
-	seq_printf(m, "%d\n", qsd->qsd_ver_reint_timeout);
-	return 0;
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 qsd->qsd_ver_reint_timeout);
 }
 
-static ssize_t
-qsd_ver_reint_timeout_seq_write(struct file *file, const char __user *buffer,
-				size_t count, loff_t *off)
+static ssize_t version_mismatch_timeout_store(struct kobject *kobj,
+					      struct attribute *attr,
+					      const char *buffer,
+					      size_t count)
 {
-	struct seq_file *m = file->private_data;
-	struct qsd_instance *qsd = m->private;
-	time64_t timeout;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
+	timeout_t timeout;
 	int rc;
 
-	LASSERT(qsd != NULL);
-	rc = kstrtoll_from_user(buffer, count, 0, &timeout);
-	if (rc)
+	rc = kstrtoint(buffer, 0, &timeout);
+	if (rc < 0)
 		return rc;
 
 	if (timeout < 0)
@@ -281,49 +268,50 @@ qsd_ver_reint_timeout_seq_write(struct file *file, const char __user *buffer,
 	qsd->qsd_ver_reint_timeout = timeout;
 	return count;
 }
-LPROC_SEQ_FOPS(qsd_ver_reint_timeout);
+LUSTRE_RW_ATTR(version_mismatch_timeout);
 
-static int qsd_root_prj_enable_seq_show(struct seq_file *m, void *data)
+static ssize_t root_prj_enable_show(struct kobject *kobj,
+				    struct attribute *attr,
+				    char *buf)
 {
-	struct qsd_instance *qsd = m->private;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
 
-	LASSERT(qsd != NULL);
-	seq_printf(m, "%d\n", qsd->qsd_root_prj_enable);
-	return 0;
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+			 qsd->qsd_root_prj_enable);
 }
 
-static ssize_t
-qsd_root_prj_enable_seq_write(struct file *file, const char __user *buffer,
-			size_t count, loff_t *off)
+static ssize_t root_prj_enable_store(struct kobject *kobj,
+				     struct attribute *attr,
+				     const char *buffer,
+				     size_t count)
 {
-	struct seq_file *m = file->private_data;
-	struct qsd_instance *qsd = m->private;
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
 	bool enable;
 	int rc;
 
-	LASSERT(qsd != NULL);
-	rc = kstrtobool_from_user(buffer, count, &enable);
+	rc = kstrtobool(buffer, &enable);
 	if (rc)
 		return rc;
 
 	qsd->qsd_root_prj_enable = enable;
 	return count;
 }
-LPROC_SEQ_FOPS(qsd_root_prj_enable);
+LUSTRE_RW_ATTR(root_prj_enable);
 
-static struct lprocfs_vars lprocfs_quota_qsd_vars[] = {
+static const struct attribute *qsd_def_attrs[] = {
+	&lustre_attr_enabled.attr,
+	&lustre_attr_force_reint.attr,
+	&lustre_attr_timeout.attr,
+	&lustre_attr_version_mismatch_timeout.attr,
+	&lustre_attr_root_prj_enable.attr,
+	NULL,
+};
+
+static struct ldebugfs_vars ldebugfs_quota_qsd_vars[] = {
 	{ .name	=	"info",
 	  .fops	=	&qsd_state_fops		},
-	{ .name	=	"enabled",
-	  .fops	=	&qsd_enabled_fops	},
-	{ .name	=	"force_reint",
-	  .fops	=	&qsd_force_reint_fops	},
-	{ .name	=	"timeout",
-	  .fops	=	&qsd_timeout_fops	},
-	{ .name	=	"version_mismatch_timeout",
-	  .fops	=	&qsd_ver_reint_timeout_fops	},
-	{ .name	=	"root_prj_enable",
-	  .fops	=	&qsd_root_prj_enable_fops	},
 	{ NULL }
 };
 
@@ -509,13 +497,12 @@ static const char *qtype2glb_name(int qtype)
 static int qsd_qtype_init(const struct lu_env *env, struct qsd_instance *qsd,
 			  int qtype)
 {
-	struct qsd_qtype_info	*qqi;
-	int			 rc;
-	struct obd_uuid		 uuid;
+	struct qsd_qtype_info *qqi;
+	struct obd_uuid	uuid;
+	int rc = 0;
 
 	ENTRY;
-
-	LASSERT(qsd->qsd_type_array[qtype] == NULL);
+	LASSERT(!qsd->qsd_type_array[qtype]);
 
 	/* allocate structure for this quota type */
 	OBD_ALLOC_PTR(qqi);
@@ -581,24 +568,11 @@ static int qsd_qtype_init(const struct lu_env *env, struct qsd_instance *qsd,
 		GOTO(out, rc = PTR_ERR(qqi->qqi_site));
 	}
 
-	/* register proc entry for accounting & global index copy objects */
-	rc = lprocfs_seq_create(qsd->qsd_proc, qtype2acct_name(qtype),
-				0444, &lprocfs_quota_seq_fops,
-				qqi->qqi_acct_obj);
-	if (rc) {
-		CERROR("%s: can't add procfs entry for accounting file %d\n",
-		       qsd->qsd_svname, rc);
-		GOTO(out, rc);
-	}
-
-	rc = lprocfs_seq_create(qsd->qsd_proc, qtype2glb_name(qtype),
-				0444, &lprocfs_quota_seq_fops,
-				qqi->qqi_glb_obj);
-	if (rc) {
-		CERROR("%s: can't add procfs entry for global index copy %d\n",
-		       qsd->qsd_svname, rc);
-		GOTO(out, rc);
-	}
+	/* register debugfs entry for accounting & global index copy objects */
+	debugfs_create_file(qtype2acct_name(qtype), 0444, qsd->qsd_debugfs,
+			    qqi->qqi_acct_obj, &ldebugfs_quota_seq_fops);
+	debugfs_create_file(qtype2glb_name(qtype), 0444, qsd->qsd_debugfs,
+			    qqi->qqi_glb_obj, &ldebugfs_quota_seq_fops);
 
 	qqi->qqi_last_version_update_time = ktime_get_seconds();
 
@@ -609,16 +583,91 @@ out:
 	return rc;
 }
 
-/*
- * Release a qsd_instance. Companion of qsd_init(). This releases all data
- * structures associated with the quota slave (on-disk objects, lquota entry
- * tables, ...).
- * This function should be called when the OSD is shutting down.
- *
- * \param env - is the environment passed by the caller
- * \param qsd - is the qsd instance to shutdown
- */
-void qsd_fini(const struct lu_env *env, struct qsd_instance *qsd)
+static void qsd_sysfs_release(struct kobject *kobj)
+{
+	struct qsd_instance *qsd = container_of(kobj, struct qsd_instance,
+						qsd_kobj);
+
+	/* remove qsd debugfs entry */
+	debugfs_remove(qsd->qsd_symlink);
+	qsd->qsd_symlink = NULL;
+	debugfs_remove_recursive(qsd->qsd_debugfs);
+	qsd->qsd_debugfs = NULL;
+
+	complete(&qsd->qsd_kobj_unregister);
+}
+
+static void qsd_tunables_fini(struct qsd_instance *qsd)
+{
+	if (!qsd)
+		return;
+
+	if (qsd->qsd_symlink)
+		sysfs_remove_link(&qsd->qsd_dev->dd_kobj, QSD_DIR);
+
+	if (qsd->qsd_def_attrs) {
+		sysfs_remove_files(&qsd->qsd_kobj, qsd->qsd_def_attrs);
+		qsd->qsd_def_attrs = NULL;
+		kobject_put(&qsd->qsd_kobj);
+		wait_for_completion(&qsd->qsd_kobj_unregister);
+	}
+}
+
+static int qsd_tunables_init(struct qsd_instance *qsd, struct dt_device *dev,
+			     int type)
+{
+	bool symlink = false;
+	int rc;
+
+	qsd->qsd_ktype.sysfs_ops = &lustre_sysfs_ops;
+	qsd->qsd_ktype.release = qsd_sysfs_release;
+
+	init_completion(&qsd->qsd_kobj_unregister);
+	rc = kobject_init_and_add(&qsd->qsd_kobj, &qsd->qsd_ktype,
+				  &dev->dd_kobj, "%s",
+				  qsd->qsd_is_md ? QSD_DIR_MD : QSD_DIR_DT);
+	if (rc < 0) {
+		kobject_put(&qsd->qsd_kobj);
+		return rc;
+	}
+
+	if (type == LDD_F_SV_TYPE_MDT && qsd->qsd_is_md)
+		symlink = true;
+	else if (type == LDD_F_SV_TYPE_OST && !qsd->qsd_is_md)
+		symlink = true;
+	if (symlink) {
+		rc = sysfs_create_link(&dev->dd_kobj, &qsd->qsd_kobj, QSD_DIR);
+		if (rc < 0) {
+			kobject_put(&qsd->qsd_kobj);
+			return rc;
+		}
+	}
+
+	rc = sysfs_create_files(&qsd->qsd_kobj, qsd_def_attrs);
+	if (rc < 0) {
+		if (symlink)
+			sysfs_remove_link(&dev->dd_kobj, QSD_DIR);
+		kobject_put(&qsd->qsd_kobj);
+		return rc;
+	}
+	qsd->qsd_def_attrs = qsd_def_attrs;
+
+	/* register debugfs directory */
+	qsd->qsd_debugfs = debugfs_create_dir(qsd->qsd_is_md ? QSD_DIR_MD :
+							       QSD_DIR_DT,
+					      dev->dd_debugfs_entry);
+	ldebugfs_add_vars(qsd->qsd_debugfs, ldebugfs_quota_qsd_vars, qsd);
+
+	if (symlink)
+		qsd->qsd_symlink = debugfs_create_symlink(QSD_DIR,
+							  dev->dd_debugfs_entry,
+							  kobject_name(&qsd->qsd_kobj));
+
+	return 0;
+}
+
+static void __qsd_fini(const struct lu_env *env, struct qsd_instance *qsd,
+		       bool free_tunables)
 {
 	int	qtype;
 
@@ -644,11 +693,9 @@ void qsd_fini(const struct lu_env *env, struct qsd_instance *qsd)
 			       qsd->qsd_svname, count);
 	}
 
-	/* remove qsd proc entry */
-	if (qsd->qsd_proc != NULL) {
-		lprocfs_remove(&qsd->qsd_proc);
-		qsd->qsd_proc = NULL;
-	}
+	/* cleanup tunables */
+	if (free_tunables)
+		qsd_tunables_fini(qsd);
 
 	/* stop the writeback thread */
 	qsd_stop_upd_thread(qsd);
@@ -698,6 +745,20 @@ void qsd_fini(const struct lu_env *env, struct qsd_instance *qsd)
 	OBD_FREE_PTR(qsd);
 	EXIT;
 }
+
+/*
+ * Release a qsd_instance. Companion of qsd_init(). This releases all data
+ * structures associated with the quota slave (on-disk objects, lquota entry
+ * tables, ...).
+ * This function should be called when the OSD is shutting down.
+ *
+ * \param env - is the environment passed by the caller
+ * \param qsd - is the qsd instance to shutdown
+ */
+void qsd_fini(const struct lu_env *env, struct qsd_instance *qsd)
+{
+	__qsd_fini(env, qsd, true);
+}
 EXPORT_SYMBOL(qsd_fini);
 
 /*
@@ -707,23 +768,18 @@ EXPORT_SYMBOL(qsd_fini);
  * \param env    - the environment passed by the caller
  * \param svname - is the service name of the OSD device creating this instance
  * \param dev    - is the dt_device where to store quota index files
- * \param osd_proc - is the procfs parent directory where to create procfs file
- *                   related to this new qsd instance
  *
  * \retval - pointer to new qsd_instance associated with dev \dev on success,
  *           appropriate error on failure
  */
 struct qsd_instance *qsd_init(const struct lu_env *env, char *svname,
-			      struct dt_device *dev,
-			      struct proc_dir_entry *osd_proc,
-			      bool is_md, bool excl)
+			      struct dt_device *dev, bool is_md, bool excl)
 {
-	struct qsd_thread_info	*qti = qsd_info(env);
-	struct qsd_instance	*qsd;
-	int			 rc, type, idx;
+	struct qsd_thread_info *qti = qsd_info(env);
+	struct qsd_instance *qsd;
+	int rc = 0, type, idx;
 
 	ENTRY;
-
 	/* only configure qsd for MDT & OST */
 	type = server_name2index(svname, &idx, NULL);
 	if (type != LDD_F_SV_TYPE_MDT && type != LDD_F_SV_TYPE_OST)
@@ -776,30 +832,11 @@ struct qsd_instance *qsd_init(const struct lu_env *env, char *svname,
 	list_add_tail(&qsd->qsd_link, &qsd->qsd_fsinfo->qfs_qsd_list);
 	mutex_unlock(&qsd->qsd_fsinfo->qfs_mutex);
 
-	/* register procfs directory */
-	if (qsd->qsd_is_md)
-		qsd->qsd_proc = lprocfs_register(QSD_DIR_MD, osd_proc,
-						 lprocfs_quota_qsd_vars, qsd);
-	else
-		qsd->qsd_proc = lprocfs_register(QSD_DIR_DT, osd_proc,
-						 lprocfs_quota_qsd_vars, qsd);
-
-	if (type == LDD_F_SV_TYPE_MDT && qsd->qsd_is_md)
-		lprocfs_add_symlink(QSD_DIR, osd_proc, "./%s", QSD_DIR_MD);
-	else if (type == LDD_F_SV_TYPE_OST && !qsd->qsd_is_md)
-		lprocfs_add_symlink(QSD_DIR, osd_proc, "./%s", QSD_DIR_DT);
-
-	if (IS_ERR(qsd->qsd_proc)) {
-		rc = PTR_ERR(qsd->qsd_proc);
-		qsd->qsd_proc = NULL;
-		CERROR("%s: fail to create quota slave proc entry (%d)\n",
-		       svname, rc);
-		GOTO(out, rc);
-	}
+	rc = qsd_tunables_init(qsd, dev, type);
 	EXIT;
 out:
 	if (rc) {
-		qsd_fini(env, qsd);
+		__qsd_fini(env, qsd, false);
 		return ERR_PTR(rc);
 	}
 	RETURN(qsd);

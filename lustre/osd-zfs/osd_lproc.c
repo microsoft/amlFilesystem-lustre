@@ -23,9 +23,9 @@
 
 #include "osd_internal.h"
 
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
-static int symlink_brw_stats;
-module_param(symlink_brw_stats, int, 0644);
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 18, 53, 0)
+int symlink_brw_stats;
+module_param(symlink_brw_stats, int, 0444);
 MODULE_PARM_DESC(symlink_brw_stats, "create /proc brw_stats symlink");
 
 static void osd_symlink_brw_stats(struct osd_device *osd)
@@ -123,9 +123,7 @@ static int osd_stats_init(struct osd_device *osd)
 	ldebugfs_register_brw_stats(osd->od_dt_dev.dd_debugfs_entry,
 				    &osd->od_brw_stats);
 
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
 	osd_symlink_brw_stats(osd);
-#endif
 
 	/* These fields are not supported for ZFS */
 	osd->od_brw_stats.bs_props[BRW_R_DISCONT_BLOCKS / 2].bsp_name = NULL;
@@ -481,61 +479,56 @@ static struct ldebugfs_vars ldebugfs_osd_obd_vars[] = {
 
 ATTRIBUTE_GROUPS(zfs); /* creates zfs_groups from zfs_attrs */
 
-int osd_procfs_init(struct osd_device *osd, const char *name)
+int osd_tunables_init(struct osd_device *osd)
 {
 	struct obd_type *type;
 	int rc;
 
 	ENTRY;
-
 	/* at the moment there is no linkage between lu_type
 	 * and obd_type, so we lookup obd_type this way
 	 */
 	type = class_search_type(LUSTRE_OSD_ZFS_NAME);
-
 	LASSERT(type);
-	LASSERT(name);
-
-	/* put reference taken by class_search_type */
-	kobject_put(&type->typ_kobj);
 
 	osd->od_dt_dev.dd_ktype.default_groups = zfs_groups;
-	rc = dt_tunables_init(&osd->od_dt_dev, type, name,
+	rc = dt_tunables_init(&osd->od_dt_dev, type, osd->od_svname,
 			      ldebugfs_osd_obd_vars);
 	if (rc) {
-		CERROR("%s: cannot setup sysfs / debugfs entry: %d\n",
-		       name, rc);
+		CERROR("%s: cannot setup sysfs / debugfs entry: rc = %d\n",
+		       osd->od_svname, rc);
 		GOTO(out, rc);
 	}
-
-	if (osd->od_proc_entry)
-		RETURN(0);
-
-	osd->od_proc_entry = lprocfs_register(name, type->typ_procroot,
-					      NULL, &osd->od_dt_dev);
-	if (IS_ERR(osd->od_proc_entry)) {
-		rc = PTR_ERR(osd->od_proc_entry);
-		CERROR("%s: error setting up lprocfs: rc = %d\n", name, rc);
-		osd->od_proc_entry = NULL;
-		GOTO(out, rc);
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 18, 53, 0)
+	if (!osd->od_proc_entry && symlink_brw_stats) {
+		osd->od_proc_entry = lprocfs_register(osd->od_svname,
+						      type->typ_procroot,
+						      NULL, &osd->od_dt_dev);
+		if (IS_ERR(osd->od_proc_entry)) {
+			CERROR("%s: error setting up lprocfs: rc = %ld\n",
+			       osd->od_svname, PTR_ERR(osd->od_proc_entry));
+			osd->od_proc_entry = NULL;
+		}
 	}
-
+#endif
 	rc = osd_stats_init(osd);
-
-	GOTO(out, rc);
 out:
+	EXIT;
+	/* put reference taken by class_search_type */
+	kobject_put(&type->typ_kobj);
 	if (rc)
-		osd_procfs_fini(osd);
+		osd_tunables_fini(osd);
 	return rc;
 }
 
-void osd_procfs_fini(struct osd_device *osd)
+void osd_tunables_fini(struct osd_device *osd)
 {
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 18, 53, 0)
 	if (osd->od_proc_entry) {
 		lprocfs_remove(&osd->od_proc_entry);
 		osd->od_proc_entry = NULL;
 	}
-
+#endif
 	dt_tunables_fini(&osd->od_dt_dev);
 
 	lprocfs_fini_brw_stats(&osd->od_brw_stats);

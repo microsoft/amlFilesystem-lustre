@@ -30,10 +30,6 @@ struct qsd_instance {
 	/* dt_device associated with this qsd instance */
 	struct dt_device	*qsd_dev;
 
-	/* procfs directory where information related to the underlying slaves
-	 * are exported */
-	struct proc_dir_entry	*qsd_proc;
-
 	/* export used for the connection to quota master */
 	struct obd_export	*qsd_exp;
 
@@ -83,8 +79,9 @@ struct qsd_instance {
 
 	/* how long a service thread can wait for quota space.
 	 * value dynamically computed from obd_timeout and at_max if not
-	 * enforced here (via procfs) */
-	int			 qsd_timeout;
+	 * enforced here (via sysfs)
+	 */
+	timeout_t		 qsd_timeout;
 
 	/* how long the QSD will wait after it found it has broken with QMT */
 	int			 qsd_ver_reint_timeout;
@@ -101,6 +98,18 @@ struct qsd_instance {
 				qsd_updating:1, /* qsd is updating record */
 				qsd_exclusive:1, /* upd exclusive with reint */
 				qsd_root_prj_enable:1;
+
+	/* debugfs directory where information related to the underlying slaves
+	 * are exported
+	 */
+	struct dentry		*qsd_debugfs;
+	struct dentry		*qsd_symlink;
+
+	/* sysfs setup */
+	const struct attribute	**qsd_def_attrs;
+	struct kobject		qsd_kobj;
+	struct kobj_type	qsd_ktype;
+	struct completion	qsd_kobj_unregister;
 };
 
 /*
@@ -403,7 +412,7 @@ void qsd_upd_schedule(struct qsd_qtype_info *, struct lquota_entry *,
 /* qsd_config.c */
 struct qsd_fsinfo *qsd_get_fsinfo(char *, bool);
 void qsd_put_fsinfo(struct qsd_fsinfo *);
-int qsd_config(char *valstr, char *fsname, int pool);
+int qsd_config(const char *valstr, char *fsname, int pool);
 int qsd_process_config(struct lustre_cfg *);
 
 /* qsd_handler.c */

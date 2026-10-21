@@ -522,8 +522,6 @@ struct osd_obj_declare {
 /*
  * osd dev stats
  */
-
-#ifdef CONFIG_PROC_FS
 enum {
 	LPROC_OSD_READ_BYTES    = 0,
 	LPROC_OSD_WRITE_BYTES   = 1,
@@ -541,7 +539,6 @@ enum {
 	LPROC_OSD_TOO_MANY_CREDITS,
 	LPROC_OSD_LAST,
 };
-#endif
 
 /*
  * Storage representation for fids.
@@ -965,16 +962,20 @@ static inline char *osd_oid_name(char *name, size_t name_size,
 	return name;
 }
 
-#ifdef CONFIG_PROC_FS
 /* osd_lproc.c */
-int osd_procfs_init(struct osd_device *osd, const char *name);
-void osd_procfs_fini(struct osd_device *osd);
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 18, 53, 0)
+extern int symlink_brw_stats;
+#else
+#define symlink_brw_stats	false
+#define osd_symlink_brw_stats(osd) do {} while (0)
+#endif
+int osd_tunables_init(struct osd_device *osd);
+void osd_tunables_fini(struct osd_device *osd);
 void osd_brw_stats_update(struct osd_device *osd, struct osd_iobuf *iobuf);
 #if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(3, 0, 52, 0)
 int osd_register_proc_index_in_idif(struct osd_device *osd);
 #endif
 
-#endif
 int osd_statfs(const struct lu_env *env, struct dt_device *dev,
 	       struct obd_statfs *sfs, struct obd_statfs_info *info);
 struct inode *osd_iget(struct osd_thread_info *info, struct osd_device *dev,

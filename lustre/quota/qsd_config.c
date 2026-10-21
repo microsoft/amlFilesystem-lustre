@@ -101,7 +101,7 @@ out:
 	RETURN(qfs);
 }
 
-int qsd_config(char *valstr, char *fsname, int pool)
+int qsd_config(const char *valstr, char *fsname, int pool)
 {
 	struct qsd_fsinfo *qfs;
 	int rc, enabled = 0, old_enabled = 0;

@@ -65,7 +65,7 @@ qmt_lqe_lookup(const struct lu_env *env, struct lquota_site *site,
  * Static helper functions not used outside the scope of this file
  */
 
-/* some procfs helpers */
+/* some debugfs helpers */
 static int qpi_state_seq_show(struct seq_file *m, void *data)
 {
 	struct qmt_pool_info	*pool = m->private;
@@ -95,30 +95,36 @@ static int qpi_state_seq_show(struct seq_file *m, void *data)
 
 	return 0;
 }
-LPROC_SEQ_FOPS_RO(qpi_state);
+LDEBUGFS_SEQ_FOPS_RO(qpi_state);
 
-static int qpi_soft_least_qunit_seq_show(struct seq_file *m, void *data)
+static struct ldebugfs_vars ldebugfs_quota_qpi_vars[] = {
+	{ .name	=	"info",
+	  .fops	=	&qpi_state_fops	},
+	{ NULL }
+};
+
+static ssize_t soft_least_qunit_show(struct kobject *kobj,
+				     struct attribute *attr,
+				     char *buf)
 {
-	struct qmt_pool_info	*pool = m->private;
+	struct qmt_pool_info *pool = container_of(kobj, struct qmt_pool_info,
+						  qpi_kobj);
 
-	LASSERT(pool != NULL);
 	if (unlikely(!test_bit(QPI_FLAG_STATE_INITED, &pool->qpi_flags)))
 		return -ENOENT;
 
-	seq_printf(m, "%lu\n", pool->qpi_soft_least_qunit);
-	return 0;
+	return scnprintf(buf, PAGE_SIZE, "%lu\n", pool->qpi_soft_least_qunit);
 }
 
-static ssize_t
-qpi_soft_least_qunit_seq_write(struct file *file, const char __user *buffer,
-			       size_t count, loff_t *off)
+static ssize_t soft_least_qunit_store(struct kobject *kobj,
+				      struct attribute *attr,
+				      const char *buffer, size_t count)
 {
-	struct seq_file *m = file->private_data;
-	struct qmt_pool_info *pool = m->private;
+	struct qmt_pool_info *pool = container_of(kobj, struct qmt_pool_info,
+						  qpi_kobj);
 	long long least_qunit, qunit;
 	int rc;
 
-	LASSERT(pool != NULL);
 	if (unlikely(!test_bit(QPI_FLAG_STATE_INITED, &pool->qpi_flags)))
 		return -ENOENT;
 
@@ -126,8 +132,8 @@ qpi_soft_least_qunit_seq_write(struct file *file, const char __user *buffer,
 	if (pool->qpi_rtype != LQUOTA_RES_DT)
 		return -EINVAL;
 
-	rc = kstrtoll_from_user(buffer, count, 0, &least_qunit);
-	if (rc)
+	rc = kstrtoll(buffer, 0, &least_qunit);
+	if (rc < 0)
 		return rc;
 
 	/* Miminal qpi_soft_least_qunit */
@@ -142,15 +148,66 @@ qpi_soft_least_qunit_seq_write(struct file *file, const char __user *buffer,
 	pool->qpi_soft_least_qunit = qunit;
 	return count;
 }
-LPROC_SEQ_FOPS(qpi_soft_least_qunit);
+LUSTRE_RW_ATTR(soft_least_qunit);
 
-static struct lprocfs_vars lprocfs_quota_qpi_vars[] = {
-	{ .name	=	"info",
-	  .fops	=	&qpi_state_fops	},
-	{ .name =	"soft_least_qunit",
-	  .fops =	&qpi_soft_least_qunit_fops },
-	{ NULL }
+static const struct attribute *pool_def_attrs[] = {
+	&lustre_attr_soft_least_qunit.attr,
+	NULL,
 };
+
+static void qmt_pool_sysfs_release(struct kobject *kobj)
+{
+	struct qmt_pool_info *pool = container_of(kobj, struct qmt_pool_info,
+						  qpi_kobj);
+
+	/* release debugfs entry */
+	debugfs_remove_recursive(pool->qpi_debugfs);
+	pool->qpi_debugfs = NULL;
+
+	complete(&pool->qpi_kobj_unregister);
+}
+
+static void qmt_pool_tunables_fini(struct qmt_pool_info *pool)
+{
+	if (!pool)
+		return;
+
+	if (pool->qpi_def_attrs) {
+		sysfs_remove_files(&pool->qpi_kobj, pool->qpi_def_attrs);
+		pool->qpi_def_attrs = NULL;
+	}
+	kobject_put(&pool->qpi_kobj);
+	wait_for_completion(&pool->qpi_kobj_unregister);
+}
+
+static int qmt_pool_tunables_init(struct qmt_pool_info *pool,
+				  struct qmt_device *qmt,
+				  const char *name)
+{
+	int rc;
+
+	pool->qpi_ktype.sysfs_ops = &lustre_sysfs_ops;
+	pool->qpi_ktype.release = qmt_pool_sysfs_release;
+
+	init_completion(&pool->qpi_kobj_unregister);
+	rc = kobject_init_and_add(&pool->qpi_kobj, &pool->qpi_ktype,
+				  qmt->qmt_kobj, "%s", name);
+	if (rc < 0)
+		return rc;
+
+	pool->qpi_def_attrs = pool_def_attrs;
+	rc = sysfs_create_files(&pool->qpi_kobj, pool->qpi_def_attrs);
+	if (rc < 0) {
+		/* qmt_pool_tunables_fini() will kobj put for us */
+		pool->qpi_def_attrs = NULL;
+		return rc;
+	}
+
+	pool->qpi_debugfs = debugfs_create_dir(name, qmt->qmt_debugfs);
+	ldebugfs_add_vars(pool->qpi_debugfs, ldebugfs_quota_qpi_vars, pool);
+
+	return rc;
+}
 
 /*
  * Allocate a new qmt_pool_info structure and add it to qmt_pool_list.
@@ -198,19 +255,13 @@ static int qmt_pool_alloc(const struct lu_env *env, struct qmt_device *qmt,
 	lu_device_get(qmt2lu_dev(qmt));
 	pool->qpi_qmt = qmt;
 
-	/* create pool proc directory */
+	/* create pool sysfs and debugfs directory */
 	snprintf(qti->qti_buf, LQUOTA_NAME_MAX, is_lqa ? "lqa-%s-%s" : "%s-%s",
 		 RES_NAME(pool_type), pool_name);
 	strscpy(pool->qpi_name, pool_name, sizeof(pool->qpi_name));
-	pool->qpi_proc = lprocfs_register(qti->qti_buf, qmt->qmt_proc,
-					  lprocfs_quota_qpi_vars, pool);
-	if (IS_ERR(pool->qpi_proc)) {
-		rc = PTR_ERR(pool->qpi_proc);
-		CERROR("%s: failed to create proc entry for pool %s (%d)\n",
-		       qmt->qmt_svname, qti->qti_buf, rc);
-		pool->qpi_proc = NULL;
+	rc = qmt_pool_tunables_init(pool, qmt, qti->qti_buf);
+	if (rc < 0)
 		GOTO(out, rc);
-	}
 
 	rc = qmt_sarr_pool_init(pool);
 	if (rc)
@@ -256,11 +307,8 @@ void qmt_pool_free(const struct lu_env *env, struct qmt_pool_info *pool)
 	qmt_stop_pool_recalc(pool);
 	qmt_sarr_pool_free(pool);
 
-	/* release proc entry */
-	if (pool->qpi_proc) {
-		lprocfs_remove(&pool->qpi_proc);
-		pool->qpi_proc = NULL;
-	}
+	/* cleanup tunables */
+	qmt_pool_tunables_fini(pool);
 
 	rbtree_postorder_for_each_entry_safe(range, temp, rbroot, qlr_rbnode)
 		OBD_FREE_PTR(range);
@@ -696,18 +744,15 @@ int qmt_pool_prepare(const struct lu_env *env, struct qmt_device *qmt,
 			if (IS_ERR(lqe))
 				GOTO(out, rc = PTR_ERR(lqe));
 			pool->qpi_grace_lqe[qtype] = lqe;
-#ifdef CONFIG_PROC_FS
-			/* add procfs file to dump the global index, mostly for
-			 * debugging purpose */
+
+			/* add debugfs file to dump the global index, mostly for
+			 * debugging purpose
+			 */
 			snprintf(qti->qti_buf, MTI_NAME_MAXLEN,
 				 "glb-%s", qtype_name(qtype));
-			rc = lprocfs_seq_create(pool->qpi_proc, qti->qti_buf,
-						0444, &lprocfs_quota_seq_fops,
-						obj);
-			if (rc)
-				CWARN("%s: Error adding procfs file for global quota index "DFID": rc = %d\n",
-				      qmt->qmt_svname, PFID(&qti->qti_fid), rc);
-#endif
+			debugfs_create_file(qti->qti_buf, 0444,
+					    pool->qpi_debugfs, obj,
+					    &ldebugfs_quota_seq_fops);
 		}
 		set_bit(QPI_FLAG_STATE_INITED, &pool->qpi_flags);
 		if (name)
