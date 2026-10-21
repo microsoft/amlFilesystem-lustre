@@ -444,6 +444,8 @@ struct mdt_reint_record {
 	__u32				 rr_flags;
 	__u16				 rr_mirror_id;
 	__u32				 rr_layout_ver;
+	/* resync up to this offset, or 0 for all instantiated components */
+	__u64				 rr_resync_end;
 };
 
 enum mdt_reint_flag {

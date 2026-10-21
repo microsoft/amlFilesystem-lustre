@@ -1012,7 +1012,8 @@ enum lcme_ec_version {
 #define allowed_lustre_lov(att) (strcmp((att), XATTR_LUSTRE_LOV".add") == 0 || \
 			strcmp((att), XATTR_LUSTRE_LOV".set") == 0 || \
 			strcmp((att), XATTR_LUSTRE_LOV".set.flags") == 0 || \
-			strcmp((att), XATTR_LUSTRE_LOV".del") == 0)
+			strcmp((att), XATTR_LUSTRE_LOV".del") == 0 || \
+			strcmp((att), XATTR_LUSTRE_LOV".extend") == 0)
 
 #define lov_user_ost_data lov_user_ost_data_v1
 struct lov_user_ost_data_v1 {     /* per-stripe data structure */

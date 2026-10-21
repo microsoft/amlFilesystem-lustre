@@ -2400,6 +2400,14 @@ stop:
 	if (rc == -EAGAIN && retried++ < MAX_TRANS_RETRIED)
 		GOTO(retry, retried);
 
+	/* the components of a file without mirrors were renumbered as
+	 * mirror 1, so update the component id of their objects, as a
+	 * merge does
+	 */
+	if (!rc && S_ISREG(mdd_object_type(mdd_obj)) &&
+	    strcmp(name, XATTR_LUSTRE_LOV".extend") == 0)
+		(void) mdd_object_pfid_replace(env, mdd_obj);
+
 	RETURN(rc);
 }
 

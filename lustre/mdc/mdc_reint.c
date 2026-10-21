@@ -569,6 +569,7 @@ int mdc_file_resync(struct obd_export *exp, struct md_op_data *op_data)
 	rec->rs_cap	= compat_capability_u32(op_data->op_cap);
 	rec->rs_fid	= op_data->op_fid1;
 	rec->rs_bias	= op_data->op_bias;
+	rec->rs_size	= op_data->op_attr.ia_size;
 	if (exp_connect_mirror_id_fix(exp))
 		rec->rs_mirror_id_new = op_data->op_mirror_id;
 	else

@@ -417,6 +417,23 @@ static int ll_xattr_set(const struct xattr_handler *handler,
 		goto out;
 	}
 
+	/* an older MDT does not know this name, and logs an error */
+	if (strcmp(name, "lov.extend") == 0 &&
+	    !(exp_connect_flags2(ll_i2mdexp(inode)) & OBD_CONNECT2_FLR_EC)) {
+		rc = -EOPNOTSUPP;
+		goto out;
+	}
+
+	/* a new mirror may not be EC when EC is disabled on this client,
+	 * checked in host byte order, before the swab below
+	 */
+	if (value && strcmp(name, "lov.extend") == 0 &&
+	    size >= sizeof(struct lov_user_md)) {
+		rc = ll_adjust_lum(inode, (struct lov_user_md *)value, size);
+		if (rc)
+			goto out;
+	}
+
 	if (value && strncmp(name, "lov.", 4) == 0 &&
 	    size >= sizeof(struct lov_user_md) &&
 	    (__swab32(((struct lov_user_md *)value)->lmm_magic) &

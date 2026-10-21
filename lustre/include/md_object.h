@@ -184,6 +184,8 @@ struct md_layout_change {
 			__u32			*mlc_resync_ids;
 			/* template layout source */
 			struct md_object	*mlc_source;
+			/* resync end, or 0 for all instantiated extents */
+			__u64			 mlc_resync_end;
 		}; /* file */
 		struct {
 			/* parent obj in plain dir split */

@@ -2160,11 +2160,17 @@ out:
 	return rc;
 }
 
+static int mirror_extend_in_place(char *name, struct llapi_layout *m_layout,
+				  bool resync,
+				  unsigned long long bandwidth_bytes_sec,
+				  long stats_interval_sec, uint32_t *new_id_out,
+				  char **err_str);
+
 static int mirror_extend_layout(char *name, struct llapi_layout *m_layout,
 				bool inherit, bool resync, uint32_t comp_flags,
 				enum llapi_migration_flags migration_flags,
 				unsigned long long bandwidth_bytes_sec,
-				long stats_interval_sec)
+				long stats_interval_sec, uint32_t *new_id_out)
 {
 	struct llapi_layout *f_layout = NULL;
 	struct ll_ioc_lease *data = NULL;
@@ -2194,6 +2200,16 @@ static int mirror_extend_layout(char *name, struct llapi_layout *m_layout,
 	}
 
 	llapi_layout_comp_flags_set(m_layout, comp_flags);
+
+	/* the resync of a mirror added in place copies with O_DIRECT */
+	if (!(migration_flags & LLAPI_MIGRATION_NONDIRECT)) {
+		rc = mirror_extend_in_place(name, m_layout, resync,
+					    bandwidth_bytes_sec,
+					    stats_interval_sec, new_id_out,
+					    &err_str);
+		if (rc != -EOPNOTSUPP)
+			goto out;
+	}
 
 	rc = migrate_open_files(name, migration_flags | LLAPI_MIGRATION_MIRROR,
 				NULL, m_layout, &fd_src, &fd_dst, &err_str);
@@ -2650,11 +2666,12 @@ static int max_mirror_id(const char *fname, uint32_t *max_id)
 
 /**
  * verify_new_mirror_id() - Return the id the kernel assigned to the mirror just
- * merged into @fname. lod_declare_layout_merge() numbers a merged mirror
- * max(existing ids) + 1, and promotes a lone non-FLR mirror id 0 to 1 first,
- * so the id is deterministic given @max_before, the highest id seen before the
- * merge. Fail with -EBUSY if it does not hold, catching a concurrent extender
- * that merged into the same file in the (post-lease) window.
+ * added to @fname. lod_declare_layout_merge() and lod_declare_layout_extend()
+ * number a new mirror max(existing ids) + 1, and promote a lone non-FLR mirror
+ * id 0 to 1 first, so the id is deterministic given @max_before, the highest
+ * id seen before the merge. Fail with -EBUSY if it does not hold, catching a
+ * concurrent extender that merged into the same file in the (post-lease)
+ * window.
  */
 static int verify_new_mirror_id(const char *fname, uint32_t max_before,
 				uint32_t *new_id)
@@ -2717,6 +2734,251 @@ int lfs_mirror_resync_file(const char *fname, struct ll_ioc_lease *ioc,
 			   long stats_interval_sec, long bandwidth_bytes_sec,
 			   bool force_resync);
 
+/* the pool of the first component of @layout that names one, as LOD uses */
+static void layout_first_pool(struct llapi_layout *layout, char *pool,
+			      size_t len)
+{
+	int rc;
+
+	rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_FIRST);
+	while (rc == 0) {
+		if (llapi_layout_pool_name_get(layout, pool, len) == 0 &&
+		    pool[0] != '\0')
+			return;
+		rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_NEXT);
+	}
+	pool[0] = '\0';
+}
+
+/**
+ * mirror_inherit_pool() - Give the new mirror the pool a new file would get
+ * @name: file to extend
+ * @fsname: filesystem of @name
+ * @m_layout: layout of the new mirror
+ * @inherited: [out] components given the pool, for mirror_uninherit_pool()
+ *
+ * A mirror merged from a copy got the pool of the default layout of the
+ * parent directory, or else of a plain root default, for each component
+ * that names no pool, as any file created there does.  A mirror added in
+ * place is not created in a directory, so set that pool here.  @m_layout
+ * is shared by all the files being extended, so the caller undoes this
+ * with mirror_uninherit_pool() once the mirror is added.
+ */
+static void mirror_inherit_pool(const char *name, const char *fsname,
+				struct llapi_layout *m_layout,
+				bool **inherited)
+{
+	enum llapi_layout_comp_use pos;
+	char pool[LOV_MAXPOOLNAME + 1];
+	char cur[LOV_MAXPOOLNAME + 1];
+	char path[PATH_MAX];
+	char dir[PATH_MAX];
+	struct llapi_layout *def;
+	int count = 0;
+	int i = 0;
+
+	*inherited = NULL;
+	/* the copy was created in the directory of @name as given, and a
+	 * relative name has no mount point to find the root from
+	 */
+	snprintf(path, sizeof(path), "%s", name);
+	if (!realpath(dirname(path), dir))
+		return;
+	def = llapi_layout_get_by_path(dir, LLAPI_LAYOUT_GET_EXPECTED);
+	if (!def)
+		return;
+	layout_first_pool(def, pool, sizeof(pool));
+	/* a plain default without a pool takes the pool of a plain root
+	 * default, as lod_ah_init() does
+	 */
+	if (pool[0] == '\0' && !llapi_layout_is_composite(def)) {
+		llapi_layout_free(def);
+		def = NULL;
+		if (llapi_search_mounts(dir, 0, path, NULL) == 0)
+			def = llapi_layout_get_by_path(path, 0);
+		if (!def)
+			return;
+		if (!llapi_layout_is_composite(def))
+			layout_first_pool(def, pool, sizeof(pool));
+	}
+	llapi_layout_free(def);
+	if (pool[0] == '\0')
+		return;
+
+	pos = LLAPI_LAYOUT_COMP_USE_FIRST;
+	while (llapi_layout_comp_use(m_layout, pos) == 0) {
+		count++;
+		pos = LLAPI_LAYOUT_COMP_USE_NEXT;
+	}
+	*inherited = calloc(count, sizeof(**inherited));
+	if (!*inherited)
+		goto out;
+
+	pos = LLAPI_LAYOUT_COMP_USE_FIRST;
+	while (llapi_layout_comp_use(m_layout, pos) == 0 && i < count) {
+		uint64_t ost = LLAPI_LAYOUT_DEFAULT;
+		uint64_t pattern = 0;
+		bool in_pool = true;
+
+		/* a DoM component has no pool, and LOD drops the pool of a
+		 * copy with a fixed OST index outside it
+		 */
+		llapi_layout_pattern_get(m_layout, &pattern);
+		if (llapi_layout_ost_index_get(m_layout, 0, &ost) == 0 &&
+		    ost != LLAPI_LAYOUT_DEFAULT) {
+			char ostname[MAX_OBD_NAME + 16];
+
+			snprintf(ostname, sizeof(ostname), "%s-OST%04jx_UUID",
+				 fsname, (uintmax_t)ost);
+			in_pool = llapi_search_ost(fsname, pool, ostname) > 0;
+		}
+		if (pattern != LLAPI_LAYOUT_MDT && in_pool &&
+		    !llapi_layout_pool_name_get(m_layout, cur, sizeof(cur)) &&
+		    cur[0] == '\0' &&
+		    !llapi_layout_pool_name_set(m_layout, pool))
+			(*inherited)[i] = true;
+		i++;
+		pos = LLAPI_LAYOUT_COMP_USE_NEXT;
+	}
+out:
+	llapi_layout_comp_use(m_layout, LLAPI_LAYOUT_COMP_USE_FIRST);
+}
+
+/**
+ * mirror_uninherit_pool() - Undo mirror_inherit_pool()
+ * @m_layout: layout of the new mirror
+ * @inherited: components given the pool, freed here
+ *
+ * Leaves the first component current, as mirror_extend_layout() expects.
+ */
+static void mirror_uninherit_pool(struct llapi_layout *m_layout,
+				  bool *inherited)
+{
+	enum llapi_layout_comp_use pos = LLAPI_LAYOUT_COMP_USE_FIRST;
+	int i = 0;
+
+	if (!inherited)
+		return;
+
+	while (llapi_layout_comp_use(m_layout, pos) == 0) {
+		if (inherited[i++])
+			llapi_layout_pool_name_set(m_layout, "");
+		pos = LLAPI_LAYOUT_COMP_USE_NEXT;
+	}
+	free(inherited);
+	llapi_layout_comp_use(m_layout, LLAPI_LAYOUT_COMP_USE_FIRST);
+}
+
+/**
+ * mirror_extend_in_place() - Add a mirror to @name without a separate file
+ * @name: file to extend
+ * @m_layout: layout of the new mirror
+ * @resync: copy the data into the new mirror
+ * @bandwidth_bytes_sec: resync bandwidth limit
+ * @stats_interval_sec: resync progress interval
+ * @new_id_out: [out] id of the new mirror, set once it is known, even if
+ *	the resync then fails
+ * @err_str: [out] what failed
+ *
+ * The MDT adds the mirror stale and allocates its objects during the
+ * resync, with the file's other mirrors in view, so that the new mirror
+ * avoids their OSTs (LU-15834).  Without @resync the mirror stays stale,
+ * as it would after a merge with LL_LEASE_ALLOW_STALE.
+ *
+ * Return: 0 on success, -EOPNOTSUPP if the MDT cannot add a mirror in
+ * place, else a negative errno
+ */
+static int mirror_extend_in_place(char *name, struct llapi_layout *m_layout,
+				  bool resync,
+				  unsigned long long bandwidth_bytes_sec,
+				  long stats_interval_sec, uint32_t *new_id_out,
+				  char **err_str)
+{
+	char fsname[MAX_OBD_NAME + 1] = { 0 };
+	struct ll_ioc_lease *ioc;
+	uint32_t max_before = 0;
+	bool *inherited;
+	uint32_t new_id;
+	__u16 id;
+	int fd;
+	int rc;
+
+	/* as llapi_layout_file_open() checks the copy, e.g. the pool names */
+	rc = llapi_search_fsname(name, fsname);
+	if (rc) {
+		*err_str = "cannot find filesystem";
+		return rc;
+	}
+	llapi_layout_comp_use(m_layout, LLAPI_LAYOUT_COMP_USE_FIRST);
+	rc = llapi_layout_v2_sanity(m_layout, false, false, fsname);
+	if (rc) {
+		llapi_layout_sanity_perror(rc);
+		*err_str = "invalid mirror layout";
+		return -EINVAL;
+	}
+
+	rc = max_mirror_id(name, &max_before);
+	if (rc) {
+		*err_str = "cannot get mirror ids";
+		return rc;
+	}
+
+	/* a keyless open of an encrypted file needs O_CIPHERTEXT | O_DIRECT */
+	fd = open(name, O_RDWR | O_DIRECT | O_CIPHERTEXT);
+	if (fd < 0) {
+		*err_str = "cannot open file";
+		return -errno;
+	}
+	/* The resync cannot get its write lease while the file is open
+	 * elsewhere, and llapi_mirror_extend() cannot refresh the layout
+	 * with a lease.  Check that before the layout changes, so a busy
+	 * file is left as it was rather than with a stale mirror that each
+	 * retry would add to, as the merge refuses it.
+	 */
+	rc = llapi_lease_acquire(fd, resync ? LL_LEASE_WRLCK : LL_LEASE_RDLCK);
+	if (rc < 0) {
+		close(fd);
+		*err_str = "cannot get lease";
+		return rc;
+	}
+	llapi_lease_release(fd);
+	mirror_inherit_pool(name, fsname, m_layout, &inherited);
+	rc = llapi_mirror_extend(fd, m_layout);
+	mirror_uninherit_pool(m_layout, inherited);
+	close(fd);
+	if (rc) {
+		*err_str = "cannot add mirror";
+		return rc;
+	}
+	if (!resync)
+		return 0;
+
+	/* the mirror is added, so the caller must not merge another copy */
+	rc = verify_new_mirror_id(name, max_before, &new_id);
+	if (rc) {
+		*err_str = "cannot find new mirror";
+		return rc == -EOPNOTSUPP ? -EIO : rc;
+	}
+	if (new_id_out)
+		*new_id_out = new_id;
+
+	ioc = calloc(1, sizeof(*ioc) + sizeof(__u32) * IOC_IDS_MAX);
+	if (!ioc) {
+		*err_str = "memory allocation";
+		return -ENOMEM;
+	}
+	if (stats_interval_sec)
+		printf("%s:\n", name);
+	id = new_id;
+	rc = lfs_mirror_resync_file(name, ioc, &id, 1, stats_interval_sec,
+				    bandwidth_bytes_sec, false);
+	free(ioc);
+	if (rc)
+		*err_str = "cannot resync new mirror, run 'lfs mirror resync'";
+
+	return rc == -EOPNOTSUPP ? -EIO : rc;
+}
+
 /**
  * attach_ec_parity() - Attach a parity mirror protecting the existing data
  * mirror @data_mirror_id of @fname, in a single layout merge.
@@ -2762,7 +3024,7 @@ static int attach_ec_parity(char *fname, uint32_t data_mirror_id,
 	 */
 	rc = mirror_extend_layout(fname, parity_layout, false, false, 0,
 				  migration_flags, bandwidth_bytes_sec,
-				  stats_interval_sec);
+				  stats_interval_sec, NULL);
 	llapi_layout_free(parity_layout);
 	if (rc)
 		return rc;
@@ -2973,7 +3235,35 @@ static int mirror_extend(char *fname, struct mirror_args *mirror_list,
 							mirror_list->m_flags,
 							migration_flags,
 							bandwidth_bytes_sec,
-							stats_interval_sec);
+							stats_interval_sec,
+							&new_data_id);
+				/* A data mirror added in place stays if its
+				 * resync fails, but not without its parity.
+				 * Only a mirror known to be the one added here
+				 * is removed, as the highest id can be that of
+				 * another extender's mirror.
+				 */
+				if (rc && need_parity && new_data_id) {
+					if (mirror_split(fname, new_data_id,
+							 NULL, MF_DESTROY,
+							 NULL))
+						fprintf(stderr,
+							"data mirror %u was added to '%s' without parity, remove it with '%s mirror delete --mirror-id %u %s'\n",
+							new_data_id, fname,
+							progname, new_data_id,
+							fname);
+					else
+						fprintf(stderr,
+							"data mirror %u was removed from '%s', as it could not be resynced to add its parity\n",
+							new_data_id, fname);
+				} else if (rc && need_parity &&
+					   !max_mirror_id(fname, &max_after) &&
+					   max_after > max_before) {
+					fprintf(stderr,
+						"a data mirror may have been added to '%s' without parity, check with '%s getstripe -v %s' and remove it with '%s mirror delete --mirror-id <id> %s'\n",
+						fname, progname, fname,
+						progname, fname);
+				}
 				if (rc)
 					break;
 
@@ -2997,7 +3287,8 @@ static int mirror_extend(char *fname, struct mirror_args *mirror_list,
 					 * the merge ioctl takes one mirror at
 					 * a time.
 					 */
-					rc = verify_new_mirror_id(fname,
+					if (!new_data_id)
+						rc = verify_new_mirror_id(fname,
 							max_before,
 							&new_data_id);
 					if (rc)
@@ -15324,6 +15615,7 @@ int lfs_mirror_resync_file(const char *fname, struct ll_ioc_lease *ioc,
 	rc = llapi_lease_check(fd);
 	if (rc != LL_LEASE_WRLCK) {
 		fprintf(stderr, "%s: '%s' lost lease lock.\n", progname, fname);
+		rc = rc < 0 ? rc : -EBUSY;
 		goto free_layout;
 	}
 

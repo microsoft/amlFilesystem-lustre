@@ -2083,6 +2083,13 @@ static int mdt_resync_unpack(struct mdt_thread_info *info)
 	compat_set_capability_u32(&uc->uc_cap, rec->rs_cap);
 
 	rr->rr_fid1 = &rec->rs_fid;
+	/* the copy truncates each mirror to the file size, which needs the
+	 * component that holds that offset, also the first one at size 0
+	 */
+	rr->rr_resync_end = 0;
+	if (rec->rs_bias & MDS_RESYNC_SIZE)
+		rr->rr_resync_end = rec->rs_size < OBD_OBJECT_EOF ?
+				    rec->rs_size + 1 : OBD_OBJECT_EOF;
 	if (exp_connect_mirror_id_fix(exp))
 		rr->rr_mirror_id = (__u16)rec->rs_mirror_id_new;
 	else

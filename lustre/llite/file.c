@@ -1739,6 +1739,13 @@ static int ll_lease_file_resync(struct obd_client_handle *och,
 	if (rc)
 		GOTO(out, rc);
 
+	/* the MDT need not instantiate components beyond the file size */
+	rc = ll_glimpse_size(inode);
+	if (rc)
+		GOTO(out, rc);
+	op_data->op_attr.ia_size = i_size_read(inode);
+	op_data->op_bias |= MDS_RESYNC_SIZE;
+
 	op_data->op_lease_handle = och->och_lease_handle;
 	op_data->op_mirror_id = ioc.lil_mirror_id;
 	rc = md_file_resync(sbi->ll_md_exp, op_data);

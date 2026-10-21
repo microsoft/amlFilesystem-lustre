@@ -817,6 +817,9 @@ int lod_initialize_objects(const struct lu_env *env, struct lod_object *mo,
 int lod_verify_striping(const struct lu_env *env, struct lod_device *d,
 			struct lod_object *lo, const struct lu_buf *buf,
 			bool is_from_disk);
+int lod_verify_layout(const struct lu_env *env, struct lod_device *d,
+		      struct lod_object *lo, const struct lu_buf *buf,
+		      bool is_from_disk, bool append);
 int lod_generate_lovea(const struct lu_env *env, struct lod_object *lo,
 		       struct lov_mds_md *lmm, int *lmm_size, bool is_dir);
 int lod_generate_lovea_template(const struct lu_env *env, struct lod_object *lo,

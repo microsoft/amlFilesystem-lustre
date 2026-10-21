@@ -34,6 +34,28 @@ or just a regular non-mirrored file.
 If it's a non-mirrored file,
 then the command will convert it to a mirrored file.
 .P
+Each new mirror is added to the file as a stale mirror, then the data is
+copied into it from the other mirrors, so that its OST objects are allocated
+on other OSTs than those of the other mirrors.
+If the copy is interrupted, the new mirror stays stale until
+.BR lfs-mirror-resync (1)
+completes it, unless it was to be protected by a parity mirror with
+.BR --ec ,
+in which case it is removed.
+If the client or MDT does not support it, or for a new mirror that names its OSTs with
+.BR -o ,
+has an extension component
+.RB ( -z ),
+is copied with
+.BR --non-direct ,
+or for a file released by HSM, cached by PCC-RO, or with a resync that
+did not complete,
+the data is copied into a separate file that is then
+merged into the file as a new mirror, and the new mirror may share OSTs
+with the other mirrors.
+A component of the new mirror that names no pool gets the pool that a
+new file in the parent directory would get.
+.P
 When
 .B --ec
 is specified, the command operates in one of three erasure-coding modes:

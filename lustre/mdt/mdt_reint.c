@@ -3547,7 +3547,10 @@ static int mdt_reint_resync(struct mdt_thread_info *info,
 	struct mdt_object *mo;
 	struct ldlm_lock *lease;
 	struct mdt_body *repbody;
-	struct md_layout_change layout = { .mlc_mirror_id = rr->rr_mirror_id };
+	struct md_layout_change layout = {
+		.mlc_mirror_id = rr->rr_mirror_id,
+		.mlc_resync_end = rr->rr_resync_end,
+	};
 	bool lease_broken;
 	int rc;
 

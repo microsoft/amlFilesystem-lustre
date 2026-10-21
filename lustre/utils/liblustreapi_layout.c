@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <assert.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/param.h>
 #include <sys/time.h>
@@ -3567,6 +3568,66 @@ out:
 	free(lum);
 	llapi_layout_free(existing_layout);
 	errno = tmp_errno;
+	return rc;
+}
+
+/**
+ * llapi_mirror_extend() - Add a stale mirror to an existing file
+ * @fd: file descriptor of the file
+ * @layout: composite layout of the one new mirror
+ *
+ * The MDT adds the components of @layout as a new mirror, marked stale and
+ * without objects.  A resync of the mirror allocates its objects, avoiding
+ * the OSTs of the file's other mirrors, and copies the data into it.
+ *
+ * Return:
+ * * %0 on success
+ * * %-EOPNOTSUPP if the MDT cannot add a mirror in place
+ * * %negative errno on other failure
+ */
+int llapi_mirror_extend(int fd, const struct llapi_layout *layout)
+{
+	struct lov_user_md *lum;
+	int rc = 0;
+
+	lum = llapi_layout_to_lum(layout);
+	if (!lum)
+		return -errno;
+
+	if (lum->lmm_magic == LOV_USER_MAGIC_COMP_V1) {
+		struct lov_comp_md_v1 *comp_v1 = (struct lov_comp_md_v1 *)lum;
+
+		/* the mirror count and state of a layout made for a new file */
+		comp_v1->lcm_mirror_count = 0;
+		comp_v1->lcm_flags = 0;
+		if (fsetxattr(fd, XATTR_LUSTRE_LOV".extend", comp_v1,
+			      comp_v1->lcm_size, 0) < 0)
+			rc = -errno;
+		/* The MDT cancelled the layout lock, but a getxattr returns the
+		 * cached layout until it is refreshed, which a lease release
+		 * does, as after a merge.  This is outside the setxattr, which
+		 * runs with i_rwsem held and cannot wait for active I/O.  The
+		 * lease is refused while the file is open for write elsewhere,
+		 * so set it quietly, without llapi_lease_acquire().
+		 */
+		if (!rc) {
+			int flags = fcntl(fd, F_GETFL);
+			struct ll_ioc_lease lease = {
+				.lil_mode = (flags & O_ACCMODE) == O_WRONLY ?
+					    LL_LEASE_WRLCK : LL_LEASE_RDLCK,
+			};
+
+			if (flags >= 0 &&
+			    ioctl(fd, LL_IOC_SET_LEASE, &lease) >= 0) {
+				lease.lil_mode = LL_LEASE_UNLCK;
+				ioctl(fd, LL_IOC_SET_LEASE, &lease);
+			}
+		}
+	} else {
+		rc = -EINVAL;
+	}
+
+	free(lum);
 	return rc;
 }
 

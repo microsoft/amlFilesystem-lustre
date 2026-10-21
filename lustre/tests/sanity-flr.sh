@@ -624,6 +624,24 @@ test_0e() {
 }
 run_test 0e "lfs mirror extend plain layout mirrors"
 
+# A mirror that "lfs mirror extend" adds in place avoids the OSTs of the
+# other mirrors, so a component striped over all OSTs may get as few as the
+# 3/4 of them that the MDT accepts for "-c -1".
+verify_stripe_count_all() {
+	local tf=$1
+	local comp_id=$2
+	local min=$OSTCOUNT
+	local count
+
+	(( MDS1_VERSION >= $(version_code 2.17.62) )) &&
+		min=$((OSTCOUNT - OSTCOUNT / 4))
+	count=$($LFS getstripe -I$comp_id -c $tf)
+	(( count >= min && count <= OSTCOUNT )) || {
+		$LFS getstripe -v -I$comp_id $tf
+		error "$tf: comp $comp_id: $count stripes, not $min..$OSTCOUNT"
+	}
+}
+
 test_0f() {
 	[[ $OSTCOUNT -lt 4 ]] && skip "need >= 4 OSTs" && return
 
@@ -693,14 +711,14 @@ test_0f() {
 
 	# verify component ${ids[7]}
 	verify_comp_attr stripe-size $tf ${ids[7]} 4194304
-	verify_comp_attr stripe-count $tf ${ids[7]} $OSTCOUNT
+	verify_stripe_count_all $tf ${ids[7]}
 	verify_comp_attr_with_parent pool $tf ${ids[7]}
 	verify_comp_extent $tf ${ids[7]} 0 EOF
 
 	# verify components ${ids[8]}, ${ids[10]} and ${ids[12]}
 	for i in 8 10 12; do
 		verify_comp_attr stripe-size $tf ${ids[$i]} 16777216
-		verify_comp_attr stripe-count $tf ${ids[$i]} $OSTCOUNT
+		verify_stripe_count_all $tf ${ids[$i]}
 		verify_comp_attr pool $tf ${ids[$i]} archive
 		verify_comp_extent $tf ${ids[$i]} 0 536870912
 	done
@@ -1185,6 +1203,283 @@ test_7() {
 		error "DoM component shouldn't inherit previous stripe_size"
 }
 run_test 7 "Create mirror with DoM component"
+
+# check that no two components of $1 with the same extent share an OST, and
+# that none is stale
+check_mirror_osts() {
+	local tf=$1
+	local dup
+
+	$LFS getstripe $tf | grep -E "lcme_mirror_id|e_start|l_ost_idx"
+	dup=$($LFS getstripe $tf | awk '/lcme_extent.e_start:/ { start = $2 }
+		/l_ost_idx:/ { sub(",", "", $5); print start ":" $5 }' |
+		sort | uniq -d | xargs)
+	[[ -z "$dup" ]] || error "$tf: extent:OST $dup used by two mirrors"
+	! $LFS getstripe -v $tf | grep -q "lcme_flags:.*stale" ||
+		error "$tf: stale component after mirror extend"
+	$LFS mirror verify $tf || error "$tf: mirror verify failed"
+}
+
+test_8a() {
+	(( MDS1_VERSION >= $(version_code 2.17.62) )) ||
+		skip "need MDS >= 2.17.62 for in-place mirror extend"
+	(( OSTCOUNT >= 2 )) || skip "needs >= 2 OSTs"
+
+	local tf=$DIR/$tfile
+	local max=$(( OSTCOUNT > 16 ? 16 : OSTCOUNT ))
+	local i
+
+	# round-robin would put some of these new mirrors on OST0 as well
+	for ((i = 0; i < 2 * OSTCOUNT; i++)); do
+		$LFS setstripe -c1 -i0 $tf-$i || error "setstripe $tf-$i failed"
+		dd if=/dev/urandom of=$tf-$i bs=64K count=1 status=none ||
+			error "write $tf-$i failed"
+		$LFS mirror extend -N -c1 $tf-$i ||
+			error "mirror extend $tf-$i failed"
+		check_mirror_osts $tf-$i
+	done
+
+	# extend a plain file to one mirror per OST
+	$LFS setstripe -c1 -i1 $tf-a || error "setstripe $tf-a failed"
+	dd if=/dev/urandom of=$tf-a bs=1M count=2 status=none ||
+		error "write $tf-a failed"
+	$LFS mirror extend -N$((max - 1)) -c1 $tf-a ||
+		error "mirror extend $tf-a failed"
+	check_mirror_osts $tf-a
+
+	# extend a mirrored file
+	if (( OSTCOUNT >= 3 )); then
+		$LFS setstripe -N2 -c1 $tf-b || error "setstripe $tf-b failed"
+		dd if=/dev/urandom of=$tf-b bs=1M count=2 status=none ||
+			error "write $tf-b failed"
+		# the write left the second mirror stale
+		$LFS mirror resync $tf-b || error "mirror resync $tf-b failed"
+		$LFS mirror extend -N$((max - 2)) -c1 $tf-b ||
+			error "mirror extend $tf-b failed"
+		check_mirror_osts $tf-b
+	fi
+
+	# extend a PFL file with a PFL mirror
+	$LFS setstripe -E1M -c1 -i1 -Eeof -c1 $tf-c ||
+		error "setstripe $tf-c failed"
+	dd if=/dev/urandom of=$tf-c bs=1M count=3 status=none ||
+		error "write $tf-c failed"
+	$LFS mirror extend -N -E1M -c1 -Eeof -c1 $tf-c ||
+		error "mirror extend $tf-c failed"
+	check_mirror_osts $tf-c
+
+	# the resync truncates the new mirror to the file size, so the
+	# component that starts there must be instantiated
+	local out
+
+	dd if=/dev/urandom of=$tf-h bs=1M count=1 status=none ||
+		error "write $tf-h failed"
+	out=$($LFS mirror extend -N -E1M -c1 -Eeof -c1 $tf-h 2>&1) ||
+		error "mirror extend $tf-h failed: $out"
+	[[ -z "$out" ]] || error "mirror extend $tf-h: $out"
+	$LFS getstripe --mirror-id=2 --component-start=1048576 -v $tf-h |
+		grep "lcme_flags:.*init" || {
+		$LFS getstripe $tf-h
+		error "$tf-h component at the file size not instantiated"
+	}
+
+	# the resync of a file left in sync_pending does not instantiate a
+	# new mirror, so it is copied into a new file and merged
+	$LFS mirror create -N2 -c1 $tf-i || error "create $tf-i failed"
+	dd if=/dev/urandom of=$tf-i bs=1M count=1 status=none ||
+		error "write $tf-i failed"
+	mirror_io resync -e resync_start $tf-i &&
+		error "resync of $tf-i succeeded"
+	verify_flr_state $tf-i "sp"
+	$LFS mirror extend -N -c1 $tf-i ||
+		error "mirror extend of sync_pending $tf-i failed"
+	$LFS mirror resync $tf-i || error "mirror resync $tf-i failed"
+	$LFS mirror verify $tf-i || error "$tf-i: mirror verify failed"
+
+	# a file open elsewhere cannot be resynced, so is left unchanged
+	local before
+	local fd
+
+	$LFS setstripe -c1 -i0 $tf-d || error "setstripe $tf-d failed"
+	dd if=/dev/urandom of=$tf-d bs=64K count=1 status=none ||
+		error "write $tf-d failed"
+	before=$($LFS getstripe $tf-d)
+	exec {fd}>>$tf-d
+	$LFS mirror extend -N -c1 $tf-d &&
+		error "mirror extend of busy $tf-d succeeded"
+	exec {fd}>&-
+	[[ "$($LFS getstripe $tf-d)" == "$before" ]] || {
+		$LFS getstripe $tf-d
+		error "failed mirror extend changed $tf-d"
+	}
+
+	# the resync cannot instantiate a self-extending mirror, so it is
+	# copied into a new file and merged
+	$LFS setstripe -c1 -i0 $tf-e || error "setstripe $tf-e failed"
+	dd if=/dev/urandom of=$tf-e bs=1M count=2 status=none ||
+		error "write $tf-e failed"
+	$LFS mirror extend -N -Eeof -c1 -z64M $tf-e ||
+		error "mirror extend of $tf-e with a SEL mirror failed"
+	(( $($LFS getstripe -N $tf-e) == 2 )) ||
+		error "$tf-e does not have 2 mirrors"
+	$LFS mirror verify $tf-e || error "$tf-e: mirror verify failed"
+
+	# a mirror with another DoM size is refused, leaving the file usable
+	$LFS setstripe -E64K -L mdt -Eeof $tf-f ||
+		error "setstripe $tf-f failed"
+	echo data > $tf-f || error "write $tf-f failed"
+	$LFS mirror extend -N -E1M -L mdt -Eeof $tf-f &&
+		error "mirror extend of $tf-f with another DoM size succeeded"
+	cancel_lru_locks mdc
+	(( $($LFS getstripe -N $tf-f) == 1 )) ||
+		error "failed mirror extend changed $tf-f"
+	[[ "$(cat $tf-f)" == "data" ]] ||
+		error "cannot read $tf-f after the failed mirror extend"
+
+	# a foreign (HSM) component is not added in place, so lfs merges it
+	local val
+
+	$LFS setstripe -c1 -i0 $tf-g || error "setstripe $tf-g failed"
+	echo data > $tf-g || error "write $tf-g failed"
+	# lov_comp_md_v1 (little endian), size 152, one component
+	val="d00bd60b 98000000 00000000 0000 0100 0000 0000 00000000"
+	val+=" 0000000000000000"
+	# lov_comp_md_entry_v1, [0, EOF), offset 80, size 72
+	val+=" 00000000 00000000 0000000000000000 ffffffffffffffff"
+	val+=" 50000000 48000000 00000000 0000000000000000 00000000"
+	# lov_hsm_md, POSIX, HS_EXISTS | HS_ARCHIVED, archive id 1
+	val+=" d00bd70b 38000000 01000000 09000000 0100000000000000"
+	val+=" 0000000000000000 $(printf "%080d" 0)"
+	before=$($LFS getstripe $tf-g)
+	setfattr -n lustre.lov.extend -v 0x${val// /} $tf-g &&
+		error "lustre.lov.extend of $tf-g with an HSM mirror succeeded"
+	[[ "$($LFS getstripe $tf-g)" == "$before" ]] || {
+		$LFS getstripe $tf-g
+		error "failed mirror extend changed $tf-g"
+	}
+
+	# a file with only stale mirrors has no data to resync from
+	$LFS setstripe -E1M -c1 $tf-j || error "setstripe $tf-j failed"
+	# lov_comp_md_v1, size 112, one stale [1M, EOF) component at 80
+	val="d00bd60b 70000000 00000000 0000 0100 0000 0000 00000000"
+	val+=" 0000000000000000"
+	val+=" 00000000 01000000 0000100000000000 ffffffffffffffff"
+	val+=" 50000000 20000000 00000000 0000000000000000 00000000"
+	# lov_user_md_v1, RAID0, 1MiB stripes, one stripe
+	val+=" d00bd10b 01000000 $(printf "%032d" 0) 00001000 0100 ffff"
+	setfattr -n lustre.lov.add -v 0x${val// /} $tf-j ||
+		error "add a stale component to $tf-j failed"
+	before=$($LFS getstripe $tf-j)
+	$LFS mirror extend -N -c1 $tf-j &&
+		error "mirror extend of all stale $tf-j succeeded"
+	[[ "$($LFS getstripe $tf-j)" == "$before" ]] || {
+		$LFS getstripe $tf-j
+		error "failed mirror extend changed $tf-j"
+	}
+}
+run_test 8a "mirror extend places the new mirror on other OSTs"
+
+test_8b() {
+	(( MDS1_VERSION >= $(version_code 2.17.62) )) ||
+		skip "need MDS >= 2.17.62 for in-place mirror extend"
+	(( OSTCOUNT >= 2 )) || skip "needs >= 2 OSTs"
+
+	local td=$DIR/$tdir
+	local tf=$td/$tfile
+	local td2=$DIR/$tdir-2
+	local tf2=$td2/$tfile
+	local pool=$TESTNAME
+	local mirror_pool
+
+	create_pool $FSNAME.$pool || error "create OST pool $pool failed"
+	stack_trap destroy_test_pools
+	pool_add_targets $pool 1 1 || error "add OST1 to pool $pool failed"
+
+	mkdir $td $td2 || error "mkdir $td $td2 failed"
+	stack_trap "rm -rf $td2"
+	for f in $tf $tf2; do
+		$LFS setstripe -c1 -i0 $f || error "setstripe $f failed"
+		dd if=/dev/urandom of=$f bs=64K count=1 status=none ||
+			error "write $f failed"
+	done
+	# the directory gets its default pool after the file is created
+	$LFS setstripe -p $pool $td || error "setstripe -p $pool $td failed"
+
+	# the pool of the first file's directory must not carry over to the
+	# second file, which is in a directory without a pool
+	$LFS mirror extend -N -c1 $tf $tf2 ||
+		error "mirror extend $tf $tf2 failed"
+	mirror_pool=$($LFS getstripe --mirror-id=2 -p $tf)
+	[[ "$mirror_pool" == "$pool" ]] || {
+		$LFS getstripe $tf
+		error "new mirror pool '$mirror_pool' != '$pool'"
+	}
+	(( $($LFS getstripe --mirror-id=2 -i $tf) == 1 )) ||
+		error "new mirror is not on OST1 of pool $pool"
+	mirror_pool=$($LFS getstripe --mirror-id=2 -p $tf2)
+	[[ -z "$mirror_pool" ]] || {
+		$LFS getstripe $tf2
+		error "$tf2 new mirror pool '$mirror_pool' should be empty"
+	}
+	$LFS mirror verify $tf || error "$tf: mirror verify failed"
+	$LFS mirror verify $tf2 || error "$tf2: mirror verify failed"
+
+	# a fixed OST index in the pool keeps it, one outside the pool or a
+	# DoM component gets no pool, as for a copy created in the directory
+	local f
+
+	for f in $td/in $td/out $td/dom; do
+		dd if=/dev/urandom of=$f bs=64K count=1 status=none ||
+			error "write $f failed"
+	done
+	$LFS mirror extend -N -c1 -i1 $td/in || error "extend -i1 $td/in"
+	mirror_pool=$($LFS getstripe --mirror-id=2 -p $td/in)
+	[[ "$mirror_pool" == "$pool" ]] || {
+		$LFS getstripe $td/in
+		error "$td/in new mirror pool '$mirror_pool' != '$pool'"
+	}
+	$LFS mirror extend -N -c1 -i0 $td/out || error "extend -i0 $td/out"
+	mirror_pool=$($LFS getstripe --mirror-id=2 -p $td/out)
+	[[ -z "$mirror_pool" ]] &&
+	(( $($LFS getstripe --mirror-id=2 -i $td/out) == 0 )) || {
+		$LFS getstripe $td/out
+		error "$td/out new mirror pool '$mirror_pool' or not on OST0"
+	}
+	$LFS mirror extend -N -E1M -L mdt -Eeof $td/dom ||
+		error "extend DoM mirror $td/dom"
+	local dom_pool=$($LFS getstripe --mirror-id=2 --component-start=0 \
+		-p $td/dom)
+
+	mirror_pool=$($LFS getstripe --mirror-id=2 --component-start=1048576 \
+		-p $td/dom)
+	[[ -z "$dom_pool" && "$mirror_pool" == "$pool" ]] || {
+		$LFS getstripe $td/dom
+		error "$td/dom pools DoM '$dom_pool' OST '$mirror_pool'"
+	}
+	$LFS mirror verify $td/dom || error "$td/dom: mirror verify failed"
+
+	# a pool that does not exist is refused, and the file is unchanged
+	! $LFS mirror extend -N -p ${pool}_none $tf2 ||
+		error "extend $tf2 with missing pool ${pool}_none succeeded"
+	(( $($LFS getstripe -N $tf2) == 2 )) ||
+		error "$tf2 mirror count $($LFS getstripe -N $tf2) != 2"
+
+	# a relative name in a directory with a plain default layout without
+	# a pool gets the pool of the plain root default
+	save_layout_restore_at_exit $MOUNT
+	$LFS setstripe -p $pool $MOUNT || error "setstripe -p $pool $MOUNT"
+	$LFS setstripe -c1 $td2 || error "setstripe -c1 $td2 failed"
+	dd if=/dev/urandom of=$td2/rel bs=64K count=1 status=none ||
+		error "write $td2/rel failed"
+	(cd $td2 && $LFS mirror extend -N -c1 rel) ||
+		error "mirror extend of relative $td2/rel failed"
+	mirror_pool=$($LFS getstripe --mirror-id=2 -p $td2/rel)
+	[[ "$mirror_pool" == "$pool" ]] || {
+		$LFS getstripe $td2/rel
+		error "$td2/rel new mirror pool '$mirror_pool' != '$pool'"
+	}
+}
+run_test 8b "mirror extend gives the new mirror the directory default pool"
 
 test_21() {
 	local tf=$DIR/$tfile
@@ -3587,6 +3882,15 @@ get_times_61() {
 	stat --format='%X %Y %Z' $file || error "$file: cannot get times"
 }
 
+# An in-place extend resyncs the new mirror, whose objects keep the time of
+# the copy, as a time-only setattr reaches only one mirror (LU-21006).  The
+# split of the other mirror shows that time.
+mirror_extend_in_place() {
+	(( MDS1_VERSION >= $(version_code 2.17.62) &&
+	   CLIENT_VERSION >= $(version_code 2.17.62) )) &&
+		$LCTL get_param -n mdc.*.connect_flags | grep -q flr_ec
+}
+
 check_times_61() {
 	local file=$1
 	local -a old=( $2 $3 $4 )
@@ -3687,12 +3991,12 @@ test_61b() { # LU-14508
 	echo "mirror split $tfile and test timestamps"
 	$LFS mirror split -d --mirror-id=1 $file ||
 		error "cannot split mirror 1 off $file"
-	check_times_61 $file "${tim[@]}"
+	mirror_extend_in_place || check_times_61 $file "${tim[@]}"
 
 	echo "normal user mirror extend $tfile and test timestamps"
 	$RUNAS -G0 $LFS mirror extend -N -c1 -i1 $file ||
 		error "cannot extend mirror $file"
-	check_times_61 $file "${tim[@]}"
+	mirror_extend_in_place || check_times_61 $file "${tim[@]}"
 }
 run_test 61b "mirror extend and split preserve timestamps"
 
@@ -3761,7 +4065,7 @@ test_61d() {
 	! $LFS getstripe $file | grep -q "lmm_pattern:.*mdt" ||
 		error "$file still has a DoM component after the split"
 	cancel_lru_locks mdc
-	check_times_61 $file "${tim[@]}"
+	mirror_extend_in_place || check_times_61 $file "${tim[@]}"
 
 	# the layout swap of a migrate off DoM punches the DoM data too
 	file=$DIR/$tdir/$tfile-2
@@ -4473,7 +4777,11 @@ test_204b() {
 	found=$($LFS find --component-end 10M $flg_opts $comp_file | wc -l)
 	[ $found -eq 1 ] || error "resync: First mirror comp flags incorrect"
 
+	# a resync does not instantiate components beyond the file size
 	flg_opts="--component-flags init"
+	(( MDS1_VERSION >= $(version_code 2.17.62) &&
+	   CLIENT_VERSION >= $(version_code 2.17.62) )) &&
+		flg_opts="--component-flags ^init,^stale"
 	found=$($LFS find --component-start 10M $flg_opts $comp_file | wc -l)
 	[ $found -eq 1 ] || error "resync: Second mirror comp flags incorrect"
 
@@ -5128,9 +5436,17 @@ test_210a() {
 
 	stack_trap "rm -f $tf"
 	dd if=/dev/zero of=$tf bs=1M count=1 || error "can't dd"
+	$LFS mirror extend -N $tf || error "can't mirror"
+
+	# break the layout at its next change, which the extend may not be
+	local id=$($LFS getstripe $tf |
+		   awk '/lcme_id/ { id = $2 } END { print id }')
+
 #define OBD_FAIL_LOV_INVALID_OSTIDX		    0x1428
 	do_facet mds1 "$LCTL set_param fail_loc=0x1428"
-	$LFS mirror extend -N $tf || error "can't mirror"
+	stack_trap "do_facet mds1 $LCTL set_param fail_loc=0"
+	$LFS setstripe --comp-set -I $id --comp-flags=prefer $tf ||
+		error "can't set prefer on $id"
 	$LFS getstripe -v $tf
 	stat $tf || error "can't stat"
 }
@@ -5153,9 +5469,17 @@ test_210b() {
 	local ino=$(do_facet ost1 $cmd | grep Inode:)
 	[[ -n $ino ]] || error "can't access obj object: $objpath"
 
+	$LFS mirror extend -N $tf || error "can't mirror"
+
+	# break the layout at its next change, which the extend may not be
+	local id=$($LFS getstripe $tf |
+		   awk '/lcme_id/ { id = $2 } END { print id }')
+
 #define OBD_FAIL_LOV_INVALID_OSTIDX		    0x1428
 	do_facet mds1 "$LCTL set_param fail_loc=0x1428"
-	$LFS mirror extend -N $tf || error "can't mirror"
+	stack_trap "do_facet mds1 $LCTL set_param fail_loc=0"
+	$LFS setstripe --comp-set -I $id --comp-flags=prefer $tf ||
+		error "can't set prefer on $id"
 
 	# now remove the file with bogus ostidx in the striping info
 	rm $tf || error "can't remove"

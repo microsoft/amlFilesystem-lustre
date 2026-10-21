@@ -2879,6 +2879,67 @@ static int lod_comp_md_size(struct lod_object *lo, bool is_dir)
 	return size;
 }
 
+static int lod_layout_convert(struct lu_buf *buf);
+
+/**
+ * lod_comp_from_user() - Set up a component from a user layout
+ * @lod_comp: component to set up
+ * @comp_v1: user layout, in host byte order
+ * @i: index of the component in @comp_v1
+ * @desc: LOV description for the default striping
+ *
+ * Return:
+ * * %0 on success
+ * * %negative if the pool name could not be set
+ */
+static int lod_comp_from_user(struct lod_layout_component *lod_comp,
+			      struct lov_comp_md_v1 *comp_v1, int i,
+			      struct lov_desc *desc)
+{
+	struct lov_user_md_v1 *v1;
+	struct lu_extent *ext;
+	int rc;
+
+	v1 = (struct lov_user_md *)((char *)comp_v1 +
+				    comp_v1->lcm_entries[i].lcme_offset);
+	ext = &comp_v1->lcm_entries[i].lcme_extent;
+
+	lod_comp->llc_extent.e_start = ext->e_start;
+	lod_comp->llc_extent.e_end = ext->e_end;
+	lod_comp->llc_stripe_offset = v1->lmm_stripe_offset;
+	lod_comp->llc_flags = comp_v1->lcm_entries[i].lcme_flags;
+	lod_comp->llc_dstripe_count =
+		comp_v1->lcm_entries[i].lcme_dstripe_count;
+	lod_comp->llc_cstripe_count =
+		comp_v1->lcm_entries[i].lcme_cstripe_count;
+	lod_comp->llc_ec_version =
+		comp_v1->lcm_entries[i].lcme_ec_version;
+
+	lod_comp->llc_stripe_size = v1->lmm_stripe_size;
+	lod_comp->llc_stripe_count = v1->lmm_stripe_count;
+	lod_comp->llc_pattern = v1->lmm_pattern;
+
+	/* set parity component pattern */
+	if (lod_comp->llc_flags & LCME_FL_PARITY)
+		lod_comp_set_ec_pattern(&lod_comp->llc_pattern);
+	lod_comp_shrink_to_extent(lod_comp);
+	lod_adjust_stripe_info(lod_comp, desc, 0);
+
+	if (v1->lmm_magic == LOV_USER_MAGIC_V3) {
+		struct lov_user_md_v3 *v3 = (typeof(*v3) *) v1;
+
+		if (v3->lmm_pool_name[0] != '\0' &&
+		    !lov_pool_is_ignored(v3->lmm_pool_name)) {
+			rc = lod_set_pool(&lod_comp->llc_pool,
+					  v3->lmm_pool_name);
+			if (rc)
+				return rc;
+		}
+	}
+
+	return 0;
+}
+
 /**
  * lod_declare_layout_add() - Declare component add
  * @env: execution environment
@@ -2942,46 +3003,10 @@ static int lod_declare_layout_add(const struct lu_env *env,
 	       sizeof(*comp_array) * lo->ldo_comp_cnt);
 
 	for (i = 0; i < comp_v1->lcm_entry_count; i++) {
-		struct lov_user_md_v1 *v1;
-		struct lu_extent *ext;
-
-		v1 = (struct lov_user_md *)((char *)comp_v1 +
-				comp_v1->lcm_entries[i].lcme_offset);
-		ext = &comp_v1->lcm_entries[i].lcme_extent;
-
-		lod_comp = &comp_array[lo->ldo_comp_cnt + i];
-		lod_comp->llc_extent.e_start = ext->e_start;
-		lod_comp->llc_extent.e_end = ext->e_end;
-		lod_comp->llc_stripe_offset = v1->lmm_stripe_offset;
-		lod_comp->llc_flags = comp_v1->lcm_entries[i].lcme_flags;
-		lod_comp->llc_dstripe_count =
-			comp_v1->lcm_entries[i].lcme_dstripe_count;
-		lod_comp->llc_cstripe_count =
-			comp_v1->lcm_entries[i].lcme_cstripe_count;
-		lod_comp->llc_ec_version =
-			comp_v1->lcm_entries[i].lcme_ec_version;
-
-		lod_comp->llc_stripe_size = v1->lmm_stripe_size;
-		lod_comp->llc_stripe_count = v1->lmm_stripe_count;
-		lod_comp->llc_pattern = v1->lmm_pattern;
-
-		/* set parity component pattern */
-		if (lod_comp->llc_flags & LCME_FL_PARITY)
-			lod_comp_set_ec_pattern(&lod_comp->llc_pattern);
-		lod_comp_shrink_to_extent(lod_comp);
-		lod_adjust_stripe_info(lod_comp, desc, 0);
-
-		if (v1->lmm_magic == LOV_USER_MAGIC_V3) {
-			struct lov_user_md_v3 *v3 = (typeof(*v3) *) v1;
-
-			if (v3->lmm_pool_name[0] != '\0' &&
-			    !lov_pool_is_ignored(v3->lmm_pool_name)) {
-				rc = lod_set_pool(&lod_comp->llc_pool,
-						  v3->lmm_pool_name);
-				if (rc)
-					GOTO(error, rc);
-			}
-		}
+		rc = lod_comp_from_user(&comp_array[lo->ldo_comp_cnt + i],
+					comp_v1, i, desc);
+		if (rc)
+			GOTO(error, rc);
 	}
 
 	old_array = lo->ldo_comp_entries;
@@ -3344,6 +3369,313 @@ static int lod_declare_layout_del(const struct lu_env *env,
 }
 
 /**
+ * lod_extend_check_dom() - Check the DoM size of a mirror to add to a file
+ * @d: LOD device
+ * @lo: file to add the mirror to
+ * @comp_v1: components of the new mirror
+ *
+ * All DoM components of a file must have the same size, or
+ * lod_parse_striping() refuses the layout and the file cannot be used.
+ *
+ * Return: %0 if the sizes match, %-EINVAL if they do not
+ */
+static int lod_extend_check_dom(struct lod_device *d, struct lod_object *lo,
+				const struct lov_comp_md_v1 *comp_v1)
+{
+	__u64 dom_size = 0;
+	int i;
+
+	for (i = 0; i < lo->ldo_comp_cnt; i++) {
+		struct lod_layout_component *comp = &lo->ldo_comp_entries[i];
+
+		if (comp->llc_pattern & LOV_PATTERN_MDT) {
+			dom_size = comp->llc_extent.e_end;
+			break;
+		}
+	}
+	if (!dom_size)
+		return 0;
+
+	for (i = 0; i < comp_v1->lcm_entry_count; i++) {
+		const struct lov_comp_md_entry_v1 *ent;
+		const struct lov_user_md_v1 *v1;
+
+		ent = &comp_v1->lcm_entries[i];
+		v1 = (const struct lov_user_md_v1 *)((const char *)comp_v1 +
+						     ent->lcme_offset);
+		if (v1->lmm_pattern & LOV_PATTERN_MDT &&
+		    ent->lcme_extent.e_end != dom_size) {
+			CDEBUG(D_LAYOUT,
+			       "%s: DoM size %#llx of new mirror is not %#llx\n",
+			       lod2obd(d)->obd_name, ent->lcme_extent.e_end,
+			       dom_size);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * lod_declare_layout_extend() - Declare adding a mirror to a file
+ * @env: execution environment
+ * @dt: file to add the mirror to
+ * @buf: lov_comp_md_v1 with the components of one new mirror
+ * @th: transaction handle
+ *
+ * Add the components of @buf to the file as a new stale mirror, without
+ * allocating its objects.  The resync of the mirror instantiates it while
+ * the other mirrors of the file are in view, so that it avoids their OSTs,
+ * OSSs and failure domains (LU-15834).  A copy made in a separate file and
+ * merged into this one is allocated without that view.  The xattr name is
+ * XATTR_LUSTRE_LOV.extend.
+ *
+ * A parity component in @buf protects the data component of the mirror
+ * named by its link id that has the same extent.  On error, the caller
+ * frees the cached layout of @dt, which is changed here before the
+ * transaction.
+ *
+ * Return:
+ * * %0 on success
+ * * %-EINVAL if @buf is not one mirror, its DoM size differs from that of
+ *   the file, a parity link is not valid, or every mirror of the file is
+ *   stale
+ * * %-EEXIST if a data component is already protected by parity
+ * * %-ERANGE if the file already has the maximum number of mirrors
+ * * %-ENODATA if the file has no layout yet
+ * * %-ENOMEM if memory could not be allocated
+ * * %-EOPNOTSUPP if @buf names the OSTs of a component, which an
+ *   uninstantiated component cannot keep until the resync, has an
+ *   extension component, which only a write instantiates, or a foreign
+ *   or released component, or if the file is released, cached by PCC-RO,
+ *   or in SYNC_PENDING
+ */
+static int lod_declare_layout_extend(const struct lu_env *env,
+				     struct dt_object *dt,
+				     const struct lu_buf *buf,
+				     struct thandle *th)
+{
+	struct lod_thread_info *info = lod_env_info(env);
+	struct lod_device *d = lu2lod_dev(dt->do_lu.lo_dev);
+	struct lov_desc *desc = &d->lod_ost_descs.ltd_lov_desc;
+	struct lod_layout_component *comp_array, *lod_comp;
+	struct lod_object *lo = lod_dt_obj(dt);
+	struct lov_comp_md_v1 *comp_v1 = buf->lb_buf;
+	struct lod_mirror_entry *mirrors;
+	int i, j, rc, array_cnt, old_cnt;
+	__u16 mirror_id = 0;
+	__u32 magic;
+
+	ENTRY;
+
+	/* the new mirror is a layout of its own, not the file's continued */
+	rc = lod_verify_layout(env, d, lo, buf, false, false);
+	if (rc)
+		RETURN(rc);
+
+	magic = comp_v1->lcm_magic;
+	if (magic == __swab32(LOV_USER_MAGIC_COMP_V1)) {
+		lustre_swab_lov_comp_md_v1(comp_v1);
+		magic = comp_v1->lcm_magic;
+	}
+	if (magic != LOV_USER_MAGIC_COMP_V1 || comp_v1->lcm_mirror_count)
+		RETURN(-EINVAL);
+
+	/* an OST list is not stored for a component without objects, so it
+	 * would be lost before the resync, the resync cannot instantiate
+	 * an extension component, and a foreign or released component has
+	 * no objects to copy into; the caller merges a copy instead
+	 */
+	for (i = 0; i < comp_v1->lcm_entry_count; i++) {
+		struct lov_user_md_v1 *v1;
+
+		v1 = (struct lov_user_md_v1 *)((char *)comp_v1 +
+				comp_v1->lcm_entries[i].lcme_offset);
+		if (v1->lmm_magic == LOV_USER_MAGIC_SPECIFIC ||
+		    v1->lmm_magic == LOV_USER_MAGIC_FOREIGN ||
+		    v1->lmm_pattern & LOV_PATTERN_F_RELEASED ||
+		    comp_v1->lcm_entries[i].lcme_flags & LCME_FL_EXTENSION)
+			RETURN(-EOPNOTSUPP);
+	}
+
+	/* A released file is restored by the read of the copy that is merged
+	 * instead.  A released mirror next to the new one would leave a
+	 * mirrored layout that is not released, so not handled as one.  The
+	 * resync of a PCC-RO file is refused until PCC-RO is cleared, while
+	 * a merged copy is already in sync.  The resync of a file left in
+	 * SYNC_PENDING does not instantiate a new mirror.
+	 */
+	if (lo->ldo_flr_state & LCM_FL_PCC_RDONLY ||
+	    (lo->ldo_flr_state & LCM_FL_FLR_MASK) == LCM_FL_SYNC_PENDING)
+		RETURN(-EOPNOTSUPP);
+	for (i = 0; lo->ldo_is_composite && i < lo->ldo_comp_cnt; i++) {
+		lod_comp = &lo->ldo_comp_entries[i];
+		if (lod_comp->llc_magic != LOV_MAGIC_FOREIGN &&
+		    lod_comp->llc_pattern & LOV_PATTERN_F_RELEASED)
+			RETURN(-EOPNOTSUPP);
+	}
+
+	/* a plain file becomes a composite file with one component */
+	if (!lo->ldo_is_composite) {
+		struct lov_mds_md *lmm;
+
+		rc = lod_get_lov_ea(env, lo);
+		if (rc <= 0)
+			RETURN(rc ? : -ENODATA);
+
+		lmm = info->lti_ea_buf.lb_buf;
+		magic = le32_to_cpu(lmm->lmm_magic);
+		if (magic != LOV_MAGIC_V1 && magic != LOV_MAGIC_V3)
+			RETURN(-EINVAL);
+		if (le32_to_cpu(lmm->lmm_pattern) & LOV_PATTERN_F_RELEASED)
+			RETURN(-EOPNOTSUPP);
+
+		rc = lod_layout_convert(&info->lti_ea_buf);
+		if (rc)
+			RETURN(rc);
+
+		rc = lod_striping_reload(env, lo, &info->lti_ea_buf, 0);
+		if (rc)
+			RETURN(rc);
+	}
+
+	if (lo->ldo_mirror_count + 1 > d->lod_mirror_count_max)
+		RETURN(-ERANGE);
+
+	/* the resync copies from a mirror that is not stale */
+	for (i = 0; i < lo->ldo_mirror_count; i++)
+		if (!lo->ldo_mirrors[i].lme_stale)
+			break;
+	if (i == lo->ldo_mirror_count)
+		RETURN(-EINVAL);
+
+	mutex_lock(&lo->ldo_layout_mutex);
+
+	rc = lod_extend_check_dom(d, lo, comp_v1);
+	if (rc)
+		GOTO(unlock, rc);
+
+	old_cnt = lo->ldo_comp_cnt;
+	array_cnt = old_cnt + comp_v1->lcm_entry_count;
+	OBD_ALLOC_PTR_ARRAY_LARGE(comp_array, array_cnt);
+	if (!comp_array)
+		GOTO(unlock, rc = -ENOMEM);
+
+	OBD_ALLOC_PTR_ARRAY(mirrors, lo->ldo_mirror_count + 1);
+	if (!mirrors) {
+		OBD_FREE_PTR_ARRAY_LARGE(comp_array, array_cnt);
+		GOTO(unlock, rc = -ENOMEM);
+	}
+
+	/* the components of a file without mirrors become mirror 1 */
+	for (i = 0; i < old_cnt; i++) {
+		lod_comp = &lo->ldo_comp_entries[i];
+		if (lo->ldo_mirror_count == 1 &&
+		    mirror_id_of(lod_comp->llc_id) == 0)
+			lod_comp->llc_id = pflr_id(1, lod_comp->llc_id);
+		mirror_id = max(mirror_id, mirror_id_of(lod_comp->llc_id));
+	}
+	mirror_id++;
+
+	memcpy(comp_array, lo->ldo_comp_entries, sizeof(*comp_array) * old_cnt);
+	for (i = 0; i < comp_v1->lcm_entry_count; i++) {
+		struct lov_comp_md_entry_v1 *ent = &comp_v1->lcm_entries[i];
+
+		lod_comp = &comp_array[old_cnt + i];
+		rc = lod_comp_from_user(lod_comp, comp_v1, i, desc);
+		if (rc) {
+			for (j = old_cnt; j <= old_cnt + i; j++)
+				lod_set_pool(&comp_array[j].llc_pool, NULL);
+			OBD_FREE_PTR_ARRAY_LARGE(comp_array, array_cnt);
+			OBD_FREE_PTR_ARRAY(mirrors, lo->ldo_mirror_count + 1);
+			GOTO(unlock, rc);
+		}
+		/* only the flags a client may set at creation, as for the
+		 * copy merged by the old extend; the resync instantiates and
+		 * fills the new mirror
+		 */
+		lod_comp->llc_flags &= LCME_CL_COMP_FLAGS;
+		lod_comp->llc_flags |= LCME_FL_STALE;
+		lod_comp->llc_id = LCME_ID_INVAL;
+		if (lod_comp->llc_flags & LCME_FL_PARITY) {
+			lod_comp->llc_mirror_link_id =
+				lcme_timestamp_id_unpack(ent->lcme_time_and_id);
+		} else {
+			/* no parity of the file protects a new mirror */
+			lod_comp->llc_flags &= ~LCME_FL_IS_LINK_ID;
+			lod_comp->llc_dstripe_count = 0;
+			lod_comp->llc_cstripe_count = 0;
+		}
+		if (lov_pattern(lod_comp->llc_pattern) & LOV_PATTERN_COMPRESS) {
+			lod_comp->llc_compr_type = ent->lcme_compr_type;
+			lod_comp->llc_compr_lvl = ent->lcme_compr_lvl;
+			lod_comp->llc_compr_chunk_lum_bits =
+				ent->lcme_compr_chunk_lum_bits;
+		}
+	}
+
+	OBD_FREE_PTR_ARRAY_LARGE(lo->ldo_comp_entries, old_cnt);
+	lo->ldo_comp_entries = comp_array;
+	lo->ldo_comp_cnt = array_cnt;
+	OBD_FREE_PTR_ARRAY(lo->ldo_mirrors, lo->ldo_mirror_count);
+	lo->ldo_mirrors = mirrors;
+	lo->ldo_mirror_count++;
+	lo->ldo_is_composite = 1;
+	/* lod_striping_reload() of a plain file leaves it uncached */
+	lo->ldo_comp_cached = 1;
+	if (lo->ldo_flr_state == LCM_FL_NONE)
+		lo->ldo_flr_state = LCM_FL_RDONLY;
+
+	/* number the new components as a merge does */
+	lod_obj_inc_layout_gen(lo);
+	for (i = old_cnt; i < array_cnt; i++) {
+		struct lod_layout_component *data;
+
+		lod_comp = &lo->ldo_comp_entries[i];
+		lod_comp->llc_id = pflr_id(mirror_id, i - old_cnt + 1);
+
+		if (!(lod_comp->llc_flags & LCME_FL_PARITY))
+			continue;
+
+		/* bind the parity to the data component it protects */
+		if (lod_comp->llc_flags & LCME_FL_IS_LINK_ID)
+			GOTO(unlock, rc = -EINVAL);
+
+		for (j = 0; j < old_cnt; j++) {
+			data = &lo->ldo_comp_entries[j];
+			if (data->llc_flags & LCME_FL_PARITY ||
+			    mirror_id_of(data->llc_id) !=
+			    lod_comp->llc_mirror_link_id ||
+			    !lu_extent_is_equal(&data->llc_extent,
+						&lod_comp->llc_extent))
+				continue;
+
+			if (data->llc_mirror_link_id)
+				GOTO(unlock, rc = -EEXIST);
+
+			data->llc_mirror_link_id = mirror_id;
+			data->llc_dstripe_count = lod_comp->llc_dstripe_count;
+			data->llc_cstripe_count = lod_comp->llc_cstripe_count;
+			break;
+		}
+		if (j == old_cnt)
+			GOTO(unlock, rc = -EINVAL);
+	}
+
+	rc = lod_fill_mirrors(lo);
+	if (rc)
+		GOTO(unlock, rc);
+
+	info->lti_buf.lb_len = lod_comp_md_size(lo, false);
+	rc = lod_sub_declare_xattr_set(env, dt_object_child(dt), &info->lti_buf,
+				       XATTR_NAME_LOV, 0, th);
+unlock:
+	mutex_unlock(&lo->ldo_layout_mutex);
+
+	RETURN(rc);
+}
+
+/**
  * lod_declare_modify_layout() - Declare layout add/set/del
  * @env: execution environment
  * @dt: object
@@ -3355,6 +3687,7 @@ static int lod_declare_layout_del(const struct lu_env *env,
  * XATTR_LUSTRE_LOV.add		add component(s) to existing file
  * XATTR_LUSTRE_LOV.del		delete component(s) from existing file
  * XATTR_LUSTRE_LOV.set.$field	set specified field of certain component(s)
+ * XATTR_LUSTRE_LOV.extend	add a stale mirror to existing file
  *
  * Return:
  * * %0 on success
@@ -3385,6 +3718,12 @@ static int lod_declare_modify_layout(const struct lu_env *env,
 	if (rc)
 		GOTO(unlock, rc);
 
+	op = (char *)name + len;
+	if (strcmp(op, "extend") == 0) {
+		rc = lod_declare_layout_extend(env, dt, buf, th);
+		GOTO(unlock, rc);
+	}
+
 	/* the layout to be modified must be a composite layout */
 	if (!lo->ldo_is_composite) {
 		CDEBUG(D_LAYOUT, "%s: object "DFID" isn't a composite file.\n",
@@ -3392,7 +3731,6 @@ static int lod_declare_modify_layout(const struct lu_env *env,
 		GOTO(unlock, rc = -EINVAL);
 	}
 
-	op = (char *)name + len;
 	if (strcmp(op, "add") == 0) {
 		rc = lod_declare_layout_add(env, dt, buf, th);
 	} else if (strcmp(op, "del") == 0) {
@@ -8241,12 +8579,16 @@ static int lod_prepare_resync_mirror(const struct lu_env *env,
  * figure out the components should be instantiated for resync.
  */
 static int lod_prepare_resync(const struct lu_env *env, struct lod_object *lo,
-			      struct lu_extent *extent)
+			      struct lu_extent *extent, __u64 resync_end)
 {
 	struct lod_thread_info *info = lod_env_info(env);
 	struct lod_layout_component *lod_comp;
 	unsigned int need_sync = 0;
 	int i;
+
+	/* no objects are needed beyond the end of the file */
+	if (resync_end && extent->e_end > resync_end)
+		extent->e_end = resync_end;
 
 	CDEBUG(D_LAYOUT,
 	       DFID": instantiate all stale components in "DEXT"\n",
@@ -8884,7 +9226,8 @@ static int lod_declare_update_rdonly(const struct lu_env *env,
 						     lod_comp->llc_extent.e_end;
 				}
 			}
-			rc = lod_prepare_resync(env, lo, &extent);
+			rc = lod_prepare_resync(env, lo, &extent,
+						mlc->mlc_resync_end);
 			if (rc)
 				GOTO(out, rc);
 		} else {
@@ -9057,7 +9400,8 @@ static int lod_declare_update_write_pending(const struct lu_env *env,
 				extent.e_end = lod_comp->llc_extent.e_end;
 			}
 
-			rc = lod_prepare_resync(env, lo, &extent);
+			rc = lod_prepare_resync(env, lo, &extent,
+						mlc->mlc_resync_end);
 			if (rc)
 				GOTO(out, rc);
 		} else {

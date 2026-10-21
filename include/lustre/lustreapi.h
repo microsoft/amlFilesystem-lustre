@@ -1361,6 +1361,7 @@ int llapi_ec_verify_comps(int fd, struct llapi_layout *layout,
 int llapi_mirror_resync_many(int fd, struct llapi_layout *layout,
 			     struct llapi_resync_comp *comp_array,
 			     int comp_size, uint64_t start, uint64_t end);
+int llapi_mirror_extend(int fd, const struct llapi_layout *layout);
 
 /*
  * Flags to control how layouts are retrieved.

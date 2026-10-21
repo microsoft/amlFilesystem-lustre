@@ -2316,21 +2316,22 @@ static inline bool lod_ec_parity_valid(__u8 k, __u8 p, __u16 stripe_count,
 }
 
 /**
- * lod_verify_striping() - Verify LOV striping.
+ * lod_verify_layout() - Verify LOV striping.
  * @env: execution environment for this thread
  * @d: LOD device
  * @lo: LOD object
  * @buf: buffer with LOV EA to verify
  * @is_from_disk: 0 - from user, allow some fields to be 0
  *                1 - from disk, do not allow
+ * @append: @buf continues the layout of @lo, as for lustre.lov.add
  *
  * Return:
  * * %0 if the striping is valid
  * * %-EINVAL if striping is invalid
  */
-int lod_verify_striping(const struct lu_env *env, struct lod_device *d,
-			struct lod_object *lo, const struct lu_buf *buf,
-			bool is_from_disk)
+int lod_verify_layout(const struct lu_env *env, struct lod_device *d,
+		      struct lod_object *lo, const struct lu_buf *buf,
+		      bool is_from_disk, bool append)
 {
 	struct lov_user_md_v1   *lum;
 	struct lov_comp_md_v1   *comp_v1;
@@ -2423,9 +2424,7 @@ recheck:
 		RETURN(-EINVAL);
 	}
 
-	if (S_ISREG(lod2lu_obj(lo)->lo_header->loh_attr) &&
-	    lo->ldo_comp_cnt > 0) {
-		/* could be called from lustre.lov.add */
+	if (append) {
 		__u32 cnt = lo->ldo_comp_cnt;
 
 		ext = &lo->ldo_comp_entries[cnt - 1].llc_extent;
@@ -2665,6 +2664,31 @@ recheck:
 	}
 
 	RETURN(0);
+}
+
+/**
+ * lod_verify_striping() - Verify LOV striping of a file or directory.
+ * @env: execution environment for this thread
+ * @d: LOD device
+ * @lo: LOD object
+ * @buf: buffer with LOV EA to verify
+ * @is_from_disk: 0 - from user, allow some fields to be 0
+ *                1 - from disk, do not allow
+ *
+ * As lod_verify_layout(), where @buf continues the layout of @lo if it is
+ * a regular file that already has components.
+ *
+ * Return:
+ * * %0 if the striping is valid
+ * * %-EINVAL if striping is invalid
+ */
+int lod_verify_striping(const struct lu_env *env, struct lod_device *d,
+			struct lod_object *lo, const struct lu_buf *buf,
+			bool is_from_disk)
+{
+	return lod_verify_layout(env, d, lo, buf, is_from_disk,
+				 S_ISREG(lod2lu_obj(lo)->lo_header->loh_attr) &&
+				 lo->ldo_comp_cnt > 0);
 }
 
 /**

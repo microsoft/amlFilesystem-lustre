@@ -1,0 +1,124 @@
+.TH LLAPI_MIRROR_EXTEND 3 2026-11-23 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_mirror_extend \- add a stale mirror to an existing file
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_mirror_extend(int " fd ", const struct llapi_layout *" layout );
+.fi
+.SH DESCRIPTION
+Add the components of
+.I layout
+to the file open on
+.I fd
+as one new mirror.
+The new mirror is stale, and has no OST objects yet.
+A plain file becomes a mirrored file with two mirrors.
+.PP
+The MDT allocates the objects of the new mirror when it is resynced, for
+example with
+.BR llapi_mirror_resync_many (3)
+or
+.BR lfs-mirror-resync (1),
+and places them on other OSTs than the overlapping components of the
+other mirrors of the file.
+A parity component of
+.I layout
+protects the data mirror named by its link id, as set by
+.BR llapi_layout_comp_add_parity_only (3).
+.PP
+The mirror count and the FLR state of
+.I layout
+are ignored.
+The layout cached by the client is refreshed after the mirror is added
+with a lease, so a following
+.BR llapi_layout_get_by_fd (3)
+returns the new mirror, unless the file is open for write or leased
+elsewhere.
+.SH RETURN VALUES
+Return 0 on success, or a negative errno on failure.
+.SH ERRORS
+.TP 15
+.B EINVAL
+.I layout
+is not a valid composite layout of one mirror, its DoM component has
+another size than that of the file, a parity component does not
+match a data component of the file, or every mirror of the file is
+stale.
+.TP
+.B EEXIST
+A data component is already protected by a parity component.
+.TP
+.B EOPNOTSUPP
+The MDT cannot add a mirror in place,
+.I layout
+has a parity component and erasure coding is disabled on the client, or
+.I layout
+names the OSTs of a component or has an extension, foreign or released
+component, which only a mirror copied into a new file keeps, or the file
+is released by HSM,
+which reading the data to copy it restores, is cached by PCC-RO, or has
+a resync that did not complete.
+The caller can copy the data into a new file and merge its layout into
+the file instead, as
+.BR lfs-mirror-extend (1)
+does.
+.TP
+.B ENODATA
+The file has no layout yet.
+.TP
+.B EPERM
+The caller does not own the file and does not have
+.BR CAP_FOWNER ,
+or the file is immutable or append-only.
+.TP
+.B ERANGE
+The file already has the maximum number of mirrors.
+.SH EXAMPLES
+Add a mirror of one 4-stripe component to the file
+.IR path ,
+then copy the data of the file into it with
+.BR lfs-mirror-resync (1):
+.EX
+        struct llapi_layout *layout;
+        int fd, rc;
+\&
+        fd = open(path, O_RDONLY);
+        if (fd < 0)
+                /* error, errno is set */
+\&
+        layout = llapi_layout_alloc();
+        if (layout == NULL)
+                /* error, out of memory */
+\&
+        /* one component, so that the layout is composite */
+        if (llapi_layout_comp_extent_set(layout, 0, LUSTRE_EOF) < 0 ||
+            llapi_layout_stripe_count_set(layout, 4) < 0)
+                rc = -errno;
+        else
+                rc = llapi_mirror_extend(fd, layout);
+        llapi_layout_free(layout);
+        close(fd);
+        if (rc == -EOPNOTSUPP)
+                return copy_and_merge(path);    /* as lfs-mirror-extend does */
+        if (rc != 0)
+                return rc;      /* the file is unchanged */
+\&
+        execlp("lfs", "lfs", "mirror", "resync", path, NULL);
+.EE
+.SH AVAILABILITY
+.B llapi_mirror_extend()
+is part of the
+.BR lustre (7)
+user application interface library since release 2.18.0.
+.\" Added in commit v2_17_6x-xxx-gxxxxxxxxx
+.SH SEE ALSO
+.BR lfs-mirror-extend (1),
+.BR lfs-mirror-resync (1),
+.BR llapi_layout_alloc (3),
+.BR llapi_layout_comp_add_parity_only (3),
+.BR llapi_layout_file_comp_add (3),
+.BR llapi_mirror_resync_many (3),
+.BR llapi_layout (7),
+.BR lustreapi (7)
