@@ -411,8 +411,9 @@ static void mirror_resync(int argc, char *argv[])
 	if (error_inject & DELAY_BEFORE_COPY)
 		sleep(delay);
 
-	comp_size = llapi_mirror_find_stale(layout, comp_array,
-					    ARRAY_SIZE(comp_array), NULL, 0);
+	comp_size = llapi_mirror_find_stale_flags(layout, comp_array,
+						  ARRAY_SIZE(comp_array),
+						  NULL, 0, LCME_FL_PARITY);
 
 	printf("%s: found %zd stale components\n", fname, comp_size);
 

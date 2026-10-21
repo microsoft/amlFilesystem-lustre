@@ -4242,37 +4242,59 @@ int llapi_layout_mirror_inherit(struct llapi_layout *f_layout,
 	return rc;
 }
 
+/* data component the current parity component protects, or NULL */
+static struct llapi_layout_comp *
+cur_parity_data_comp(struct llapi_layout *layout)
+{
+	struct llapi_layout_comp *comp = __llapi_layout_cur_comp(layout);
+
+	return comp ? __llapi_layout_find_data_comp_by_parity(layout, comp) :
+		      NULL;
+}
+
 /**
- * llapi_mirror_find_stale() - Find all stale components.
+ * mirror_find_stale_kind() - Find the stale components of one kind
  * @layout: component layout list.
  * @comp: array of stale component info. [out]
  * @comp_size: array size of @comp.
  * @mirror_ids: array of mirror id that only components belonging to these
- *              mirror will be collected.
+ *              mirror will be collected, and for parity components, also
+ *              those protecting these mirrors.
  * @ids_nr: number of mirror ids array.
+ * @find_ec: collect parity components instead of data components
+ * @nosync: with @ids_nr 0, also collect the components of NOSYNC mirrors,
+ *          and the parity computed from their stale components
+ *
+ * One pass of llapi_mirror_find_stale_flags(), which runs one per kind of
+ * component so that the data components come before the parity ones.
  *
  * Return number of component info collected on success or error code on failure
  */
-static int _mirror_find_stale(struct llapi_layout *layout,
+static int mirror_find_stale_kind(struct llapi_layout *layout,
 		struct llapi_resync_comp *comp, size_t comp_size,
-		__u16 *mirror_ids, int ids_nr, bool find_ec)
+		__u16 *mirror_ids, int ids_nr, bool find_ec, bool nosync)
 {
 	int idx = 0;
 	int rc;
 
 	rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_FIRST);
-	if (rc < 0)
+	if (rc < 0) {
+		rc = -errno;
 		goto error;
+	}
 
 	while (rc == 0) {
+		struct llapi_layout_comp *data_comp = NULL;
 		uint32_t id;
 		uint32_t mirror_id;
 		uint32_t flags;
 		uint64_t start, end;
 
 		rc = llapi_layout_comp_flags_get(layout, &flags);
-		if (rc < 0)
+		if (rc < 0) {
+			rc = -errno;
 			goto error;
+		}
 
 		if (!(flags & LCME_FL_STALE))
 			goto next;
@@ -4282,35 +4304,61 @@ static int _mirror_find_stale(struct llapi_layout *layout,
 			goto next;
 
 		rc = llapi_layout_mirror_id_get(layout, &mirror_id);
-		if (rc < 0)
+		if (rc < 0) {
+			rc = -errno;
 			goto error;
+		}
+
+		if (find_ec)
+			data_comp = cur_parity_data_comp(layout);
 
 		/* the caller only wants stale components from specific
-		 * mirrors */
+		 * mirrors, or the parity protecting them
+		 */
 		if (ids_nr > 0) {
+			uint32_t data_id = 0;
 			int j;
 
+			if (data_comp)
+				data_id = data_comp->llc_mirror_id;
+
 			for (j = 0; j < ids_nr; j++) {
-				if (mirror_ids[j] == mirror_id)
+				if (mirror_ids[j] == mirror_id ||
+				    (data_id && mirror_ids[j] == data_id))
 					break;
 			}
 
 			/* not in the specified mirror */
 			if (j == ids_nr)
 				goto next;
-		} else if (flags & LCME_FL_NOSYNC) {
+		} else if (!nosync &&
+			   (flags & LCME_FL_NOSYNC ||
+			    (data_comp &&
+			     (data_comp->llc_flags & LCME_FL_NOSYNC) &&
+			     (data_comp->llc_flags & LCME_FL_STALE)))) {
 			/* if not specified mirrors, do not resync "nosync"
-			 * mirrors */
+			 * mirrors unless asked to, nor the parity computed
+			 * from their stale components
+			 */
 			goto next;
 		}
 
 		rc = llapi_layout_comp_id_get(layout, &id);
-		if (rc < 0)
+		if (rc < 0) {
+			rc = -errno;
 			goto error;
+		}
 
 		rc = llapi_layout_comp_extent_get(layout, &start, &end);
-		if (rc < 0)
+		if (rc < 0) {
+			rc = -errno;
 			goto error;
+		}
+
+		if (idx >= comp_size) {
+			rc = -EINVAL;
+			goto error;
+		}
 
 		/* pack this component into @comp array */
 		comp[idx].lrc_id = id;
@@ -4320,15 +4368,10 @@ static int _mirror_find_stale(struct llapi_layout *layout,
 		comp[idx].lrc_synced = true;
 		idx++;
 
-		if (idx >= comp_size) {
-			rc = -EINVAL;
-			goto error;
-		}
-
 	next:
 		rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_NEXT);
 		if (rc < 0) {
-			rc = -EINVAL;
+			rc = -errno;
 			goto error;
 		}
 	}
@@ -4336,20 +4379,66 @@ error:
 	return rc < 0 ? rc : idx;
 }
 
+/**
+ * llapi_mirror_find_stale_flags() - Find stale components of the given kinds
+ * @layout: component layout list
+ * @comp: array of stale component info [out]
+ * @comp_size: array size of @comp
+ * @mirror_ids: array of mirror ids that only components belonging to these
+ *	mirrors, or parity protecting them, are collected from
+ * @ids_nr: number of entries in @mirror_ids, 0 for all mirrors
+ * @flags: kinds of component to collect besides data components:
+ *	LCME_FL_PARITY for the parity (EC) components, and
+ *	LCME_FL_NOSYNC with @ids_nr 0 for the components of mirrors marked
+ *	NOSYNC too, and the parity computed from them; mirrors listed in
+ *	@mirror_ids are collected either way
+ *
+ * Collects the stale data components first, then with LCME_FL_PARITY
+ * the stale parity components, for llapi_mirror_resync_many_params(),
+ * which copies the data and then recomputes the parity.  A file whose
+ * data mirror is in sync can still have stale parity, after a write.
+ *
+ * Return: number of components collected, or negative errno
+ */
+int llapi_mirror_find_stale_flags(struct llapi_layout *layout,
+				  struct llapi_resync_comp *comp,
+				  size_t comp_size, __u16 *mirror_ids,
+				  int ids_nr,
+				  uint32_t flags)
+{
+	int nr_data;
+	int nr_parity;
+
+	if (flags & ~(LCME_FL_PARITY | LCME_FL_NOSYNC))
+		return -EINVAL;
+
+	nr_data = mirror_find_stale_kind(layout, comp, comp_size,
+					 mirror_ids, ids_nr, false,
+					 flags & LCME_FL_NOSYNC);
+	if (nr_data < 0 || !(flags & LCME_FL_PARITY))
+		return nr_data;
+
+	nr_parity = mirror_find_stale_kind(layout, comp + nr_data,
+					   comp_size - nr_data, mirror_ids,
+					   ids_nr, true,
+					   flags & LCME_FL_NOSYNC);
+	if (nr_parity < 0)
+		return nr_parity;
+
+	return nr_data + nr_parity;
+}
+
+/* Data components only, for callers that copy file data themselves: a
+ * parity component must not be written with file data.  Use
+ * llapi_mirror_find_stale_flags() with LCME_FL_PARITY for
+ * llapi_mirror_resync_many_params().
+ */
 int llapi_mirror_find_stale(struct llapi_layout *layout,
 		struct llapi_resync_comp *comp, size_t comp_size,
 		__u16 *mirror_ids, int ids_nr)
 {
-	return _mirror_find_stale(layout, comp, comp_size,
-				  mirror_ids, ids_nr, 0);
-}
-
-int llapi_ec_find_stale(struct llapi_layout *layout,
-		struct llapi_resync_comp *comp, size_t comp_size,
-		__u16 *mirror_ids, int ids_nr)
-{
-	return _mirror_find_stale(layout, comp, comp_size,
-				  mirror_ids, ids_nr, 1);
+	return llapi_mirror_find_stale_flags(layout, comp, comp_size,
+					     mirror_ids, ids_nr, 0);
 }
 
 /* locate @layout to a valid component covering file [file_start, file_end) */
@@ -4412,41 +4501,127 @@ int llapi_mirror_find(struct llapi_layout *layout, uint64_t file_start,
 	return mirror_id;
 }
 
-int llapi_mirror_resync_many_params(int fd, struct llapi_layout *layout,
+/*
+ * Periodic --stats / -W state of llapi_mirror_resync_many_params(), shared
+ * by the data copy and the parity resync.  NULL means neither option is
+ * enabled.
+ */
+struct llapi_resync_progress {
+	struct timespec	lrpr_start_time;
+	struct timespec	lrpr_last_print;
+	unsigned long	lrpr_stats_interval_sec;
+	uint64_t	lrpr_bandwidth_bytes_sec;
+	uint64_t	lrpr_total_bytes_read;
+	uint64_t	lrpr_total_bytes_written;
+	uint64_t	lrpr_write_estimation_bytes;
+};
+
+static void
+llapi_resync_progress_account(struct llapi_resync_progress *progress,
+			      uint64_t bytes_read, uint64_t bytes_written)
+{
+	struct timespec now;
+
+	if (!progress)
+		return;
+
+	progress->lrpr_total_bytes_read += bytes_read;
+	progress->lrpr_total_bytes_written += bytes_written;
+
+	if (!progress->lrpr_bandwidth_bytes_sec &&
+	    !progress->lrpr_stats_interval_sec)
+		return;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	llapi_bandwidth_throttle(&now, &progress->lrpr_start_time,
+				 progress->lrpr_bandwidth_bytes_sec,
+				 progress->lrpr_total_bytes_written);
+
+	/* Equality would force a 100% line; emit that only after all I/O. */
+	if (progress->lrpr_stats_interval_sec &&
+	    progress->lrpr_total_bytes_written !=
+	    progress->lrpr_write_estimation_bytes)
+		llapi_stats_log(&now, &progress->lrpr_start_time,
+				&progress->lrpr_last_print,
+				progress->lrpr_stats_interval_sec,
+				progress->lrpr_total_bytes_read,
+				progress->lrpr_total_bytes_written,
+				progress->lrpr_total_bytes_written,
+				progress->lrpr_write_estimation_bytes);
+}
+
+/**
+ * llapi_mirror_resync_data() - Copy data into the stale data components
+ * @fd: file descriptor of the file to resync
+ * @layout: layout of the file
+ * @comp_array: stale components, including any parity ones in @is_parity
+ * @comp_size: number of entries in @comp_array
+ * @is_parity: entries of @comp_array that are parity components, skipped here
+ * @start: start of the file range to copy
+ * @end: end of the file range to copy
+ * @bandwidth_bytes_sec: bandwidth limit, 0 for none
+ * @progress: --stats and bandwidth state, or NULL
+ *
+ * Return: the first error of a component that was not synced, with
+ * lrc_synced cleared for it, or a fatal error with lrc_synced cleared for
+ * every data component
+ */
+/* is the data component of an in-sync mirror at @pos instantiated */
+static bool mirror_insync_inited_at(struct llapi_layout *layout, uint64_t pos)
+{
+	struct llapi_layout_comp *comp;
+
+	list_for_each_entry(comp, &layout->llot_comp_list, llc_list) {
+		if (comp->llc_flags & (LCME_FL_STALE | LCME_FL_PARITY))
+			continue;
+		if (pos < comp->llc_extent.e_start ||
+		    pos >= comp->llc_extent.e_end)
+			continue;
+		if (comp->llc_flags & LCME_FL_INIT)
+			return true;
+	}
+
+	return false;
+}
+
+static int llapi_mirror_resync_data(int fd, struct llapi_layout *layout,
 				    struct llapi_resync_comp *comp_array,
-				    int comp_size, uint64_t start, uint64_t end,
-				    unsigned long stats_interval_sec,
-				    uint64_t bandwidth_bytes_sec)
+				    int comp_size, const bool *is_parity,
+				    uint64_t start, uint64_t end,
+				    uint64_t bandwidth_bytes_sec,
+				    struct llapi_resync_progress *progress)
 {
 	struct stat stbuf;
 	size_t buflen = 64 << 20; /* 64M */
 	ssize_t page_size;
 	void *buf;
-	uint64_t pos = start;
-	uint64_t data_off = pos, data_end = pos;
+	uint64_t comps_start = LUSTRE_EOF;
+	uint64_t comps_end = 0;
+	uint64_t pos;
+	uint64_t data_off, data_end;
 	uint64_t mirror_end = LUSTRE_EOF;
 	uint32_t src = 0;
 	int i;
 	int rc;
 	int rc2 = 0;
-	struct timespec start_time;
-	struct timespec now;
-	struct timespec last_bw_print;
-	uint64_t total_bytes_read = 0;
-	uint64_t total_bytes_written = 0;
-	uint64_t write_estimation_bytes = 0;
+
+	/* [start, end) may also cover the parity components, which are not
+	 * written here: copy only over the extents of the data components
+	 */
+	for (i = 0; i < comp_size; i++) {
+		if (is_parity[i])
+			continue;
+		comps_start = MIN(comps_start, comp_array[i].lrc_start);
+		comps_end = MAX(comps_end, comp_array[i].lrc_end);
+	}
+	start = MAX(start, comps_start);
+	end = MIN(end, comps_end);
+	pos = data_off = data_end = start;
 
 	rc = fstat(fd, &stbuf);
-	if (rc < 0)
-		return -errno;
-
-	/* estimate is too big for sparse file, but good enough for % done */
-	if (bandwidth_bytes_sec > 0 || stats_interval_sec) {
-		for (i = 0; i < comp_size; i++) {
-			write_estimation_bytes +=
-				min_t(uint64_t, comp_array[i].lrc_end,
-				      stbuf.st_size) - comp_array[i].lrc_start;
-		}
+	if (rc < 0) {
+		rc = -errno;
+		goto out_unsynced;
 	}
 
 	/* limit transfer size to what can be sent in one second */
@@ -4456,16 +4631,15 @@ int llapi_mirror_resync_many_params(int fd, struct llapi_layout *layout,
 	page_size = sysconf(_SC_PAGESIZE);
 	if (page_size < 0) {
 		rc = -errno;
-		return rc;
+		goto out_unsynced;
 	}
 
 	rc = posix_memalign(&buf, page_size, buflen);
-	if (rc)
-		return -rc;
+	if (rc) {
+		rc = -rc;
+		goto out_unsynced;
+	}
 	(void)mlock(buf, buflen);
-
-	clock_gettime(CLOCK_MONOTONIC, &start_time);
-	now = last_bw_print = start_time;
 
 	while (pos < end) {
 		ssize_t bytes_read;
@@ -4513,8 +4687,9 @@ int llapi_mirror_resync_many_params(int fd, struct llapi_layout *layout,
 				size_t to_punch;
 				uint32_t mid = comp_array[i].lrc_mirror_id;
 
-				/* skip non-overlapped component */
-				if (pos >= comp_array[i].lrc_end ||
+				/* skip parity and non-overlapped component */
+				if (is_parity[i] ||
+				    pos >= comp_array[i].lrc_end ||
 				    data_off <= comp_array[i].lrc_start)
 					continue;
 
@@ -4581,7 +4756,7 @@ do_read:
 				    pos, to_read, src);
 			break;
 		}
-		total_bytes_read += bytes_read;
+		llapi_resync_progress_account(progress, bytes_read, 0);
 
 		/* round up to page align to make direct IO happy. */
 		to_write = ((bytes_read - 1) | (page_size - 1)) + 1;
@@ -4591,8 +4766,8 @@ do_read:
 			off_t pos2 = pos;
 			size_t to_write2 = to_write;
 
-			/* skip non-overlapped component */
-			if (pos >= comp_array[i].lrc_end ||
+			/* skip parity and non-overlapped component */
+			if (is_parity[i] || pos >= comp_array[i].lrc_end ||
 			    pos + to_write <= comp_array[i].lrc_start)
 				continue;
 
@@ -4619,23 +4794,7 @@ do_read:
 				continue;
 			}
 			assert(written == to_write2);
-			total_bytes_written += written;
-
-			if (!bandwidth_bytes_sec && !stats_interval_sec)
-				continue;
-
-			clock_gettime(CLOCK_MONOTONIC, &now);
-			llapi_bandwidth_throttle(&now, &start_time,
-						 bandwidth_bytes_sec,
-						 total_bytes_written);
-
-			if (stats_interval_sec &&
-			    total_bytes_written != write_estimation_bytes)
-				llapi_stats_log(&now, &start_time,
-					  &last_bw_print, stats_interval_sec,
-					  total_bytes_read, total_bytes_written,
-					  total_bytes_written,
-					  write_estimation_bytes);
+			llapi_resync_progress_account(progress, 0, written);
 		}
 		pos += bytes_read;
 	}
@@ -4643,21 +4802,8 @@ out_free:
 	(void)munlock(buf, buflen);
 	free(buf);
 
-	if (rc < 0) {
-		/* fatal error happens */
-		for (i = 0; i < comp_size; i++)
-			comp_array[i].lrc_synced = false;
-		return rc;
-	}
-
-	/* Output at least one log, regardless of stats_interval */
-	if (stats_interval_sec) {
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		llapi_stats_log(&now, &start_time,
-				&last_bw_print, stats_interval_sec,
-				total_bytes_read, total_bytes_written,
-				write_estimation_bytes, write_estimation_bytes);
-	}
+	if (rc < 0)
+		goto out_unsynced;
 
 	/**
 	 * no fatal error happens, each lrc_synced tells whether the component
@@ -4665,10 +4811,24 @@ out_free:
 	 */
 	for (i = 0; i < comp_size; i++) {
 		struct llapi_resync_comp *comp = comp_array + i;
+		struct llapi_layout_comp *layout_comp;
 
-		if (!comp->lrc_synced)
+		if (is_parity[i] || !comp->lrc_synced)
 			continue;
 		if (pos < comp->lrc_start || pos >= comp->lrc_end)
+			continue;
+
+		/* a component that is not instantiated has no objects, so
+		 * there is nothing at or after @pos to remove, and I/O to a
+		 * designated mirror cannot instantiate it.  The resync lease
+		 * instantiates it if an in-sync mirror has its component at
+		 * @pos instantiated, to hold the size there: otherwise the
+		 * size is held before @pos as in the in-sync mirrors
+		 */
+		layout_comp = __llapi_layout_find_comp_by_id(layout,
+							     comp->lrc_id);
+		if (layout_comp && !(layout_comp->llc_flags & LCME_FL_INIT) &&
+		    !mirror_insync_inited_at(layout, pos))
 			continue;
 
 		if (pos < stbuf.st_size) {
@@ -4683,8 +4843,12 @@ out_free:
 		/* Ignore truncate error on encrypted file without the
 		 * key if tried on LUSTRE_ENCRYPTION_UNIT_SIZE boundary.
 		 */
-		if (rc < 0 && (rc != -ENOKEY || pos & ~LUSTRE_ENCRYPTION_MASK))
+		if (rc < 0 &&
+		    (rc != -ENOKEY || pos & ~LUSTRE_ENCRYPTION_MASK)) {
 			comp->lrc_synced = false;
+			if (rc2 == 0)
+				rc2 = rc;
+		}
 	}
 
 	/**
@@ -4692,6 +4856,13 @@ out_free:
 	 * possible.
 	 */
 	return rc2;
+
+out_unsynced:
+	/* fatal error happens */
+	for (i = 0; i < comp_size; i++)
+		if (!is_parity[i])
+			comp_array[i].lrc_synced = false;
+	return rc;
 }
 
 /* Total maximum number of data stripes and parities in a raid set */
@@ -4699,54 +4870,6 @@ out_free:
 
 /* Max byte range to zero-fill when punch is unsupported (e.g. osd-zfs) */
 #define EC_PUNCH_OR_CLEAR_MAX_ZERO_LEN	(4096ULL * ONE_MB)
-
-/*
- * Periodic --stats / -W state for EC resync. NULL means neither option
- * is enabled. Matches the FLR counters in llapi_mirror_resync_many_params().
- */
-struct llapi_resync_progress {
-	struct timespec	lrpr_start_time;
-	struct timespec	lrpr_last_print;
-	unsigned long	lrpr_stats_interval_sec;
-	uint64_t	lrpr_bandwidth_bytes_sec;
-	uint64_t	lrpr_total_bytes_read;
-	uint64_t	lrpr_total_bytes_written;
-	uint64_t	lrpr_write_estimation_bytes;
-};
-
-static void
-llapi_resync_progress_account(struct llapi_resync_progress *progress,
-			      uint64_t bytes_read, uint64_t bytes_written)
-{
-	struct timespec now;
-
-	if (!progress)
-		return;
-
-	progress->lrpr_total_bytes_read += bytes_read;
-	progress->lrpr_total_bytes_written += bytes_written;
-
-	if (!progress->lrpr_bandwidth_bytes_sec &&
-	    !progress->lrpr_stats_interval_sec)
-		return;
-
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	llapi_bandwidth_throttle(&now, &progress->lrpr_start_time,
-				 progress->lrpr_bandwidth_bytes_sec,
-				 progress->lrpr_total_bytes_written);
-
-	/* Equality would force a 100% line; emit that only after all I/O. */
-	if (progress->lrpr_stats_interval_sec &&
-	    progress->lrpr_total_bytes_written !=
-	    progress->lrpr_write_estimation_bytes)
-		llapi_stats_log(&now, &progress->lrpr_start_time,
-				&progress->lrpr_last_print,
-				progress->lrpr_stats_interval_sec,
-				progress->lrpr_total_bytes_read,
-				progress->lrpr_total_bytes_written,
-				progress->lrpr_total_bytes_written,
-				progress->lrpr_write_estimation_bytes);
-}
 
 /**
  * llapi_ec_compute_parities() - Compute parities for a single RAID set
@@ -6243,43 +6366,19 @@ static int llapi_ec_check_comp_match(struct llapi_layout_comp *data_comp,
  * +------------------------+  /
  *
  */
-int llapi_ec_resync_many_params(int fd, struct llapi_layout *layout,
-				struct llapi_resync_comp *comp_array,
-				int comp_size,
-				unsigned long stats_interval_sec,
-				uint64_t bandwidth_bytes_sec)
+static int llapi_ec_resync_parity(int fd, struct llapi_layout *layout,
+				  struct llapi_resync_comp *comp_array,
+				  int comp_size, const bool *is_parity,
+				  struct llapi_resync_progress *progress_ptr)
 {
-	int rc, i;
+	int rc, i, j;
+	int rc2 = 0;
 	struct llapi_layout_comp *ec_comp, *data_comp;
-	struct llapi_resync_progress progress = { 0 };
-	struct llapi_resync_progress *progress_ptr = NULL;
-	struct stat stbuf;
-
-	if (stats_interval_sec || bandwidth_bytes_sec) {
-		rc = fstat(fd, &stbuf);
-		if (rc < 0)
-			return -errno;
-
-		/* comp_array is already stale EC only. Sum logical extents
-		 * clipped to EOF, not actual parity I/O (~p/k). Same
-		 * overestimate as FLR: good enough for % done / liveness. */
-		for (i = 0; i < comp_size; i++) {
-			uint64_t end = min_t(uint64_t, comp_array[i].lrc_end,
-					     stbuf.st_size);
-
-			if (end > comp_array[i].lrc_start)
-				progress.lrpr_write_estimation_bytes +=
-					end - comp_array[i].lrc_start;
-		}
-
-		clock_gettime(CLOCK_MONOTONIC, &progress.lrpr_start_time);
-		progress.lrpr_last_print = progress.lrpr_start_time;
-		progress.lrpr_stats_interval_sec = stats_interval_sec;
-		progress.lrpr_bandwidth_bytes_sec = bandwidth_bytes_sec;
-		progress_ptr = &progress;
-	}
 
 	for (i = 0; i < comp_size; i++) {
+		if (!is_parity[i])
+			continue;
+
 		/* Find the stale ec comp */
 		ec_comp = __llapi_layout_find_comp_by_id(layout,
 				       comp_array[i].lrc_id);
@@ -6321,35 +6420,54 @@ int llapi_ec_resync_many_params(int fd, struct llapi_layout *layout,
 			continue;
 		}
 
-		rc = llapi_ec_check_comp_match(data_comp, ec_comp);
-		if (rc)
-			goto out;
+		/* parity is computed from its data component, so it is not
+		 * synced if the data component was resynced here and failed,
+		 * or is stale and was not resynced here at all
+		 */
+		for (j = 0; j < comp_size; j++)
+			if (!is_parity[j] &&
+			    comp_array[j].lrc_id == data_comp->llc_id)
+				break;
+		if (j < comp_size && !comp_array[j].lrc_synced) {
+			comp_array[i].lrc_synced = false;
+			continue;
+		}
+		if (j == comp_size && data_comp->llc_flags & LCME_FL_STALE) {
+			llapi_err_noerrno(LLAPI_MSG_ERROR,
+			      "ec comp 0x%08x is computed from stale comp 0x%08x, resync mirror %u first",
+			      ec_comp->llc_id, data_comp->llc_id,
+			      data_comp->llc_mirror_id);
+			comp_array[i].lrc_synced = false;
+			if (rc2 == 0)
+				rc2 = -EINVAL;
+			continue;
+		}
 
-		rc = llapi_ec_resync_or_verify_comp(fd, layout, data_comp,
-						    ec_comp, false,
-						    progress_ptr);
+		/* one parity component failing does not keep the others
+		 * from being resynced
+		 */
+		rc = llapi_ec_check_comp_match(data_comp, ec_comp);
+		if (!rc)
+			rc = llapi_ec_resync_or_verify_comp(fd, layout,
+							    data_comp, ec_comp,
+							    false,
+							    progress_ptr);
 		if (rc) {
 			llapi_error(LLAPI_MSG_ERROR, rc,
-			      "failed to sync ec comp");
-			goto out;
+			      "failed to sync ec comp 0x%08x", ec_comp->llc_id);
+			comp_array[i].lrc_synced = false;
+			if (rc2 == 0)
+				rc2 = rc;
 		}
 	}
 
-	if (stats_interval_sec) {
-		struct timespec now;
-
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		llapi_stats_log(&now, &progress.lrpr_start_time,
-				&progress.lrpr_last_print,
-				stats_interval_sec,
-				progress.lrpr_total_bytes_read,
-				progress.lrpr_total_bytes_written,
-				progress.lrpr_write_estimation_bytes,
-				progress.lrpr_write_estimation_bytes);
-	}
-	return 0;
+	return rc2;
 
 out:
+	/* the parity components resynced before the error stay synced */
+	for (; i < comp_size; i++)
+		if (is_parity[i])
+			comp_array[i].lrc_synced = false;
 	return rc;
 }
 
@@ -6427,6 +6545,132 @@ int llapi_ec_verify_comps(int fd, struct llapi_layout *layout, __u32 *ecs,
 	rc = unknown;
 out:
 	return rc;
+}
+
+/**
+ * llapi_mirror_resync_many_params() - Resync stale components of a file
+ * @fd: file descriptor of the file, with a resync lease held
+ * @layout: layout of the file, read after taking the resync lease
+ * @comp_array: stale components, from llapi_mirror_find_stale_flags()
+ * @comp_size: number of entries in @comp_array
+ * @start: start of the file range of data components to copy
+ * @end: end of the file range of data components to copy
+ * @stats_interval_sec: interval of --stats progress lines, 0 for none
+ * @bandwidth_bytes_sec: bandwidth limit, 0 for none
+ *
+ * Data components are copied from an in-sync mirror over [@start, @end).
+ * Parity (EC) components are then recomputed whole from the data
+ * components they protect, so a parity component whose data component is
+ * in @comp_array and was not synced is not synced either, nor is one whose
+ * data component is stale and not in @comp_array (-EINVAL).  A parity
+ * component with no data component, left by a mirror split, or with an EC
+ * layout version this library does not know, cannot be recomputed: it is
+ * skipped with a warning and stays stale, with lrc_synced cleared.
+ *
+ * Each entry's lrc_synced tells whether that component was synced, also
+ * when an error is returned: an error in one component does not undo the
+ * others, so the caller can still clear LCME_FL_STALE of those synced.
+ *
+ * Return: 0 if every component was synced or skipped, else the first error
+ */
+int llapi_mirror_resync_many_params(int fd, struct llapi_layout *layout,
+				    struct llapi_resync_comp *comp_array,
+				    int comp_size, uint64_t start, uint64_t end,
+				    unsigned long stats_interval_sec,
+				    uint64_t bandwidth_bytes_sec)
+{
+	struct llapi_resync_progress progress = { 0 };
+	struct llapi_resync_progress *progress_ptr = NULL;
+	struct llapi_layout_comp *comp;
+	bool *is_parity;
+	bool has_data = false;
+	bool has_parity = false;
+	struct stat stbuf;
+	int rc = 0;
+	int rc2;
+	int i;
+
+	is_parity = calloc(comp_size ? comp_size : 1, sizeof(*is_parity));
+	if (!is_parity) {
+		rc = -ENOMEM;
+		goto out_unsynced;
+	}
+
+	for (i = 0; i < comp_size; i++) {
+		comp = __llapi_layout_find_comp_by_id(layout,
+						      comp_array[i].lrc_id);
+		is_parity[i] = comp && comp->llc_flags & LCME_FL_PARITY;
+		if (is_parity[i])
+			has_parity = true;
+		else
+			has_data = true;
+	}
+
+	if (stats_interval_sec || bandwidth_bytes_sec) {
+		rc = fstat(fd, &stbuf);
+		if (rc < 0) {
+			rc = -errno;
+			goto out_unsynced;
+		}
+
+		/* Sum logical extents clipped to EOF, not the actual parity
+		 * I/O (~p/k): too big for a sparse file, but good enough for
+		 * % done and liveness.
+		 */
+		for (i = 0; i < comp_size; i++) {
+			uint64_t comp_end = min_t(uint64_t,
+						  comp_array[i].lrc_end,
+						  stbuf.st_size);
+
+			if (comp_end > comp_array[i].lrc_start)
+				progress.lrpr_write_estimation_bytes +=
+					comp_end - comp_array[i].lrc_start;
+		}
+		clock_gettime(CLOCK_MONOTONIC, &progress.lrpr_start_time);
+		progress.lrpr_last_print = progress.lrpr_start_time;
+		progress.lrpr_stats_interval_sec = stats_interval_sec;
+		progress.lrpr_bandwidth_bytes_sec = bandwidth_bytes_sec;
+		progress_ptr = &progress;
+	}
+
+	if (has_data) {
+		rc = llapi_mirror_resync_data(fd, layout, comp_array,
+					      comp_size, is_parity, start, end,
+					      bandwidth_bytes_sec,
+					      progress_ptr);
+	}
+
+	/* a fatal data error has cleared lrc_synced of every data component,
+	 * and the parity components that need them are then skipped
+	 */
+	if (has_parity) {
+		rc2 = llapi_ec_resync_parity(fd, layout, comp_array, comp_size,
+					     is_parity, progress_ptr);
+		if (rc2 < 0 && rc == 0)
+			rc = rc2;
+	}
+
+	/* Output at least one log, regardless of stats_interval */
+	if (stats_interval_sec) {
+		struct timespec now;
+
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		llapi_stats_log(&now, &progress.lrpr_start_time,
+				&progress.lrpr_last_print, stats_interval_sec,
+				progress.lrpr_total_bytes_read,
+				progress.lrpr_total_bytes_written,
+				progress.lrpr_write_estimation_bytes,
+				progress.lrpr_write_estimation_bytes);
+	}
+out:
+	free(is_parity);
+	return rc;
+
+out_unsynced:
+	/* nothing was copied */
+	for (i = 0; i < comp_size; i++)
+		comp_array[i].lrc_synced = false;
+	goto out;
 }
 
 int llapi_mirror_resync_many(int fd, struct llapi_layout *layout,

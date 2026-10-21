@@ -1,0 +1,131 @@
+.TH LLAPI_MIRROR_RESYNC_MANY 3 2026-10-21 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_mirror_resync_many, llapi_mirror_resync_many_params \- resync mirrors
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_mirror_resync_many(int " fd ", struct llapi_layout *" layout ,
+.BI "                             struct llapi_resync_comp *" comp_array ,
+.BI "                             int " comp_size ", uint64_t " start ,
+.BI "                             uint64_t " end );
+.PP
+.BI "int llapi_mirror_resync_many_params(int " fd ,
+.BI "                                    struct llapi_layout *" layout ,
+.BI "                                    struct llapi_resync_comp *" comp_array ,
+.BI "                                    int " comp_size ", uint64_t " start ,
+.BI "                                    uint64_t " end ,
+.BI "                                    unsigned long " stats_interval_sec ,
+.BI "                                    uint64_t " bandwidth_bytes_sec );
+.fi
+.SH DESCRIPTION
+These functions resync the stale components of the mirrored (FLR) file
+open on
+.IR fd ,
+whose layout is
+.IR layout .
+.I comp_array
+holds the
+.I comp_size
+components to resync, as collected by
+.BR llapi_mirror_find_stale_flags (3)
+with
+.BR LCME_FL_PARITY .
+The caller must hold a resync lease on
+.I fd
+.RB ( LL_LEASE_RESYNC ),
+and the file should be open with
+.BR O_DIRECT ,
+as
+.BR lfs-mirror-resync (1)
+does.
+Read
+.I layout
+with
+.BR llapi_layout_get_by_fd (3)
+after taking the lease, as the lease instantiates the stale components.
+.PP
+The data components are copied from an in-sync mirror over the file range
+.RI [ start ", " end ).
+Holes in the source are punched in the stale components, and a component
+that extends to the end of the file is truncated there, unless it is not
+instantiated.
+Then the parity
+.RB ( LCME_FL_PARITY )
+components of an Erasure Coded (EC) file are recomputed whole from the data
+components they protect. A parity component whose data component is in
+.I comp_array
+and was not synced is not synced either, nor is one whose data component is
+stale and not in
+.IR comp_array .
+A parity component with no data component, as left by a mirror split, or
+with an EC layout version this library does not know, cannot be recomputed:
+it is skipped with a warning, without an error, and stays stale, with
+.I lrc_synced
+cleared.
+.PP
+.BR llapi_mirror_resync_many_params ()
+also takes
+.IR stats_interval_sec ,
+the interval in seconds between progress lines printed to standard output,
+or 0 for none, and
+.IR bandwidth_bytes_sec ,
+the bandwidth to limit the resync to, in bytes per second, or 0 for no
+limit. Both count the data copied and the parity written in one total.
+.BR llapi_mirror_resync_many ()
+does the same with neither.
+.PP
+On return, the
+.I lrc_synced
+field of each entry of
+.I comp_array
+tells whether that component was synced. An error in one component does not
+undo the others, so the caller can still clear
+.B LCME_FL_STALE
+of the components that were synced, by releasing the lease with
+.B LL_LEASE_RESYNC_DONE
+and their component ids.
+.SH RETURN VALUES
+Both functions return 0 if every component was synced, or skipped as a
+parity component with no data component or an unknown EC layout version,
+or else the first negative errno encountered.
+Check
+.I lrc_synced
+of each entry to tell which components were synced.
+.SH ERRORS
+.TP 15
+.B -ENOENT
+No in-sync mirror covers part of the range to copy.
+.TP 15
+.B -ENOMEM
+Insufficient memory to complete the operation.
+.TP 15
+.B -EINVAL
+A parity component does not match its data component in extent or stripe
+size, or its data component is stale and not in
+.IR comp_array .
+.PP
+Errors from reading, writing, punching or truncating the mirrors, for
+example
+.BR -EIO ,
+are also returned.
+.SH EXAMPLES
+See
+.BR llapi_mirror_find_stale (3).
+.SH AVAILABILITY
+.B llapi_mirror_resync_many()
+is part of the
+.BR lustre (7)
+user application interface library since release 2.12.0.
+.\" Added in commit v2_11_53_0-45-g0e5c12ac29a9
+.B llapi_mirror_resync_many_params()
+is part of it since release 2.16.0.
+.\" Added in commit v2_15_57-36-gbe131d125ad1
+Parity components are resynced by these functions since release 2.18.0.
+.\" Added in commit v2_17_62-xxx-gxxxxxxxxxxx
+.SH SEE ALSO
+.BR lfs-mirror-resync (1),
+.BR llapi_lease_set (3),
+.BR llapi_mirror_find_stale (3),
+.BR llapi_layout (7),
+.BR lustreapi (7)

@@ -1,4 +1,4 @@
-.TH LFS-MIRROR-RESYNC 1 2025-05-23 Lustre "Lustre User Utilities"
+.TH LFS-MIRROR-RESYNC 1 2026-11-23 Lustre "Lustre User Utilities"
 .SH NAME
 lfs-mirror-resync \- resynchronize an out-of-sync mirrored file
 .SH SYNOPSIS
@@ -39,12 +39,25 @@ If
 .IR MIRROR_ID [,...]
 option is specified,
 then the command will resynchronize the mirror(s) specified by the
-IR MIRROR_ID (s),
+.IR MIRROR_ID (s),
 even nosync mirror(s) will be resynchronized as well.
 This option cannot be used when multiple mirrored files are specified.
+.P
+For an erasure coded (EC) file, the stale parity components are recomputed
+from the data mirror they protect after its data is copied.
+Listing a data mirror with
+.B --only
+also resyncs the stale parity protecting it.
+Listing a parity mirror fails while its data mirror is stale and not listed
+as well, since the parity would be computed from stale data.
+Without
+.BR --only ,
+the stale parity of a stale
+.B nosync
+data mirror is left stale with it.
 .SH OPTIONS
 .TP
-.BR "--only \fIMIRROR_ID" [ , ...]
+.BI --only " MIRROR_ID\fR[,...]"
 This option indicates which mirror(s) specified by
 .IR MIRROR_ID (s)
 needs to be resynchronized. The
@@ -58,7 +71,10 @@ be used when multiple mirrored files are specified.
 Force resynchronization of specified mirrors even when they are not marked as
 stale. This option requires the
 .B --only
-option to specify which mirrors to resync. When mirrors are inconsistent but
+option to specify which mirrors to resync.
+A forced data mirror of an EC file also has the stale parity protecting
+it recomputed.
+A parity mirror is never used as the source. When mirrors are inconsistent but
 no components are marked as stale, normal resync will fail with an error
 message suggesting the use of this option.
 .TP

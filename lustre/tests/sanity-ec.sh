@@ -4310,6 +4310,196 @@ test_12h() {
 }
 run_test 12h "lfs mirror resync -W for EC parity"
 
+test_12i() {
+	local tf=$DIR/$tfile
+	local data_id
+	local stats
+
+	enable_ec
+
+	stack_trap "rm -f $tf"
+	$LFS setstripe -E -1 -S 1M -c $EC_DSTRIPE $EC_ARG $tf ||
+		error "setstripe $EC_ARG $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=$((EC_DSTRIPE * 2)) ||
+		error "write $tf failed"
+	$LFS getstripe $tf | grep -q "stale.*parity\|parity.*stale" ||
+		error "parity of $tf is not stale after write"
+
+	# with one data mirror, a write leaves only the parity stale, and
+	# --only the data mirror resyncs the parity protecting it
+	data_id=$($LFS getstripe $tf |
+		awk '/lcme_mirror_id:/ { id = $2 }
+		     /lcme_flags:/ && $2 !~ /parity/ { print id; exit }')
+	[[ -n "$data_id" ]] || error "no data mirror in $tf"
+	stats=$($LFS mirror resync --only $data_id \
+		--stats-interval=1 $tf) ||
+		error "resync --only $data_id $tf failed"
+	echo "$stats"
+	$LFS getstripe $tf | grep -q "stale" &&
+		error "stale components left in $tf"
+	verify_flr_state $tf "ro"
+	$LFS mirror verify $tf || error "verify $tf failed"
+}
+run_test 12i "resync --only a data mirror resyncs its parity"
+
+test_12j() {
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+
+	local tf=$DIR/$tfile
+
+	enable_ec
+
+	stack_trap "rm -f $tf"
+	$LFS mirror create -N -E -1 -c 1 -N -E -1 -c 2 --ec 2+1 $tf ||
+		error "mirror create $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write $tf failed"
+	$LFS mirror resync $tf || error "resync $tf failed"
+
+	identify_ec_mirrors $tf
+	[[ -n $ec_data_id && -n $ec_parity_id ]] ||
+		error "failed to identify data/parity mirrors of $tf"
+
+	# parity computed from a stale data mirror would protect stale data
+	$LFS setstripe --comp-set --mirror-id $ec_data_id --comp-flags=stale \
+		$tf || error "failed to mark data mirror $ec_data_id stale"
+	$LFS setstripe --comp-set --mirror-id $ec_parity_id \
+		--comp-flags=stale $tf ||
+		error "failed to mark parity mirror $ec_parity_id stale"
+	$LFS mirror resync --only $ec_parity_id $tf &&
+		error "resync --only $ec_parity_id with stale data succeeded"
+	$LFS getstripe --mirror-id=$ec_parity_id $tf | grep -q "stale" ||
+		error "parity mirror $ec_parity_id is not stale"
+
+	$LFS mirror resync $tf || error "resync $tf failed"
+	$LFS getstripe $tf | grep -q "stale" &&
+		error "stale components left in $tf"
+	$LFS mirror verify $tf || error "verify $tf failed"
+}
+run_test 12j "resync --only parity of a stale data mirror fails"
+
+test_12k() {
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+
+	local tf=$DIR/$tfile
+
+	enable_ec
+
+	stack_trap "rm -f $tf"
+	$LFS mirror create -N -E -1 -c 1 -N -E -1 -c 2 --ec 2+1 $tf ||
+		error "mirror create $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write $tf failed"
+	$LFS mirror resync $tf || error "resync $tf failed"
+
+	identify_ec_mirrors $tf
+	[[ -n $ec_data_id && -n $ec_parity_id ]] ||
+		error "failed to identify data/parity mirrors of $tf"
+	$LFS setstripe --comp-set --mirror-id $ec_data_id --comp-flags=nosync \
+		$tf || error "failed to mark data mirror $ec_data_id nosync"
+
+	# parity of an in-sync NOSYNC data mirror is resynced
+	$LFS setstripe --comp-set --mirror-id $ec_parity_id \
+		--comp-flags=stale $tf ||
+		error "failed to mark parity mirror $ec_parity_id stale"
+	$LFS mirror resync $tf || error "resync $tf with stale parity failed"
+	$LFS getstripe $tf | grep -q "stale" &&
+		error "stale components left in $tf"
+
+	# parity of a stale NOSYNC data mirror is left stale with it
+	$LFS setstripe --comp-set --mirror-id $ec_data_id --comp-flags=stale \
+		$tf || error "failed to mark data mirror $ec_data_id stale"
+	$LFS setstripe --comp-set --mirror-id $ec_parity_id \
+		--comp-flags=stale $tf ||
+		error "failed to mark parity mirror $ec_parity_id stale"
+	$LFS mirror resync $tf ||
+		error "resync $tf with stale nosync mirror $ec_data_id failed"
+	$LFS getstripe --mirror-id=$ec_parity_id $tf | grep -q "stale" ||
+		error "parity of stale nosync mirror $ec_data_id was resynced"
+
+	# unless the NOSYNC mirror is resynced too
+	$LFS mirror resync --only $ec_data_id $tf ||
+		error "resync --only $ec_data_id $tf failed"
+	$LFS getstripe $tf | grep -q "stale" &&
+		error "stale components left in $tf after resync --only"
+	$LFS mirror verify $tf || error "verify $tf failed"
+}
+run_test 12k "resync parity of a NOSYNC data mirror only with its data"
+
+test_12l() {
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+
+	local tf=$DIR/$tfile
+
+	enable_ec
+
+	stack_trap "rm -f $tf"
+	$LFS mirror create -N -E -1 -c 1 -N -E -1 -c 2 --ec 2+1 $tf ||
+		error "mirror create $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write $tf failed"
+	$LFS mirror resync $tf || error "resync $tf failed"
+
+	identify_ec_mirrors $tf
+	[[ -n $ec_data_id && -n $ec_parity_id ]] ||
+		error "failed to identify data/parity mirrors of $tf"
+
+	# forcing the resync of an in-sync data mirror also recomputes the
+	# stale parity protecting it
+	$LFS setstripe --comp-set --mirror-id $ec_parity_id \
+		--comp-flags=stale $tf ||
+		error "failed to mark parity mirror $ec_parity_id stale"
+	$LFS mirror resync --only $ec_data_id --force-resync $tf ||
+		error "resync --only $ec_data_id --force-resync $tf failed"
+	$LFS getstripe $tf | grep -q "stale" &&
+		error "stale components left in $tf"
+	$LFS mirror verify $tf || error "verify $tf failed"
+
+	# with only one data mirror, it is the source, never the parity
+	local tf2=$DIR/$tfile-2
+	local data_id
+
+	stack_trap "rm -f $tf2"
+	$LFS setstripe -E -1 -c 2 --ec 2+1 $tf2 ||
+		error "setstripe --ec 2+1 $tf2 failed"
+	dd if=/dev/urandom of=$tf2 bs=1M count=4 || error "write $tf2 failed"
+	$LFS mirror resync $tf2 || error "resync $tf2 failed"
+	data_id=$($LFS getstripe $tf2 |
+		awk '/lcme_mirror_id:/ { id = $2 }
+		     /lcme_flags:/ && $2 !~ /parity/ { print id; exit }')
+	[[ -n "$data_id" ]] || error "no data mirror in $tf2"
+	$LFS mirror resync --only $data_id --force-resync $tf2 ||
+		error "resync --only $data_id --force-resync $tf2 failed"
+	$LFS getstripe $tf2 | grep -q "stale" &&
+		error "stale components left in $tf2"
+	$LFS mirror verify $tf2 || error "verify $tf2 failed"
+
+	# a forced data mirror ahead of the source mirror is not its own source
+	local tf3=$DIR/$tfile-3
+	local tmp=$TMP/$tfile-3
+
+	stack_trap "rm -f $tf3 $tmp $tmp.data $tmp.plain"
+	$LFS mirror create -N -E -1 -c 2 --ec 2+1 -N -E -1 -c 1 $tf3 ||
+		error "mirror create $tf3 failed"
+	dd if=/dev/urandom of=$tf3 bs=1M count=4 || error "write $tf3 failed"
+	$LFS mirror resync $tf3 || error "resync $tf3 failed"
+	identify_ec_mirrors $tf3
+	[[ -n $ec_data_id && -n $ec_plain_id ]] ||
+		error "failed to identify data/plain mirrors of $tf3"
+	(( ec_data_id < ec_plain_id )) ||
+		error "data mirror $ec_data_id not ahead of $ec_plain_id"
+	dd if=/dev/urandom of=$tmp bs=1M count=4 || error "write $tmp failed"
+	$LFS mirror write -N $ec_data_id -i $tmp $tf3 ||
+		error "mirror write $ec_data_id of $tf3 failed"
+	$LFS mirror resync --only $ec_data_id --force-resync $tf3 ||
+		error "resync --only $ec_data_id --force-resync $tf3 failed"
+	$LFS mirror read -N $ec_data_id -o $tmp.data $tf3 ||
+		error "mirror read $ec_data_id of $tf3 failed"
+	$LFS mirror read -N $ec_plain_id -o $tmp.plain $tf3 ||
+		error "mirror read $ec_plain_id of $tf3 failed"
+	cmp $tmp.data $tmp.plain ||
+		error "data mirror $ec_data_id not resynced from $ec_plain_id"
+	$LFS mirror verify $tf3 || error "verify $tf3 failed"
+}
+run_test 12l "resync --only a data mirror --force-resync resyncs its parity"
+
 test_13() {
 	local tf=${DIR}/${tdir}/$tfile
 	local tf_data=${DIR}/${tdir}/${tfile}.data

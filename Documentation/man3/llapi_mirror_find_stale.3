@@ -1,0 +1,165 @@
+.TH LLAPI_MIRROR_FIND_STALE 3 2026-10-21 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_mirror_find_stale, llapi_mirror_find_stale_flags \- find stale components
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_mirror_find_stale(struct llapi_layout *" layout ,
+.BI "                            struct llapi_resync_comp *" comp ,
+.BI "                            size_t " comp_size ", __u16 *" mirror_ids ,
+.BI "                            int " ids_nr );
+.PP
+.BI "int llapi_mirror_find_stale_flags(struct llapi_layout *" layout ,
+.BI "                                  struct llapi_resync_comp *" comp ,
+.BI "                                  size_t " comp_size ,
+.BI "                                  __u16 *" mirror_ids ", int " ids_nr ,
+.BI "                                  uint32_t " flags );
+.fi
+.SH DESCRIPTION
+These functions collect the components of a mirrored (FLR) file
+.I layout
+that are marked stale
+.RB ( LCME_FL_STALE ),
+so that they can be resynced from an in-sync mirror.
+For each component found, they fill one entry of the
+.I comp
+array of
+.I comp_size
+entries:
+.PP
+.in +4n
+.EX
+struct llapi_resync_comp {
+        uint64_t lrc_start;     /* start of the component extent */
+        uint64_t lrc_end;       /* end of the component extent */
+        uint32_t lrc_mirror_id; /* mirror id of the component */
+        uint32_t lrc_id;        /* component id */
+        bool     lrc_synced;    /* set to true here */
+};
+.EE
+.in
+.PP
+If
+.I ids_nr
+is non-zero, only the components of the
+.I ids_nr
+mirrors listed in
+.I mirror_ids
+are collected. Otherwise the components of all mirrors are collected,
+except those of mirrors marked
+.BR LCME_FL_NOSYNC ,
+unless
+.I flags
+has
+.BR LCME_FL_NOSYNC .
+.PP
+.BR llapi_mirror_find_stale ()
+collects only data components, and never the parity components
+.RB ( LCME_FL_PARITY )
+of an Erasure Coded (EC) file. Use it when the caller writes file data
+into the stale components itself, for example with
+.BR llapi_mirror_copy_many ():
+a parity component must not be written with file data.
+.PP
+.BR llapi_mirror_find_stale_flags ()
+also collects the kinds of component given in
+.IR flags ,
+after the stale data components:
+.TP
+.B LCME_FL_PARITY
+the stale parity components, including, with
+.IR mirror_ids ,
+those protecting the listed data mirrors.
+.TP
+.B LCME_FL_NOSYNC
+with
+.I ids_nr
+of 0, also the stale components of mirrors marked
+.BR LCME_FL_NOSYNC ,
+and the parity components computed from them. Mirrors listed in
+.I mirror_ids
+are collected whether or not they are marked
+.BR LCME_FL_NOSYNC .
+.PP
+With
+.I flags
+of 0 it is the same as
+.BR llapi_mirror_find_stale ().
+Use it with
+.B LCME_FL_PARITY
+and
+.BR llapi_mirror_resync_many_params (3),
+which copies the data components and then recomputes the parity
+components. A file whose data mirror is in sync can still have stale
+parity components, after a write to it.
+.SH RETURN VALUES
+Both functions return the number of components collected on success, or
+a negative errno on failure.
+.SH ERRORS
+.TP 15
+.B -EINVAL
+The components found do not fit in
+.IR comp_size
+entries, or
+.I flags
+has a flag other than
+.B LCME_FL_PARITY
+and
+.BR LCME_FL_NOSYNC .
+.PP
+The errors of
+.BR llapi_layout_comp_use (3)
+are also returned if
+.I layout
+cannot be iterated.
+.SH EXAMPLES
+Find and resync all stale components of an open file
+.IR fd ,
+holding a resync lease:
+.EX
+        struct llapi_resync_comp comps[1024];
+        struct llapi_layout *layout;
+        uint64_t start, end;
+        int count, i, rc;
+\&
+        layout = llapi_layout_get_by_fd(fd, 0);
+        count = llapi_mirror_find_stale_flags(layout, comps,
+                                              sizeof(comps) / sizeof(comps[0]),
+                                              NULL, 0, LCME_FL_PARITY);
+        if (count <= 0) {
+                /* error, or nothing to resync */
+                llapi_layout_free(layout);
+                return count;
+        }
+\&
+        start = comps[0].lrc_start;
+        end = comps[0].lrc_end;
+        for (i = 1; i < count; i++) {
+                if (comps[i].lrc_start < start)
+                        start = comps[i].lrc_start;
+                if (comps[i].lrc_end > end)
+                        end = comps[i].lrc_end;
+        }
+        rc = llapi_mirror_resync_many_params(fd, layout, comps, count,
+                                             start, end, 0, 0);
+        /* clear LCME_FL_STALE of each entry with lrc_synced set */
+        llapi_layout_free(layout);
+.EE
+.SH AVAILABILITY
+.B llapi_mirror_find_stale()
+is part of the
+.BR lustre (7)
+user application interface library since release 2.11.0.
+.\" Added in commit v2_10_55_0-57-g79da3738df22
+.B llapi_mirror_find_stale_flags()
+is part of it since release 2.18.0.
+.\" Added in commit v2_17_62-xxx-gxxxxxxxxxxx
+.SH SEE ALSO
+.BR lfs-mirror-resync (1),
+.BR llapi_layout_comp_use (3),
+.BR llapi_layout_get_by_fd (3),
+.BR llapi_mirror_copy_many (3),
+.BR llapi_mirror_resync_many (3),
+.BR llapi_layout (7),
+.BR lustreapi (7)

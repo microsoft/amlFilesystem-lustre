@@ -15340,10 +15340,12 @@ error:
 static int lfs_mirror_force_resync(const char *fname,
 				   struct llapi_layout *layout,
 				   struct llapi_resync_comp *comp_array,
+				   int comp_size, int nr_kept,
 				   __u16 *mirror_ids, int ids_nr)
 {
-	int idx = 0;
+	int idx = nr_kept;
 	uint16_t source_mirror = 0;
+	bool target_parity = false;
 	int rc;
 
 	/* First pass: find a source mirror (not in target list) */
@@ -15362,6 +15364,10 @@ static int lfs_mirror_force_resync(const char *fname,
 		if (rc < 0)
 			break;
 
+		rc = llapi_layout_comp_flags_get(layout, &comp_flags);
+		if (rc < 0)
+			break;
+
 		/* Check if this mirror is in our target list */
 		for (i = 0; i < ids_nr; i++) {
 			if (mirror_ids[i] == mirror_id) {
@@ -15370,13 +15376,17 @@ static int lfs_mirror_force_resync(const char *fname,
 			}
 		}
 
-		/* If not in target list, use as source */
-		if (!found) {
-			rc = llapi_layout_comp_flags_get(layout, &comp_flags);
-			if (rc == 0 && !(comp_flags & LCME_FL_STALE)) {
-				source_mirror = mirror_id;
-				break;
-			}
+		if (found && mirror_id == mirror_ids[0] &&
+		    comp_flags & LCME_FL_PARITY)
+			target_parity = true;
+
+		/* If not in target list, use as source, but not parity, which
+		 * is computed from the data
+		 */
+		if (!found &&
+		    !(comp_flags & (LCME_FL_STALE | LCME_FL_PARITY))) {
+			source_mirror = mirror_id;
+			break;
 		}
 
 		rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_NEXT);
@@ -15384,6 +15394,13 @@ static int lfs_mirror_force_resync(const char *fname,
 			rc = 0;
 			break;
 		}
+	}
+
+	if (source_mirror == 0 && target_parity) {
+		fprintf(stderr,
+			"%s: no in-sync data mirror to resync parity mirror %u from.\n",
+			progname, mirror_ids[0]);
+		return -EINVAL;
 	}
 
 	if (source_mirror == 0) {
@@ -15408,7 +15425,7 @@ static int lfs_mirror_force_resync(const char *fname,
 		return rc;
 	}
 
-	while (idx < 1024) { /* comp_array size limit */
+	while (idx < comp_size) {
 		uint32_t mirror_id, comp_id;
 		uint64_t start, end;
 		int i, is_target = 0;
@@ -15440,6 +15457,15 @@ static int lfs_mirror_force_resync(const char *fname,
 			if (rc < 0)
 				break;
 
+			/* already collected, e.g. stale parity */
+			for (i = 0; i < nr_kept; i++)
+				if (comp_array[i].lrc_id == comp_id)
+					break;
+			if (i < nr_kept)
+				collect_this = false;
+		}
+
+		if (collect_this) {
 			rc = llapi_layout_comp_extent_get(layout, &start, &end);
 			if (rc < 0)
 				break;
@@ -15448,6 +15474,7 @@ static int lfs_mirror_force_resync(const char *fname,
 			comp_array[idx].lrc_id = comp_id;
 			comp_array[idx].lrc_start = start;
 			comp_array[idx].lrc_end = end;
+			comp_array[idx].lrc_synced = true;
 			idx++;
 		}
 
@@ -15458,7 +15485,7 @@ static int lfs_mirror_force_resync(const char *fname,
 		}
 	}
 
-	if (idx <= 0) {
+	if (idx == 0) {
 		fprintf(stderr,
 			"%s: no components found for specified mirrors.\n",
 			progname);
@@ -15468,7 +15495,7 @@ static int lfs_mirror_force_resync(const char *fname,
 	/* Mark the collected components as stale */
 	int stale_count = 0;
 
-	for (int i = 0; i < idx; i++) {
+	for (int i = nr_kept; i < idx; i++) {
 		rc = lfs_component_set((char *)fname, comp_array[i].lrc_id,
 				       NULL, LCME_FL_STALE, 0);
 		if (rc < 0) {
@@ -15491,17 +15518,63 @@ static int lfs_mirror_force_resync(const char *fname,
 	return idx; /* Return number of components to resync */
 }
 
+/* stale components one resync handles, also counted by mirror verify */
+#define LFS_RESYNC_COMPS_MAX	1024
+
+/**
+ * lfs_mirror_resync_comps() - Find the stale components resync rewrites
+ * @layout: mirror component list
+ * @comps: array of the components found, to be freed by the caller [out]
+ *
+ * The other stale components belong to NOSYNC mirrors, or are parity
+ * computed from their stale data, which resync leaves stale.
+ *
+ * Return: number of components in @comps, or negative errno
+ */
+static int lfs_mirror_resync_comps(struct llapi_layout *layout,
+				   struct llapi_resync_comp **comps)
+{
+	int nr;
+
+	*comps = calloc(LFS_RESYNC_COMPS_MAX, sizeof(**comps));
+	if (!*comps)
+		return -ENOMEM;
+
+	nr = llapi_mirror_find_stale_flags(layout, *comps,
+					   LFS_RESYNC_COMPS_MAX, NULL, 0,
+					   LCME_FL_PARITY);
+	if (nr < 0) {
+		free(*comps);
+		*comps = NULL;
+	}
+
+	return nr;
+}
+
+/* is component @id one of the @nr in @comps */
+static bool lfs_mirror_resync_comp_has(const struct llapi_resync_comp *comps,
+				       int nr, uint32_t id)
+{
+	int i;
+
+	for (i = 0; i < nr; i++)
+		if (comps[i].lrc_id == id)
+			return true;
+
+	return false;
+}
+
 int lfs_mirror_resync_file(const char *fname, struct ll_ioc_lease *ioc,
 			   __u16 *mirror_ids, int ids_nr,
 			   long stats_interval_sec, long bandwidth_bytes_sec,
 			   bool force_resync)
 {
-	struct llapi_resync_comp stale_comp_array[1024] = { { 0 } };
+	struct llapi_resync_comp
+		stale_comp_array[LFS_RESYNC_COMPS_MAX] = { { 0 } };
 	struct llapi_layout *new_layout;
 	struct llapi_layout *layout;
 	struct stat stbuf;
-	int stale_data_comp_count = 0;
-	int stale_ec_comp_count = 0;
+	int stale_comp_count = 0;
 	uint32_t flr_state;
 	uint64_t start;
 	uint64_t end;
@@ -15556,32 +15629,39 @@ int lfs_mirror_resync_file(const char *fname, struct ll_ioc_lease *ioc,
 		goto free_layout;
 	}
 
-	/* get stale component info for regular mirrors */
-	stale_data_comp_count = llapi_mirror_find_stale(
-		layout, stale_comp_array, ARRAY_SIZE(stale_comp_array),
-		mirror_ids, ids_nr);
-	if (stale_data_comp_count < 0) {
-		rc = stale_data_comp_count;
+	/* get stale data and parity component info */
+	stale_comp_count = llapi_mirror_find_stale_flags(layout,
+				stale_comp_array, ARRAY_SIZE(stale_comp_array),
+				mirror_ids, ids_nr, LCME_FL_PARITY);
+	if (stale_comp_count < 0) {
+		rc = stale_comp_count;
 		goto free_layout;
 	}
 
-	/* get stale component info for ec mirrors */
-	stale_ec_comp_count = llapi_ec_find_stale(
-		layout, &stale_comp_array[stale_data_comp_count],
-		ARRAY_SIZE(stale_comp_array) - stale_data_comp_count,
-		mirror_ids, ids_nr);
-	if (stale_ec_comp_count < 0) {
-		rc = stale_ec_comp_count;
-		goto free_layout;
+	/* --force-resync of data mirrors none of which is stale, even if the
+	 * parity protecting them is, which is kept to be recomputed after
+	 * them: the data components come first
+	 */
+	for (idx = 0; force_resync && idx < stale_comp_count; idx++) {
+		uint32_t flags;
+
+		if (llapi_layout_comp_use_id(layout,
+					     stale_comp_array[idx].lrc_id) ||
+		    llapi_layout_comp_flags_get(layout, &flags) ||
+		    !(flags & LCME_FL_PARITY))
+			break;
 	}
 
-	if (stale_data_comp_count + stale_ec_comp_count == 0) {
+	if (stale_comp_count == 0 ||
+	    (force_resync && ids_nr > 0 && idx == stale_comp_count)) {
 		if (force_resync && ids_nr > 0) {
-			stale_data_comp_count = lfs_mirror_force_resync(
-				fname, layout, stale_comp_array, mirror_ids,
-				ids_nr);
-			if (stale_data_comp_count < 0) {
-				rc = stale_data_comp_count;
+			stale_comp_count = lfs_mirror_force_resync(fname,
+						layout, stale_comp_array,
+						ARRAY_SIZE(stale_comp_array),
+						stale_comp_count,
+						mirror_ids, ids_nr);
+			if (stale_comp_count < 0) {
+				rc = stale_comp_count;
 				goto free_layout;
 			}
 		} else if (force_resync) {
@@ -15656,16 +15736,13 @@ int lfs_mirror_resync_file(const char *fname, struct ll_ioc_lease *ioc,
 	layout = new_layout;
 
 	/*
-	 * There are no data replicas to resync but there might be ec mirrors
-	 * that need to be re-synced.
+	 * get the range [start, end) of the stale components, of which
+	 * llapi_mirror_resync_many_params() copies the data components'
+	 * extents, and recomputes the parity components whole
 	 */
-	if (!stale_data_comp_count)
-		goto ec_resync;
-
-	/* get the read range [start, end) */
 	start = stale_comp_array[0].lrc_start;
 	end = stale_comp_array[0].lrc_end;
-	for (idx = 1; idx < stale_data_comp_count; idx++) {
+	for (idx = 1; idx < stale_comp_count; idx++) {
 		if (stale_comp_array[idx].lrc_start < start)
 			start = stale_comp_array[idx].lrc_start;
 		if (end < stale_comp_array[idx].lrc_end)
@@ -15679,39 +15756,15 @@ int lfs_mirror_resync_file(const char *fname, struct ll_ioc_lease *ioc,
 		goto free_layout;
 	}
 
+	/* on error, still clear STALE from the components that were synced */
 	rc = llapi_mirror_resync_many_params(fd, layout, stale_comp_array,
-					     stale_data_comp_count, start, end,
+					     stale_comp_count, start, end,
 					     stats_interval_sec,
 					     bandwidth_bytes_sec);
-
-	/* If resync succeeded, manually set lrc_synced for all components */
-	if (rc == 0)
-		for (int i = 0; i < stale_data_comp_count; i++)
-			stale_comp_array[i].lrc_synced = 1;
-
-	if (rc < 0) {
+	if (rc < 0)
 		llapi_error(LLAPI_MSG_ERROR, rc, "fail to mirror resync '%s'\n",
 			    fname);
-		goto free_layout;
-	}
 
-ec_resync:
-	/*
-	 * If we have stale ec comps then resync them, otherwise
-	 * skip to updating the timestamps and finishing the resync.
-	 */
-	if (!stale_ec_comp_count)
-		goto finish_resync;
-	rc = llapi_ec_resync_many_params(
-		fd, layout, &stale_comp_array[stale_data_comp_count],
-		stale_ec_comp_count, stats_interval_sec, bandwidth_bytes_sec);
-	if (rc < 0) {
-		llapi_error(LLAPI_MSG_ERROR, rc, "fail to ec resync '%s'\n",
-			    fname);
-		goto free_layout;
-	}
-
-finish_resync:
 	rc2 = migrate_set_timestamps(fd, &stbuf);
 	if (rc2 < 0) {
 		fprintf(stderr, "%s: '%s' cannot set timestamps: %s\n",
@@ -15725,13 +15778,16 @@ finish_resync:
 	ioc->lil_mode = LL_LEASE_UNLCK;
 	ioc->lil_flags = LL_LEASE_RESYNC_DONE;
 	ioc->lil_count = 0;
-	for (idx = 0; idx < stale_data_comp_count + stale_ec_comp_count;
-	     idx++) {
+	for (idx = 0; idx < stale_comp_count; idx++) {
 		if (stale_comp_array[idx].lrc_synced) {
 			ioc->lil_ids[ioc->lil_count] =
 				stale_comp_array[idx].lrc_id;
 			ioc->lil_count++;
 		}
+	}
+	if (rc < 0 && ioc->lil_count == 0) {
+		llapi_lease_release(fd);
+		goto free_layout;
 	}
 
 	rc2 = llapi_lease_set(fd, ioc);
@@ -15743,7 +15799,7 @@ finish_resync:
 		/* rc2 == 0 means lost lease lock */
 		if (rc2 == 0 && rc == 0)
 			rc = -EBUSY;
-		else
+		else if (rc == 0)
 			rc = rc2;
 		fprintf(stderr, "%s: resync file '%s' failed: %s.\n", progname,
 			fname, rc2 == 0 ? "lost lease lock" : strerror(-rc2));
@@ -16951,6 +17007,8 @@ static inline
 int print_stale_mirrors(int fd, struct llapi_layout *layout,
 			size_t file_size, int verbose)
 {
+	struct llapi_resync_comp *resync_comps;
+	int resync_count;
 	int stale_count = 0;
 	int rc = 0;
 	bool header_printed = false;
@@ -16958,9 +17016,13 @@ int print_stale_mirrors(int fd, struct llapi_layout *layout,
 	if (!layout)
 		goto check_only;
 
+	resync_count = lfs_mirror_resync_comps(layout, &resync_comps);
+	if (resync_count < 0)
+		return resync_count;
+
 	rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_FIRST);
 	while (rc == 0) {
-		uint32_t mirror_id, comp_flags;
+		uint32_t mirror_id, comp_flags, comp_id;
 
 		rc = llapi_layout_mirror_id_get(layout, &mirror_id);
 		if (rc < 0)
@@ -16970,10 +17032,19 @@ int print_stale_mirrors(int fd, struct llapi_layout *layout,
 		if (rc < 0)
 			break;
 
+		rc = llapi_layout_comp_id_get(layout, &comp_id);
+		if (rc < 0)
+			break;
+
 		if (comp_flags & LCME_FL_STALE) {
 			bool is_nosync = comp_flags & LCME_FL_NOSYNC;
 			const char *flag_str = is_nosync ?
 					       "nosync,stale" : "stale";
+			bool resynced;
+
+			resynced = lfs_mirror_resync_comp_has(resync_comps,
+							      resync_count,
+							      comp_id);
 
 			/* Print header only once */
 			if (!header_printed) {
@@ -17013,8 +17084,11 @@ int print_stale_mirrors(int fd, struct llapi_layout *layout,
 					"Mirror %u:\t(%s - alloc error)\n",
 					mirror_id, flag_str);
 			}
-			/* Only count non-nosync stale as errors */
-			if (!is_nosync)
+			/* Only count stale components resync rewrites as
+			 * errors, not those of NOSYNC mirrors or the parity
+			 * computed from their stale data
+			 */
+			if (resynced)
 				stale_count++;
 		}
 
@@ -17027,6 +17101,8 @@ int print_stale_mirrors(int fd, struct llapi_layout *layout,
 
 	if (header_printed)
 		fprintf(stdout, "\n");
+
+	free(resync_comps);
 
 	return stale_count;
 
@@ -17739,10 +17815,12 @@ next_mirror:
  * @ecs_size:    Capacity of the @ecs array.
  *
  * Walks @layout and collects the ids of every EC parity component
- * (LCME_FL_PARITY) that is eligible for verification. NOSYNC components and
- * components with no data component to pair with are skipped silently; STALE
- * parity components are treated as an error since their on-disk parities
- * cannot be meaningfully compared against the data.
+ * (LCME_FL_PARITY) that is eligible for verification. NOSYNC components,
+ * components with no data component to pair with, and STALE parity
+ * computed from the stale data of a NOSYNC mirror, which resync leaves
+ * stale, are skipped silently; other STALE parity components are treated
+ * as an error since their on-disk parities cannot be meaningfully compared
+ * against the data.
  *
  * Return: number of EC parity components written to @ecs on success, or a
  * negative errno on failure.
@@ -17750,9 +17828,15 @@ next_mirror:
 static inline int lfs_mirror_prepare_ec(struct llapi_layout *layout, __u32 *ecs,
 					size_t ecs_size)
 {
+	struct llapi_resync_comp *resync_comps;
+	int resync_count;
 	int i, rc;
 
 	memset(ecs, 0, sizeof(*ecs) * ecs_size);
+
+	resync_count = lfs_mirror_resync_comps(layout, &resync_comps);
+	if (resync_count < 0)
+		return resync_count;
 
 	rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_FIRST);
 	if (rc < 0) {
@@ -17806,6 +17890,9 @@ static inline int lfs_mirror_prepare_ec(struct llapi_layout *layout, __u32 *ecs,
 		}
 
 		if (flags & LCME_FL_STALE) {
+			if (!lfs_mirror_resync_comp_has(resync_comps,
+							resync_count, id))
+				goto next;
 			rc = -ESTALE;
 			fprintf(stderr,
 				"%s: EC component 0x%x is stale.\n",
@@ -17835,6 +17922,8 @@ static inline int lfs_mirror_prepare_ec(struct llapi_layout *layout, __u32 *ecs,
 	}
 
 error:
+	free(resync_comps);
+
 	return rc < 0 ? rc : i;
 }
 
