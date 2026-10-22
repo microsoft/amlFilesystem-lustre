@@ -684,7 +684,8 @@ static ssize_t ll_sanitize_xattr(struct inode *inode, void *buf,
 	return rc;
 }
 
-static ssize_t ll_getxattr_lov(struct inode *inode, void *buf, size_t buf_size)
+static ssize_t ll_getxattr_lov(struct inode *inode, void *buf, size_t buf_size,
+			       bool refresh)
 {
 	ssize_t rc;
 	size_t xattr_size;
@@ -697,9 +698,26 @@ static ssize_t ll_getxattr_lov(struct inode *inode, void *buf, size_t buf_size)
 		};
 		struct lu_env *env;
 		u16 refcheck;
+		u32 gen;
 
 		if (!obj)
 			RETURN(-ENODATA);
+
+		/* the cached layout is stale once the layout lock is revoked,
+		 * and refreshing it costs no RPC while the lock is cached.
+		 * Not for listxattr, which only needs to know there is a
+		 * layout, nor where the refresh would block: under a group
+		 * lock (on the caller's own I/O) or during an HSM restore
+		 * (until the copytool is done).
+		 */
+		if (refresh && !READ_ONCE(ll_i2info(inode)->lli_group_users) &&
+		    !test_bit(LLIF_FILE_RESTORING,
+			      &ll_i2info(inode)->lli_flags)) {
+			rc = ll_layout_refresh(inode, &gen);
+			if (rc < 0)
+				CDEBUG(D_INODE, DFID": layout refresh: rc = %zd\n",
+				       PFID(ll_inode2fid(inode)), rc);
+		}
 
 		env = cl_env_get(&refcheck);
 		if (IS_ERR(env))
@@ -756,7 +774,7 @@ static int ll_xattr_get(const struct xattr_handler *handler,
 	if (!strcmp(name, "lov")) {
 		ll_stats_ops_tally(ll_i2sbi(inode), LPROC_LL_GETXATTR, 1);
 
-		return ll_getxattr_lov(inode, buffer, size);
+		return ll_getxattr_lov(inode, buffer, size, true);
 	}
 
 	return ll_xattr_get_common(handler, dentry, inode, name, buffer, size);
@@ -839,7 +857,7 @@ ssize_t ll_listxattr(struct dentry *dentry, char *buffer, size_t size)
 		rc -= len;
 	}
 
-	rc2 = ll_getxattr_lov(inode, NULL, 0);
+	rc2 = ll_getxattr_lov(inode, NULL, 0, false);
 	if (rc2 == -ENODATA)
 		RETURN(rc);
 

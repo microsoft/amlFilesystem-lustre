@@ -15,9 +15,11 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 #include <poll.h>
 #include <time.h>
@@ -1304,6 +1306,50 @@ static void test59(void)
 	close(fd2);
 }
 
+/* Read the layout of a group-locked file after its layout was swapped:
+ * getxattr must not wait for the group lock held by this process. Not
+ * llapi_layout_get_by_fd(), its fstat() waits for the group lock too.
+ */
+static void test60(void)
+{
+	static char lov[XATTR_SIZE_MAX];
+	ssize_t size;
+	int rc;
+	int fd1;
+	int fd2;
+	int gid = 6458908;
+
+	rc = mkdir(mainpath, 0);
+	ASSERTF(rc == 0, "mkdir failed for '%s': %s",
+		mainpath, strerror(errno));
+
+	fd1 = create_file("foo1", 2000, 'x');
+	fd2 = create_file("foo2", 5000, 'y');
+
+	rc = llapi_group_lock(fd1, gid);
+	ASSERTF(rc == 0, "cannot lock 'foo1': %s", strerror(-rc));
+
+	rc = llapi_group_lock(fd2, gid);
+	ASSERTF(rc == 0, "cannot lock 'foo2': %s", strerror(-rc));
+
+	rc = llapi_fswap_layouts_grouplock(fd1, fd2, 0, 0, 0, 0);
+	ASSERTF(rc == 0, "llapi_fswap_layouts_grouplock failed: %s",
+		strerror(-rc));
+
+	size = fgetxattr(fd1, "lustre.lov", lov, sizeof(lov));
+	ASSERTF(size > 0, "cannot get layout of 'foo1': %s",
+		strerror(errno));
+
+	rc = llapi_group_unlock(fd1, gid);
+	ASSERTF(rc == 0, "cannot unlock 'foo1': %s", strerror(-rc));
+
+	rc = llapi_group_unlock(fd2, gid);
+	ASSERTF(rc == 0, "cannot unlock 'foo2': %s", strerror(-rc));
+
+	close(fd1);
+	close(fd2);
+}
+
 static void usage(char *prog)
 {
 	fprintf(stderr, "Usage: %s [-d lustre_dir]\n", prog);
@@ -1379,6 +1425,7 @@ int main(int argc, char *argv[])
 	PERFORM(test57);
 	PERFORM(test58);
 	PERFORM(test59);
+	PERFORM(test60);
 
 	return EXIT_SUCCESS;
 }

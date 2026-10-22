@@ -8062,6 +8062,46 @@ test_123() {
 }
 run_test 123 "volatile open in a removed directory"
 
+test_124() {
+	(( $OSTCOUNT >= 2 )) || skip "need >= 2 OSTs"
+
+	local tf=$DIR1/$tfile
+	local log=$TMP/$tfile.log
+	local gen
+	local got
+	local pid
+	local i
+
+	stack_trap "rm -f $tf $log"
+	$LFS setstripe -N -c 1 -i 0 -N -c 1 -i 1 $tf ||
+		error "setstripe $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=1 || error "write $tf failed"
+	$LFS mirror resync $tf || error "resync $tf failed"
+
+	# the layout generation getxattr returns on an open file, before and
+	# after a write on the other mount makes a mirror stale
+	$MULTIOP $tf oXg_Xgc > $log &
+	pid=$!
+	stack_trap "kill -9 $pid 2> /dev/null || true"
+	for i in {1..20}; do
+		grep -q "layout gen" $log && break
+		sleep 0.5
+	done
+	grep -q "layout gen" $log || error "multiop did not open $tf"
+
+	dd if=/dev/urandom of=$DIR2/$tfile bs=4k count=1 seek=10 conv=notrunc ||
+		error "write on $DIR2 failed"
+	gen=$($LFS getstripe -v $DIR2/$tfile |
+		awk '/lcm_layout_gen/ { print $2 }')
+	kill -USR1 $pid
+	wait $pid || error "multiop failed"
+	cat $log
+	got=$(awk '/layout gen/ { g = $3 } END { print g }' $log)
+	[[ "$got" == "$gen" ]] ||
+		error "getxattr on the open file: generation $got, not $gen"
+}
+run_test 124 "getxattr on an open file sees a layout change of another client"
+
 # Set up for test_126*: give $DIR/$tfile two stripes with an idle PR lock on
 # each object for the first mount and no pages cached, then start a read of
 # the first stripe there that pauses in ll_read_folio() for $pause seconds.

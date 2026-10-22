@@ -92,6 +92,7 @@ char usage[] =
 "	 x  get file data version\n"
 "	 X[cmd] prefix for extended commands:\n"
 "	     Xe[num] lseek(SEEK_END) [optional offset, default 0]\n"
+"	     Xg  print the layout generation of a composite file\n"
 "	     Xx  get OST layout version\n"
 "	     XX  reserved for future use as a sub-prefix\n"
 "	 y  fsync\n"
@@ -885,6 +886,34 @@ int main(int argc, char **argv)
 				}
 
 				rc = off;
+				break;
+			}
+			case 'g': {
+				struct lov_comp_md_v1 *comp;
+				size_t max = XATTR_SIZE_MAX;
+				ssize_t size;
+				char *lov;
+
+				lov = malloc(max);
+				if (!lov)
+					errx(-1, "allocating xattr buffer");
+				size = fgetxattr(fd, "lustre.lov", lov, max);
+				if (size < 0) {
+					save_errno = errno;
+					perror("fgetxattr lustre.lov");
+					exit(save_errno);
+				}
+				/* a plain layout has no generation here:
+				 * ll_sanitize_xattr() overwrites it
+				 */
+				comp = (struct lov_comp_md_v1 *)lov;
+				if ((size_t)size < sizeof(*comp) ||
+				    comp->lcm_magic != LOV_USER_MAGIC_COMP_V1)
+					errx(-1, "not a composite layout");
+				printf("layout gen: %u\n",
+				       comp->lcm_layout_gen);
+				fflush(stdout);
+				free(lov);
 				break;
 			}
 			case 'x': {
