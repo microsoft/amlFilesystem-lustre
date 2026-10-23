@@ -99,15 +99,14 @@ Lustre Build System
 R:	Shaun Tancheff <shaun.tancheff@hpe.com>
 R:	Minh Diep <mdiep@whamcloud.com>
 S:	Supported
-F:	lustre.spec.in
-F:	lustre-dkms*
-F:	kmp-*
-F:	build/
-F:	contrib/lbuild/
-F:	*/autoconf/
-F:	lustre/scripts/dkms.mkconf
 F:	*/Makefile.am
 F:	*/Makefile.in
+F:	config/
+F:	contrib/lbuild/
+F:	lustre-dkms*
+F:	lustre.spec.in
+F:	lustre/scripts/dkms.mkconf
+F:	rpm/kmp-*
 
 Lustre Class Library
 S:	Supported
@@ -120,10 +119,10 @@ S:	Supported
 F:	Documentation/clio.txt
 F:	lustre/include/cl_object.h
 F:	lustre/include/lustre_osc.h
+F:	lustre/include/range_lock.h
 F:	lustre/llite/glimpse.c
-F:	lustre/llite/llite_mmap.c
 F:	lustre/llite/lcommon*.c
-F:	lustre/llite/range_lock.[ch]
+F:	lustre/llite/llite_mmap.c
 F:	lustre/llite/rw*.c
 F:	lustre/llite/vvp*.[ch]
 F:	lustre/obdclass/cl_*.c
@@ -139,11 +138,11 @@ Lustre Client Side Encryption
 R:	Sebastien Buisson <sbuisson@whamcloud.com>
 S:	Supported
 F:	Documentation/client_side_encryption/*.txt
-F:	lustre/llite/crypto*.[ch]
-F:	libcfs/libcfs/crypto/*.[ch]
-F:	libcfs/include/libcfs/crypto/*.h
-F:	libcfs/include/uapi/linux/llcrypt.h
+F:	include/lustre_compat/linux/llcrypt.h
+F:	include/lustre_compat/uapi/linux/llcrypt.h
 F:	lustre/include/lustre_crypto.h
+F:	lustre/llite/crypto*.[ch]
+F:	lustre_compat/fs/crypto/
 K:	fscrypt
 K:	llcrypt
 K:	HAVE_LUSTRE_CRYPTO
@@ -168,23 +167,26 @@ R:	James Simmons <jsimmons@infradead.org>
 S:	Maintained
 F:	lustre/mgc/
 F:	lustre/mgs/
-F:	lustre/utils/llapi_param.c
+F:	lustre/utils/liblustreapi_param.c
 
 Lustre Data Checksums
 R:	Li Xi <lixi@whamcloud.com>
 R:	Andreas Dilger <adilger@thelustrecollective.com>
 S:	Supported
-F:	lustre/include/uapi/linux/lustre/lustre_idl.h
-F:	lustre/include/uapi/linux/lustre/lustre_user.h
-F:	lustre/ptlrpc/pack_generic.c
+F:	include/uapi/linux/lustre/lustre_idl.h
+F:	include/uapi/linux/lustre/lustre_user.h
 F:	lustre/ptlrpc/layout.c
-F:	lustre/utils/wire*.c
+F:	lustre/ptlrpc/pack_generic.c
 F:	lustre/ptlrpc/wire*.c
+F:	lustre/utils/wire*.c
 K:	\b(OBD_CKSUM_|OBD_FL_CKSUM|OBD_CONNECT_CKSUM)
 
 Lustre Data-on-MDT - DoM
 R:	Mikhail Pershin <mpershin@whamcloud.com>
 S:	Supported
+F:	lustre/mdc/mdc_dev.c
+F:	lustre/mdt/mdt_io.c
+F:	lustre/tests/dom-performance.sh
 F:	lustre/tests/sanity-dom.sh
 K:	DoM
 K:	_dom
@@ -208,26 +210,26 @@ F:	lustre/osc/osc_lock.c
 Lustre Distributed Namespace - DNE
 R:	Lai Siyao <lai.siyao@whamcloud.com>
 S:	Supported
-F:	lustre/doc/lfs-getdirstripe.1
-F:	lustre/doc/lfs-mkdir.1
-F:	lustre/doc/lfs-setdirstripe.1
+F:	Documentation/man1/lfs-getdirstripe.1
+F:	Documentation/man1/lfs-mkdir.1
+F:	Documentation/man1/lfs-setdirstripe.1
 F:	lustre/include/lustre_lmv.h
 F:	lustre/lmv/
 F:	lustre/mdt/
 
 Lustre File Identifiers - FID
+F:	include/uapi/linux/lustre/lustre_fid.h
 F:	lustre/fid/
 F:	lustre/fld/
 F:	lustre/include/lustre_fid.h
 F:	lustre/include/lustre_fld.h
-F:	lustre/include/uapi/linux/lustre/lustre_fid.h
 K:	FID_SEQ
 K:	FID_OID
 
 Lustre File Heat
 R:	Li Xi <lixi@ddn.com>
-F:	lustre/doc/lfs-heat.1
-F:	lustre/doc/llapi_heat*.3
+F:	Documentation/man1/lfs-heat*.1
+F:	Documentation/man3/llapi_heat*.3
 F:	lustre/utils/liblustreapi_heat.c
 K:	(obd_heat|lu_heat)
 K:	OBD_HEAT
@@ -236,21 +238,21 @@ Lustre File Layout
 R:	Bobi Jam <bobijam@whamcloud.com>
 R:	Jian Yu <yujian@whamcloud.com>
 S:	Supported
-F:	lustre/doc/lfs-getstripe.1
-F:	lustre/doc/lfs-setstripe.1
-F:	lustre/doc/lfs-mirror-*.1
-F:	lustre/doc/lfs_migrate.1
-F:	lustre/doc/llapi_file_*.3
-F:	lustre/doc/llapi_layout*.3
+F:	Documentation/man1/lfs-getstripe.1
+F:	Documentation/man1/lfs-mirror-*.1
+F:	Documentation/man1/lfs-setstripe.1
+F:	Documentation/man1/lfs_migrate.1
+F:	Documentation/man3/llapi_file_*.3
+F:	Documentation/man3/llapi_layout*.3
 F:	lustre/lov/
 F:	lustre/utils/liblustreapi_layout.c
 
 Lustre File System Check - LFSCK
 R:	Hongchao Zhang <hongchao@whamcloud.com>
 S:	Maintained
-F:	lustre/doc/lctl-lfsck*.8
+F:	Documentation/man8/lctl-lfsck*.8
+F:	include/lustre/lustre_lfsck_user.h
 F:	lustre/include/lustre_lfsck.h
-F:	lustre/include/lustre/lustre_lfsck_user.h
 F:	lustre/lfsck/
 F:	lustre/osd-ldiskfs/osd_scrub.[ch]
 F:	lustre/osd-zfs/osd_scrub.c
@@ -271,17 +273,18 @@ F:	lustre/target/tgt_grant.c
 Lustre GSSAPI
 R:	Sebastien Buisson <sbuisson@whamcloud.com>
 S:	Supported
+F:	Documentation/man1/lfs-flushctx.1
+F:	Documentation/man8/lgss_sk.8
+F:	include/uapi/linux/lustre/lgss.h
 F:	lustre/conf/lgssc.conf
 F:	lustre/conf/lsvcgss
-F:	lustre/doc/lgss_sk.8
-F:	lustre/doc/lfs-flushctx.1
+F:	lustre/conf/lsvcgss
 F:	lustre/llite/xattr_security.c
 F:	lustre/ptlrpc/gss/
 F:	lustre/ptlrpc/sec*.c
-F:	lustre/scripts/lsvgss
+F:	lustre/scripts/lsvcgss*
 F:	lustre/tests/sanity-sec.sh
 F:	lustre/utils/gss/
-F:	lustre/include/uapi/linux/lustre/lgss.h
 
 Lustre GSSAPI - Kerberos
 R:	Sebastien Buisson <sbuisson@whamcloud.com>
@@ -291,27 +294,27 @@ F:	lustre/ptlrpc/gss/gss_krb5*.[ch]
 Lustre GSSAPI - Shared Secret Key
 R:	Sebastien Buisson <sbuisson@whamcloud.com>
 S:	Supported
+F:	Documentation/man8/lgss_sk.8
 F:	lustre/conf/lgssc.conf
 F:	lustre/conf/lsvcgss
-F:	lustre/doc/lgss_sk.8
 F:	lustre/ptlrpc/gss/gss_sk_mech.c
 F:	lustre/utils/gss
 
 Lustre High Availability
 R:	Nathaniel Clark <nclark@whamcloud.com>
 S:	Supported
-F:	contrib/scripts/pacemaker/
-F:	lustre/conf/Lustre/
+F:	lustre/conf/resource/
+F:	lustre/scripts/Lustre.ha_v2
 
 Lustre HSM
 S:	Maintained
-F:	lustre/doc/lfs-hsm.1
-F:	lustre/doc/llapi_hsm*.3
+F:	Documentation/man1/lfs-hsm.1
+F:	Documentation/man3/llapi_hsm*.3
+F:	include/uapi/linux/lustre/lustre_kernelcomm.h
 F:	lustre/include/lustre_kernelcomm.h
-F:	lustre/include/uapi/linux/lustre/lustre_kernelcomm.h
-F:	lustre/obdclass/kernelcomm.c
 F:	lustre/mdt/mdt_coordinator.c
 F:	lustre/mdt/mdt_hsm*.c
+F:	lustre/obdclass/kernelcomm.c
 F:	lustre/tests/llapi_hsm_test.c
 F:	lustre/tests/sanity-hsm.sh
 F:	lustre/utils/liblustreapi_hsm.c
@@ -323,9 +326,13 @@ F:	lustre/utils/lhsmtool_posix.c
 Lustre Kernel Compatibility
 R:	James Simmons <jsimmons@infradead.org>
 S:	Supported
-F:	libcfs/
+F:	include/libcfs/
+F:	include/linux/libcfs/
+F:	include/lustre_compat/
+F:	lib/libcfs/
+F:	lnet/libcfs/
 F:	lustre/include/lustre_compat.h
-F:	lustre/include/lustre_patchless_compat.h
+F:	lustre_compat/
 
 Lustre Kernel Patches
 R:	Jian Yu <yujian@whamcloud.com>
@@ -347,8 +354,8 @@ R:	Mikhail Pershin <mpershin@whamcloud.com>
 R:	Alexander Boyko <alexander.boyko@hpe.com>
 R:	Emoly Liu <emoly@whamcloud.com>
 S:	Supported
-F:	lustre/doc/lctl-llog*.8
-F:	lustre/doc/llog_reader.8
+F:	Documentation/man8/lctl-llog*.8
+F:	Documentation/man8/llog_reader.8
 F:	lustre/include/llog_*.h
 F:	lustre/obdclass/llog*.[ch]
 F:	lustre/ptlrpc/llog*.[ch]
@@ -367,7 +374,7 @@ R:	Qian Yingjin <qian@whamcloud.com>
 R:	Nikitas Angelinas <nikitas.angelinas@hpe.com>
 R:	Etienne Aujames <eaujames@ddn.com>
 S:	Maintained
-F:	lustre/include/lustre_nrs*.c
+F:	lustre/include/lustre_nrs*.h
 F:	lustre/ptlrpc/nrs*.c
 
 Lustre Networking
@@ -375,14 +382,14 @@ R:	Serguei Smirnov <ssmirnov@thelustrecollective.com>
 R:	Chris Horn <chris.horn@hpe.com>
 S:	Supported
 F:	Documentation/dlc.txt
-F:	lustre/conf/ko2iblnd.conf
-F:	lustre/doc/lnet_legacy2yaml.8
-F:	lustre/doc/lst.8
-F:	lustre/doc/lustre_routes_config.8
-F:	lustre/doc/lustre_routes_conversion.8
-F:	lustre/doc/nids.5
-F:	lustre/scripts/ko2iblnd-probe
+F:	Documentation/man5/nids.5
+F:	Documentation/man8/lnet_legacy2yaml.8
+F:	Documentation/man8/lst.8
+F:	Documentation/man8/lustre_routes_config.8
+F:	Documentation/man8/lustre_routes_conversion.8
 F:	lnet/
+F:	lustre/conf/ko2iblnd.conf
+F:	lustre/scripts/ko2iblnd-probe
 
 Lustre Networking GNILND
 R:	Chris Horn <chris.horn@hpe.com>
@@ -416,10 +423,10 @@ F:	lnet/klnds/efalnd/
 Lustre Nodemap
 R:	Sebastien Buisson <sbuisson@whamcloud.com>
 S:	Supported
-F:	lustre/include/lustre_nodemap.h
+F:	Documentation/man8/lctl-nodemap*.8
 F:	lustre/include/lustre_idmap.h
+F:	lustre/include/lustre_nodemap.h
 F:	lustre/ptlrpc/nodemap*.[ch]
-F:	lustre/doc/lctl-nodemap*.8
 
 Lustre Object Storage Target - OST
 R:	Alex Zhuravlev <bzzz@whamcloud.com>
@@ -429,8 +436,8 @@ F:	lustre/ofd/
 Lustre OSD API
 R:	Alex Zhuravlev <bzzz@whamcloud.com>
 S:	Supported
-F:	include/lustre/dt_object.h
 F:	Documentation/osd-api.txt
+F:	lustre/include/dt_object.h
 
 Lustre OSD ldiskfs
 R:	Alex Zhuravlev <bzzz@whamcloud.com>
@@ -474,9 +481,9 @@ F:	contrib/scripts/updatecw.sh
 Lustre Persistent Client Cache - PCC
 R:	Qian Yingjin <qian@ddn.com>
 S:	Supported
-F:	lustre/doc/lctl-pcc*.1
-F:	lustre/doc/lfs-pcc*.1
-F:	lustre/doc/llapi_pcc*.3
+F:	Documentation/man1/lfs-pcc*.1
+F:	Documentation/man3/llapi_pcc*.3
+F:	Documentation/man8/lctl-pcc*.8
 F:	lustre/llite/pcc.[ch]
 F:	lustre/tests/sanity-pcc.sh
 F:	lustre/utils/liblustreapi_pcc.c
@@ -485,25 +492,25 @@ Lustre /proc and /sys
 R:	James Simmons <jsimmons@infradead.org>
 S:	Maintained
 F:	lustre/*/*lproc*.[ch]
-F:	lustre/obdclass/obdsysfs.c
+F:	lustre/obdclass/obd_sysfs.c
 
 Lustre Protocol Compatibility
 R:	Andreas Dilger <adilger@thelustrecollective.com>
 S:	Supported
-F:	lustre/include/uapi/linux/lustre/lustre_idl.h
-F:	lustre/include/uapi/linux/lustre/lustre_user.h
-F:	lustre/ptlrpc/pack_generic.c
+F:	include/uapi/linux/lustre/lustre_idl.h
+F:	include/uapi/linux/lustre/lustre_user.h
 F:	lustre/ptlrpc/layout.c
-F:	lustre/utils/wire*.[ch]
+F:	lustre/ptlrpc/pack_generic.c
 F:	lustre/ptlrpc/wire*.[ch]
+F:	lustre/utils/wire*.[ch]
 K:	OBD_CONNECT_.*
 
 Lustre Quotas
 R:	Hongchao Zhang <hongchao@whamcloud.com>
 R:	Sergey Cheremencev <scherementsev@ddn.com>
 S:	Supported
-F:	lustre/doc/*quota*.[13]
-F:	lustre/doc/lfs-project.1
+F:	Documentation/man*/*quota*.[13]
+F:	Documentation/man1/lfs-project.1
 F:	lustre/include/lustre_quota.h
 F:	lustre/osc/osc_quota.c
 F:	lustre/osd-ldiskfs/osd_quota*.[ch]
@@ -519,10 +526,13 @@ F:	lustre/target/
 
 Lustre Snapshot Tools
 S:	Maintained
-F:	lustre/doc/lctl-barrier.8
-F:	lustre/doc/lctl-snapshot*.8
-F:	lustre/doc/lctl-lcfg.8
+F:	Documentation/man8/lctl-*lcfg*.8
+F:	Documentation/man8/lctl-barrier.8
+F:	Documentation/man8/lctl-snapshot*.8
+F:	include/uapi/linux/lustre/lustre_barrier_user.h
+F:	lustre/include/lustre_barrier.h
 F:	lustre/mgs/mgs_barrier.c
+F:	lustre/target/barrier.c
 F:	lustre/tests/sanity-lsnapshot.sh
 F:	lustre/utils/lsnapshot.c
 
@@ -536,15 +546,15 @@ F:	lustre/tests/
 Lustre User Documentation
 R:	Andreas Dilger <adilger@thelustrecollective.com>
 S:	Supported
-F:	lustre/doc/*.[1-9]
+F:	Documentation/man*/*.[1-9]
 
 Lustre User Library Interface
 R:	Andreas Dilger <adilger@thelustrecollective.com>
 S:	Supported
-F:	lustre/doc/llapi_*.3
-F:	lustre/doc/lustreapi.7
-F:	lustre/include/lustre/lustreapi.h
-F:	lustre/include/uapi/linux/lustre/lustre_user.h
+F:	Documentation/man3/llapi_*.3
+F:	Documentation/man7/lustreapi.7
+F:	include/lustre/lustreapi.h
+F:	include/uapi/linux/lustre/lustre_user.h
 F:	lustre/utils/liblustreapi*.c
 F:	lustre/utils/lustreapi_internal.h
 
@@ -552,11 +562,11 @@ Lustre User Tools
 R:	Andreas Dilger <adilger@thelustrecollective.com>
 R:	Olaf Faaland <faaland1@llnl.gov>
 S:	Supported
-F:	lustre/doc/lfs*.1
-F:	lustre/doc/lctl*.8
-F:	lustre/doc/mkfs.lustre.8
-F:	lustre/doc/mount.lustre.8
-F:	lustre/doc/tunefs.lustre.8
+F:	Documentation/man1/lfs*.1
+F:	Documentation/man8/lctl*.8
+F:	Documentation/man8/mkfs.lustre.8
+F:	Documentation/man8/mount.lustre.8
+F:	Documentation/man8/tunefs.lustre.8
 F:	lustre/scripts/lfs_migrate
 F:	lustre/scripts/lustre_rmmod
 F:	lustre/utils/
