@@ -419,6 +419,7 @@ int cfs_abs_path(const char *request_path, char **resolved_path)
 	char *path;
 	char *ptr;
 	int len;
+	int i;
 	int rc = 0;
 	const char *fmt;
 
@@ -457,8 +458,8 @@ int cfs_abs_path(const char *request_path, char **resolved_path)
 		/* add the filename back */
 		len = strlen(path);
 		fmt = (path[len - 1] == '/') ? "%s" : "/%s";
-		len = snprintf(path + len, sizeof(buf) - len, fmt, ptr + 1);
-		if (len >= sizeof(buf) - len) {
+		i = snprintf(path + len, sizeof(buf) - len, fmt, ptr + 1);
+		if (i < 0 || (size_t)i >= sizeof(buf) - len) {
 			rc = -ENAMETOOLONG;
 			goto out;
 		}
