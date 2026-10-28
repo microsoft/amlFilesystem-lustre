@@ -2280,10 +2280,14 @@ out:
 	RETURN(dio_switch);
 }
 
-/* -EINVAL and -EFAULT reject the request itself (e.g. unaligned AIO) */
+/*
+ * -EINVAL and -EFAULT reject the request itself (e.g. unaligned AIO),
+ * and a signal should end the read rather than restart it
+ */
 static bool ll_dio_ec_read_retry(int rc)
 {
-	return rc && rc != -EINVAL && rc != -EFAULT;
+	return rc && rc != -EINVAL && rc != -EFAULT && rc != -EINTR &&
+	       rc != -ERESTARTSYS;
 }
 
 static bool ll_dio_aio_ec_sync(struct cl_io *io, ssize_t result)
@@ -2313,6 +2317,7 @@ ll_file_io_generic(const struct lu_env *env, struct vvp_io_args *args,
 	bool dio_lock = false;
 	bool is_aio = false;
 	bool switch_ec = false;
+	bool wait_ost = false;
 	size_t max_io_bytes;
 	ssize_t result = 0;
 	int retries = RETRY_ATTEMPTS;
@@ -2383,6 +2388,9 @@ restart:
 	io->ci_dio_lock = dio_lock;
 	io->ci_ndelay_tried = retried;
 	io->ci_parallel_dio = is_parallel_dio;
+	/* O_CIPHERTEXT DIO cannot be rebuilt from parity: wait for the OST */
+	if (wait_ost)
+		io->ci_ndelay = 0;
 
 	if (io->u.ci_wr.wr_append) {
 		/* If restarted, attrs are already merged */
@@ -2463,13 +2471,32 @@ restart:
 		 * cl_io_loop cannot catch it.  Switch to CIT_EC_RD and
 		 * restart to reconstruct from parity (buffered IO).
 		 * Also reached for AIO converted to sync above.
-		 * O_CIPHERTEXT with the key cannot use buffered recovery,
-		 * which would decrypt the data.
+		 *
+		 * O_CIPHERTEXT DIO cannot be rebuilt by buffered IO, which
+		 * would decrypt the data with the key, and leave ciphertext
+		 * in the page cache without it.  Read it again and wait for
+		 * the OST instead, as for a file without parity, until
+		 * LU-20566 implements DIO read reconstruction.
 		 */
 		if (ll_dio_ec_read_retry(rc) && iot == CIT_READ &&
-		    io->ci_cross_ec && !io->ci_switch_ec_io &&
-		    !(ll_dio_ciphertext(file) &&
-		      ll_has_encryption_key(inode))) {
+		    io->ci_cross_ec && ll_dio_ciphertext(file) &&
+		    io->ci_ndelay && !io->ci_iocb_nowait) {
+			CDEBUG(D_VFSTRACE,
+			       "O_CIPHERTEXT DIO read failed, waiting for OST: rc = %d\n",
+			       rc);
+			wait_ost = true;
+			io->ci_need_restart = 1;
+			/* the wait recycled the anchor, but not its error */
+			anchor->csi_sync_rc = 0;
+			rc2 = 0;
+			iov_iter_revert(args->u.normal.via_iter, io->ci_bytes);
+			iov_iter_reexpand(args->u.normal.via_iter, bytes);
+			args->u.normal.via_iocb->ki_pos -= io->ci_bytes;
+			io->ci_bytes = 0;
+			rc = 0;
+		} else if (ll_dio_ec_read_retry(rc) && iot == CIT_READ &&
+			   io->ci_cross_ec && !io->ci_switch_ec_io &&
+			   !ll_dio_ciphertext(file)) {
 			CDEBUG(D_VFSTRACE,
 			       "DIO read failed rc=%d, switching to CIT_EC_RD\n",
 			       rc);
@@ -2535,10 +2562,9 @@ out:
 	       encode_fn_file(file), acct_iot, rc, result, io->ci_need_restart);
 
 	/* LOV may also switch to CIT_EC_RD, see lov_io_mirror_init() */
-	if (io->ci_switch_ec_io && !switch_ec && ll_dio_ciphertext(file) &&
-	    ll_has_encryption_key(inode)) {
-		io->ci_need_restart = 0;
-		rc = -EIO;
+	if (io->ci_switch_ec_io && !switch_ec && ll_dio_ciphertext(file)) {
+		io->ci_switch_ec_io = 0;
+		wait_ost = true;
 	}
 
 	if ((!rc || rc == -ENODATA || rc == -ENOLCK || rc == -EIOCBQUEUED) &&

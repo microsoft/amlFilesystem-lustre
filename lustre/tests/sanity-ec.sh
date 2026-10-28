@@ -10097,6 +10097,58 @@ test_69d() {
 }
 run_test 69d "EC recovery after O_DIRECT write to PFL layout"
 
+test_69e() {
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs for 2+1"
+	$LCTL get_param mdc.*.import | grep -q client_encryption ||
+		skip "client encryption not supported"
+
+	# remount with a dummy key, which encrypts every new directory
+	stack_trap "umount_client $MOUNT; mount_client $MOUNT $MOUNT_OPTS"
+	umount_client $MOUNT || error "umount $MOUNT failed"
+	mount_client $MOUNT $MOUNT_OPTS,test_dummy_encryption ||
+		error "mount with test_dummy_encryption failed"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local raw=$TMP/$tfile.raw
+
+	mkdir $DIR/$tdir || error "mkdir $tdir failed"
+	stack_trap "rm -rf $DIR/$tdir $raw $raw.2"
+	$LFS setstripe -E eof -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe --ec 2+1 failed"
+	dd if=/dev/urandom of=$tf bs=1M count=3 || error "dd $tf failed"
+	echo -n tail >> $tf
+	$LFS mirror resync $tf || error "mirror resync failed"
+	dd if=$tf of=$raw bs=1M iflag=direct,dsync,nonblock,noctty ||
+		error "O_CIPHERTEXT read of $tf failed"
+
+	ec_data_stripe_osts $tf 0
+	local ost=$((${EC_STRIPE_OSTS[0]} + 1))
+
+	# a lock cancel would wait for the stopped OST
+	cancel_lru_locks osc
+	stop ost$ost || error "stop ost$ost failed"
+	stack_trap "facet_up ost$ost || \
+		start ost$ost $(ostdevname $ost) $OST_MOUNT_OPTS"
+	wait_osc_import_state client ost$ost "\(DISCONN\|IDLE\)"
+
+	# O_CIPHERTEXT DIO cannot be rebuilt from parity by buffered IO, so
+	# it waits for the OST, as a read of a file without parity does
+	timeout 300 dd if=$tf of=$raw.2 bs=1M \
+		iflag=direct,dsync,nonblock,noctty &
+	local pid=$!
+	stack_trap "kill $pid 2> /dev/null || true"
+
+	sleep 10
+	kill -0 $pid 2> /dev/null ||
+		error "O_CIPHERTEXT read did not wait for ost$ost"
+	start ost$ost $(ostdevname $ost) $OST_MOUNT_OPTS ||
+		error "start ost$ost failed"
+	wait $pid || error "O_CIPHERTEXT read failed after ost$ost returned"
+	cmp $raw $raw.2 || error "O_CIPHERTEXT read returned wrong data"
+}
+run_test 69e "EC O_CIPHERTEXT DIO read waits for an unavailable OST"
+
 test_70a() {
 	enable_ec
 
