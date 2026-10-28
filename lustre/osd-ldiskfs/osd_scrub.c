@@ -736,7 +736,6 @@ static int osd_scrub_next(struct osd_thread_info *info, struct osd_device *dev,
 	struct lustre_scrub *scrub = &dev->od_scrub.os_scrub;
 	struct lu_fid *fid;
 	struct osd_inode_id *lid;
-	__u64 next;
 	int rc;
 
 	if (CFS_FAIL_CHECK(OBD_FAIL_OSD_SCRUB_DELAY) && cfs_fail_val > 0)
@@ -780,18 +779,20 @@ static int osd_scrub_next(struct osd_thread_info *info, struct osd_device *dev,
 	if (noslot)
 		return SCRUB_NEXT_WAIT;
 
-	next = scrub->os_pos_current;
-	rc = osd_iit_next(param, &next);
+	/* os_pos_current is not advanced until osd_scrub_exec() has checked
+	 * this inode, so the otable iterator does not preload it before its
+	 * OI mapping is fixed and fail the FID lookup with -EINPROGRESS.
+	 */
+	param->pos_next = scrub->os_pos_current;
+	rc = osd_iit_next(param, &param->pos_next);
 	if (rc != 0)
 		return rc;
 
 	*oic = &dev->od_scrub.os_oic;
 	fid = &(*oic)->oic_fid;
 	lid = &(*oic)->oic_lid;
-	rc = osd_iit_iget(info, dev, fid, lid, next, param->sb, true);
-	smp_mb();
-	scrub->os_pos_current = next;
-	return rc;
+	return osd_iit_iget(info, dev, fid, lid, param->pos_next, param->sb,
+			    true);
 }
 
 static int osd_preload_next(struct osd_thread_info *info,
@@ -847,12 +848,17 @@ static int osd_scrub_exec(struct osd_thread_info *info, struct osd_device *dev,
 		scrub->os_new_checked++;
 		sf->sf_items_noscrub++;
 		up_write(&scrub->os_rwsem);
+		fallthrough;
 	case SCRUB_NEXT_CONTINUE:
+		scrub->os_pos_current = param->pos_next;
+		fallthrough;
 	case SCRUB_NEXT_WAIT:
 		goto wait;
 	}
 
 	rc = osd_scrub_check_update(info, dev, oic, rc);
+	if (!scrub->os_in_prior)
+		scrub->os_pos_current = param->pos_next;
 	if (rc != 0) {
 		spin_lock(&scrub->os_lock);
 		scrub->os_in_prior = 0;

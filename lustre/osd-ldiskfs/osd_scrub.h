@@ -31,6 +31,8 @@ struct osd_iit_param {
 	__u32 gbase;
 	__u32 offset;
 	__u32 start;
+	/* inode found by osd_scrub_next(), published after it is checked */
+	__u64 pos_next;
 };
 
 struct osd_scrub {
