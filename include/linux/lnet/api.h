@@ -134,7 +134,8 @@ int LNetPut(struct lnet_nid		*self,
 	    unsigned int		portal_in,
 	    __u64			match_bits_in,
 	    unsigned int		offset_in,
-	    __u64			hdr_data_in);
+	    __u64			hdr_data_in,
+	    bool			urgent);
 
 int LNetGet(struct lnet_nid		*self,
 	    struct lnet_handle_md	md_in,
@@ -142,7 +143,8 @@ int LNetGet(struct lnet_nid		*self,
 	    unsigned int		portal_in,
 	    __u64			match_bits_in,
 	    unsigned int		offset_in,
-	    bool			recovery);
+	    bool			recovery,
+	    bool			urgent);
 /** @} lnet_data */
 
 

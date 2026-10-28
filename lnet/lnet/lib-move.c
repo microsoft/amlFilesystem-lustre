@@ -564,7 +564,7 @@ lnet_ni_send(struct lnet_ni *ni, struct lnet_msg *msg)
 	int rc;
 
 	LASSERT(!in_interrupt());
-	LASSERT(nid_is_lo0(&ni->ni_nid) ||
+	LASSERT(nid_is_lo0(&ni->ni_nid) || msg->msg_urgent ||
 		(msg->msg_txcredit && msg->msg_peertxcredit));
 
 	rc = (ni->ni_net->net_lnd->lnd_send)(ni, priv, msg);
@@ -712,7 +712,7 @@ lnet_post_send_locked(struct lnet_msg *msg, int do_send)
 		return -ECANCELED;
 	}
 
-	if (!msg->msg_peertxcredit) {
+	if (!msg->msg_peertxcredit && !msg->msg_urgent) {
 		spin_lock(&lp->lpni_lock);
 		LASSERT((lp->lpni_txcredits < 0) ==
 			!list_empty(&lp->lpni_txq));
@@ -733,7 +733,7 @@ lnet_post_send_locked(struct lnet_msg *msg, int do_send)
 		spin_unlock(&lp->lpni_lock);
 	}
 
-	if (!msg->msg_txcredit) {
+	if (!msg->msg_txcredit && !msg->msg_urgent) {
 		LASSERT((tq->tq_credits < 0) ==
 			!list_empty(&tq->tq_delayed));
 
@@ -4019,7 +4019,7 @@ lnet_send_ping(struct lnet_nid *dest_nid,
 
 	rc = LNetGet(NULL, *mdh, &id,
 		     LNET_RESERVED_PORTAL,
-		     LNET_PROTO_PING_MATCHBITS, 0, recovery);
+		     LNET_PROTO_PING_MATCHBITS, 0, recovery, false);
 
 	if (rc)
 		goto fail_unlink_md;
@@ -5057,6 +5057,7 @@ lnet_attach_rsp_tracker(struct lnet_rsp_tracker *rspt, int cpt,
  * @hdr_data: 64 bits of user data that can be included in the message
  *            header. This data is written to an event queue entry at the
  *            target if an EQ is present on the matching MD.
+ * @urgent: Send without waiting for LNet tx credits.
  *
  * There are several events associated with a PUT: completion of the send on
  * the initiator node (LNET_EVENT_SEND), and when the send completes
@@ -5084,10 +5085,10 @@ lnet_attach_rsp_tracker(struct lnet_rsp_tracker *rspt, int cpt,
  * * %-ENOENT Invalid MD object.
  */
 int
-LNetPut(struct lnet_nid *self, struct lnet_handle_md mdh, enum lnet_ack_req ack,
-	struct lnet_processid *target, unsigned int portal,
-	__u64 match_bits, unsigned int offset,
-	__u64 hdr_data)
+LNetPut(struct lnet_nid *self, struct lnet_handle_md mdh,
+	enum lnet_ack_req ack, struct lnet_processid *target,
+	unsigned int portal, __u64 match_bits, unsigned int offset,
+	__u64 hdr_data, bool urgent)
 {
 	struct lnet_msg *msg;
 	struct lnet_libmd *md;
@@ -5111,6 +5112,7 @@ LNetPut(struct lnet_nid *self, struct lnet_handle_md mdh, enum lnet_ack_req ack,
 		return -ENOMEM;
 	}
 	msg->msg_vmflush = !!(current->flags & PF_MEMALLOC);
+	msg->msg_urgent = urgent;
 
 	cpt = lnet_cpt_of_cookie(mdh.cookie);
 
@@ -5310,6 +5312,7 @@ EXPORT_SYMBOL(lnet_set_reply_msg_len);
  * @recovery: Recovery mode
  *            if %False normal operation
  *            if %True do recovery
+ * @urgent: Send without waiting for LNet tx credits.
  *
  * On the initiator node, an LNET_EVENT_SEND is logged when the GET request
  * is sent, and an LNET_EVENT_REPLY is logged when the data returned from
@@ -5328,7 +5331,7 @@ EXPORT_SYMBOL(lnet_set_reply_msg_len);
 int
 LNetGet(struct lnet_nid *self, struct lnet_handle_md mdh,
 	struct lnet_processid *target, unsigned int portal,
-	__u64 match_bits, unsigned int offset, bool recovery)
+	__u64 match_bits, unsigned int offset, bool recovery, bool urgent)
 {
 	struct lnet_msg *msg;
 	struct lnet_libmd *md;
@@ -5365,6 +5368,7 @@ LNetGet(struct lnet_nid *self, struct lnet_handle_md mdh,
 	INIT_LIST_HEAD(&rspt->rspt_on_list);
 
 	msg->msg_recovery = recovery;
+	msg->msg_urgent = urgent;
 
 	lnet_res_lock(cpt);
 

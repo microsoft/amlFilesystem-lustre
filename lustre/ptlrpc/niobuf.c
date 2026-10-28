@@ -47,6 +47,10 @@ bool ptlrpc_pmqos_use_stats_for_duration = true;
  * @xid: Transaction ID
  * @offset: start offset of buffer
  * @bulk_cookie: cookie
+ * @urgent: send without waiting for LNet tx credits.  Used for connect
+ *          requests and replies, so a reconnect to a restarted target is
+ *          not queued behind bulk RPCs that may hold all the peer credits
+ *          until they time out (LU-18681).
  *
  * Returns 0 on success or error code.
  */
@@ -54,7 +58,7 @@ static int ptl_send_buf(struct lnet_handle_md *mdh, void *base, int len,
 			enum lnet_ack_req ack, struct ptlrpc_cb_id *cbid,
 			struct lnet_nid *self, struct lnet_processid *peer_id,
 			int portal, __u64 xid, unsigned int offset,
-			struct lnet_handle_md *bulk_cookie)
+			struct lnet_handle_md *bulk_cookie, bool urgent)
 {
 	int rc;
 	struct lnet_md md = {
@@ -95,8 +99,7 @@ static int ptl_send_buf(struct lnet_handle_md *mdh, void *base, int len,
 
 	percpu_ref_get(&ptlrpc_pending);
 
-	rc = LNetPut(self, *mdh, ack,
-		     peer_id, portal, xid, offset, 0);
+	rc = LNetPut(self, *mdh, ack, peer_id, portal, xid, offset, 0, urgent);
 	if (unlikely(rc != 0)) {
 		int rc2;
 		/* Will get UNLINK event when unlink below, which will complete
@@ -243,11 +246,11 @@ int ptlrpc_start_bulk_transfer(struct ptlrpc_bulk_desc *desc)
 		if (ptlrpc_is_bulk_put_source(desc->bd_type))
 			rc = LNetPut(&self_nid, desc->bd_mds[posted_md],
 				     LNET_ACK_REQ, &peer_id,
-				     desc->bd_portal, mbits, 0, 0);
+				     desc->bd_portal, mbits, 0, 0, false);
 		else
 			rc = LNetGet(&self_nid, desc->bd_mds[posted_md],
 				     &peer_id, desc->bd_portal,
-				     mbits, 0, false);
+				     mbits, 0, false, false);
 
 		posted_md++;
 		if (rc != 0) {
@@ -789,7 +792,8 @@ int ptlrpc_send_reply(struct ptlrpc_request *req, int flags)
 			  &req->rq_source,
 			  ptlrpc_req2svc(req)->srv_rep_portal,
 			  req->rq_rep_mbits ? req->rq_rep_mbits : req->rq_xid,
-			  req->rq_reply_off, NULL);
+			  req->rq_reply_off, NULL,
+			  req->rq_reqmsg && ptlrpc_req_is_connect(req));
 out:
 	if (unlikely(rc != 0))
 		ptlrpc_req_drop_rs(req);
@@ -1133,7 +1137,8 @@ int ptl_send_rpc(struct ptlrpc_request *request, int noreply)
 			  NULL,
 			  &connection->c_peer,
 			  request->rq_request_portal,
-			  request->rq_xid, 0, &bulk_cookie);
+			  request->rq_xid, 0, &bulk_cookie,
+			  ptlrpc_req_is_connect(request));
 	if (likely(rc == 0)) {
 		/* lower CPU latency while waiting for the reply */
 		if (!noreply)
