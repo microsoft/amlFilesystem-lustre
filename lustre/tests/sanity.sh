@@ -7701,33 +7701,79 @@ test_51e() {
 run_test 51e "check file nlink limit"
 
 test_51f() {
-	test_mkdir $DIR/$tdir
-
+	# 100000 files open on the client, split over nproc processes
 	local max=100000
+	local nproc=5
 	local ulimit_old=$(ulimit -n)
 	local spare=20 # number of spare fd's for scripts/libraries, etc.
+	local pids=()
+	local nopen=0
+	local rc=0
+	local state
+	local fds
+	local pid
+	local i
+
+	[[ "$SLOW" == "yes" ]] && nproc=1
+	test_mkdir $DIR/$tdir
+	# one directory per process, as creates and unlinks in a shared one
+	# serialize on the parent directory lock
+	for ((i = 0; i < nproc; i++)); do
+		mkdir $DIR/$tdir/d$i || error "mkdir $DIR/$tdir/d$i failed"
+	done
+
 	local mdt=$($LFS getstripe -m $DIR/$tdir)
 	local numfree=$($LFS df --mdt=$mdt --output=ifree $DIR/$tdir)
 
-	echo "MDT$mdt numfree=$numfree, max=$max"
+	echo "MDT$mdt numfree=$numfree, max=$max, nproc=$nproc"
 	[[ $numfree -gt $max ]] && numfree=$max || numfree=$((numfree * 7 / 8))
-	if [ $((numfree + spare)) -gt $ulimit_old ]; then
-		while ! ulimit -n $((numfree + spare)); do
-			numfree=$((numfree * 3 / 4))
+	local count=$((numfree / nproc))
+	if (( count + spare > ulimit_old )); then
+		while ! ulimit -n $((count + spare)); do
+			count=$((count * 3 / 4))
 		done
-		echo "changed ulimit from $ulimit_old to $((numfree + spare))"
+		echo "changed ulimit from $ulimit_old to $((count + spare))"
 	else
 		echo "left ulimit at $ulimit_old"
 	fi
 
-	createmany -o -k -t 120 $DIR/$tdir/f $numfree || {
-		unlinkmany $DIR/$tdir/f $numfree
-		error "create+open $numfree files in $DIR/$tdir failed"
-	}
+	# run the binaries, not the wrappers: $! must be createmany itself,
+	# and the wrappers' debug save and restore race when run in parallel
+	debugsave
+	do_nodes $(comma_list $(all_nodes)) $LCTL set_param -n debug=ha
+	for ((i = 0; i < nproc; i++)); do
+		$LUSTRE/tests/createmany -o -k -p -t 120 \
+			$DIR/$tdir/d$i/f $count &
+		pids+=($!)
+	done
+	# each createmany stops itself once its files are open, so that all
+	# of them are open at once before any are closed
+	for pid in ${pids[@]}; do
+		state=R
+		while [[ -n "$state" && "$state" != [TZ] ]]; do
+			sleep 1
+			state=$(cut -d' ' -f3 /proc/$pid/stat 2>/dev/null)
+		done
+		fds=$(find /proc/$pid/fd -lname "*/$tdir/*" 2>/dev/null | wc -l)
+		nopen=$((nopen + fds))
+	done
+	echo "$nopen files open at once"
+	kill -CONT ${pids[@]} 2>/dev/null
+	for pid in ${pids[@]}; do
+		wait $pid || rc=$?
+	done
 	ulimit -n $ulimit_old
 
-	# if createmany exits at 120s there will be fewer than $numfree files
-	unlinkmany $DIR/$tdir/f $numfree || true
+	# if createmany exits at 120s there will be fewer than $count files
+	pids=()
+	for ((i = 0; i < nproc; i++)); do
+		$LUSTRE/tests/unlinkmany $DIR/$tdir/d$i/f $count &
+		pids+=($!)
+	done
+	wait ${pids[@]}
+	debugrestore > /dev/null
+	(( rc == 0 )) ||
+		error "create+open $nproc x $count files in $DIR/$tdir failed"
 }
 run_test 51f "check many open files limit"
 
