@@ -53,6 +53,7 @@ do {									\
 				 "ASSERTION( %s ) failed: " fmt, #cond,	\
 				 ## __VA_ARGS__);			\
 		lbug_with_loc(&__msg_data);				\
+		BUG();							\
 	}								\
 } while (0)
 
@@ -68,6 +69,7 @@ do {									\
 				 "ASSERTION( %s ) failed: " fmt, #cond,	\
 				 ## __VA_ARGS__);			\
 		lbug_with_loc(&__msg_data);				\
+		BUG();							\
 	}								\
 } while (0)
 
@@ -100,7 +102,7 @@ lbug_with_loc(struct libcfs_debug_msg_data *msg);
 do {                                                                    \
 	LIBCFS_DEBUG_MSG_DATA_DECL(msgdata, D_EMERG, NULL);             \
 	lbug_with_loc(&msgdata);                                        \
-	break;                                                          \
+	BUG();                                                          \
 } while(0)
 
 /*
