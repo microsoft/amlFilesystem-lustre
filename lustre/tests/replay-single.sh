@@ -2088,7 +2088,7 @@ random_fail_mdt() {
 		fail_index=$((RANDOM%max_index+1))
 		kill -0 $monitor_pid ||
 			error "$monitor_pid stopped"
-		sleep 120
+		sleep 30
 		replay_barrier mds$fail_index
 		sleep 10
 		# Increment the number of failovers
