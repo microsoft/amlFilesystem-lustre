@@ -21,6 +21,9 @@
 #define SECTOR_SIZE (sysconf(_SC_PAGESIZE))
 #define BUFFER_SIZE (150 * SECTOR_SIZE)
 
+/* copy the data read from the pipe to stdout */
+static bool to_stdout;
+
 static void read_from_pipe(int fd, const char *filename, size_t size)
 {
 	char buffer[SECTOR_SIZE];
@@ -38,7 +41,9 @@ static void read_from_pipe(int fd, const char *filename, size_t size)
 			fprintf(stderr, "read: %s: unexpected EOF\n", filename);
 			exit(1);
 		}
-		size -= sz;
+		if (to_stdout && write(STDOUT_FILENO, buffer, ret) != ret)
+			err(1, "write: stdout");
+		size -= ret;
 	}
 }
 
@@ -62,6 +67,9 @@ static void do_splice1(int fd, const char *filename, size_t size)
 			}
 			err(1, "splice");
 		}
+		if (spliced == 0)
+			errx(1, "splice: %s: EOF, %zu bytes left",
+			     filename, size);
 		read_from_pipe(pipefd[0], filename, spliced);
 		size -= spliced;
 	}
@@ -98,6 +106,9 @@ static void do_splice2(int fd, const char *filename, size_t size)
 				}
 				err(1, "splice");
 			}
+			if (spliced == 0)
+				errx(1, "splice: %s: EOF, %zu bytes left",
+				     filename, size);
 			size -= spliced;
 		}
 		close(pipefd[1]);
@@ -107,7 +118,11 @@ static void do_splice2(int fd, const char *filename, size_t size)
 
 static void usage(const char *argv0)
 {
-	fprintf(stderr, "USAGE: %s [-rd] {filename}\n", basename(argv0));
+	fprintf(stderr, "USAGE: %s [-dnr] {filename}\n"
+		"  -d: do not use O_DIRECT\n"
+		"  -n: splice an existing file without writing it, and copy\n"
+		"      the spliced data to stdout\n"
+		"  -r: read the pipe from a child process\n", basename(argv0));
 	exit(2);
 }
 
@@ -115,6 +130,8 @@ int main(int argc, char *argv[])
 {
 	void (*do_splice)(int fd, const char *filename, size_t size);
 	const char *filename;
+	bool no_write = false;
+	struct stat st;
 	char *buffer;
 	int opt, open_flags, fd;
 	ssize_t ret;
@@ -122,8 +139,11 @@ int main(int argc, char *argv[])
 	do_splice = do_splice1;
 	open_flags = O_CREAT | O_TRUNC | O_RDWR | O_DIRECT;
 
-	while ((opt = getopt(argc, argv, "rd")) != -1) {
+	while ((opt = getopt(argc, argv, "dnr")) != -1) {
 		switch (opt) {
+		case 'n':
+			no_write = true;
+			break;
 		case 'r':
 			do_splice = do_splice2;
 			break;
@@ -138,6 +158,25 @@ int main(int argc, char *argv[])
 	if (optind >= argc)
 		usage(argv[0]);
 	filename = argv[optind];
+
+	if (no_write) {
+		fprintf(stderr, "%s reader %s O_DIRECT, no write\n",
+			do_splice == do_splice1 ? "sequential" : "concurrent",
+			(open_flags & O_DIRECT) ? "with" : "without");
+
+		open_flags &= ~(O_CREAT | O_TRUNC | O_RDWR);
+		fd = open(filename, open_flags | O_RDONLY);
+		if (fd == -1)
+			err(1, "open: %s", filename);
+		if (fstat(fd, &st) == -1)
+			err(1, "fstat: %s", filename);
+
+		to_stdout = true;
+		do_splice(fd, filename, st.st_size);
+		close(fd);
+
+		return 0;
+	}
 
 	printf("%s reader %s O_DIRECT\n",
 		   do_splice == do_splice1 ? "sequential" : "concurrent",

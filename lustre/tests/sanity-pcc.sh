@@ -2397,6 +2397,58 @@ test_21j() {
 }
 run_test 21j "PCC-RO for encrypted file"
 
+test_21k() {
+	local loopfile="$TMP/$tfile"
+	local mntpt="/mnt/pcc.$tdir"
+	local hsm_root="$mntpt/$tdir"
+	local file=$DIR/$tfile
+	local out=$TMP/$tfile.out
+	local reads
+	local opts
+
+	$LCTL get_param -n mdc.*.connect_flags | grep -q pcc_ro ||
+		skip "Server does not support PCC-RO"
+
+	setup_loopdev $SINGLEAGT $loopfile $mntpt 60
+	do_facet $SINGLEAGT mkdir $hsm_root || error "mkdir $hsm_root failed"
+	setup_pcc_mapping $SINGLEAGT \
+		"projid={100}\ roid=$HSM_ARCHIVE_NUMBER\ pccro=1"
+
+	stack_trap "rm -f $file; do_facet $SINGLEAGT rm -f $out"
+	for opts in "-n" "-nr" "-nd" "-ndr"; do
+		# -d splices without O_DIRECT, which allows a partial last page
+		if [[ "$opts" =~ d ]]; then
+			do_facet $SINGLEAGT dd if=/dev/urandom of=$file \
+				bs=4097 count=1000 || error "write $file failed"
+		else
+			do_facet $SINGLEAGT dd if=/dev/urandom of=$file \
+				bs=1M count=4 || error "write $file failed"
+		fi
+		do_facet $SINGLEAGT $LFS pcc attach -i $HSM_ARCHIVE_NUMBER \
+			$file || error "attach $file failed"
+		check_lpcc_state $file "readonly"
+		# the attach read the file into the Lustre page cache, so drop
+		# it, or a splice that bypassed PCC would also need no RPCs
+		do_facet $SINGLEAGT $LCTL set_param -n \
+			ldlm.namespaces.*osc*.lru_size=clear
+
+		echo "splice-test $opts $file"
+		do_facet $SINGLEAGT $LCTL set_param -n osc.*.stats=clear
+		do_facet $SINGLEAGT "splice-test $opts $file > $out" ||
+			error "splice-test $opts $file failed"
+		reads=$(do_facet $SINGLEAGT $LCTL get_param -n osc.*.stats |
+			awk '/^ost_read/ { sum += $2 } END { print sum + 0 }')
+		(( reads == 0 )) ||
+			error "splice-test $opts sent $reads read RPCs to OSTs"
+		do_facet $SINGLEAGT cmp $(lpcc_fid2path $hsm_root $file) $out ||
+			error "splice-test $opts read wrong data from $file"
+		check_lpcc_state $file "readonly"
+		do_facet $SINGLEAGT $LFS pcc detach $file ||
+			error "detach $file failed"
+	done
+}
+run_test 21k "splice() reads from the PCC-RO copy"
+
 test_22() {
 	local loopfile="$TMP/$tfile"
 	local mntpt="/mnt/pcc.$tdir"
