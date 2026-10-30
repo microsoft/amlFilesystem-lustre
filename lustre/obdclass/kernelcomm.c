@@ -109,7 +109,8 @@ static int lustre_device_list_start(struct netlink_callback *cb)
 		struct nlattr *dev;
 		int rem;
 
-		if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+		if (!nla_ok(params, msg_len) ||
+		    !(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
 			NL_SET_ERR_MSG(extack, "no configuration");
 			GOTO(report_err, rc);
 		}
@@ -325,7 +326,8 @@ static int lustre_targets_start(struct netlink_callback *cb)
 		struct nlattr *target;
 		int rem;
 
-		if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+		if (!nla_ok(params, msg_len) ||
+		    !(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
 			NL_SET_ERR_MSG(extack, "no configuration");
 			GOTO(report_err, rc = -EINVAL);
 		}
@@ -713,7 +715,8 @@ static int lustre_stats_start(struct netlink_callback *cb)
 		struct nlattr *dev;
 		int rem;
 
-		if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+		if (!nla_ok(params, msg_len) ||
+		    !(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
 			NL_SET_ERR_MSG(extack, "no configuration");
 			GOTO(report_err, rc);
 		}
@@ -1002,7 +1005,8 @@ static int lustre_stats_cmd(struct sk_buff *skb, struct genl_info *info)
 		GOTO(report_err, rc = -ENOMSG);
 	}
 
-	if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+	if (!nla_ok(params, msg_len) ||
+	    !(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
 		GENL_SET_ERR_MSG(info, "invalid configuration");
 		GOTO(report_err, rc = -EINVAL);
 	}
