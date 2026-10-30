@@ -118,9 +118,16 @@ start_mds() {
 		esac
 	done
 
-	for ((num=1; num <= mdscount; num++)); do
-		start_mdt $num "$@" || return 94
+	local -a par_facets
+	local -a par_logs
+	local -a par_pids
+
+	# MDT0000 first, so that the other MDTs can register and connect to it
+	start_mdt 1 "$@" || return 94
+	for ((num=2; num <= mdscount; num++)); do
+		parallel_start MOUNT mds$num start_mdt $num "$@" || return 94
 	done
+	parallel_wait || return 94
 
 	if $wait_clients; then
 		for ((num=1; num <= mdscount; num++ )); do
