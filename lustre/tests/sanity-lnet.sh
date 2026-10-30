@@ -48,6 +48,25 @@ else
 	net_delay_del="net_delay_del"
 fi
 
+# Reload only the LNet modules that cleanup_lnet() unloaded.
+#
+# This suite never needs the server stack, and load_modules() would also
+# pull in the OSD modules, which can fail on nodes where their dependencies
+# are not loadable - e.g. osd_zfs needs ZFS modules that are not installed
+# for the running kernel.
+restore_lnet() {
+	local list=$(comma_list $(remote_nodes_list))
+
+	load_lnet || return $?
+
+	if $LOAD_MODULES_REMOTE && [[ -n "$list" ]]; then
+		echo "loading LNet modules on: '$list'"
+		do_rpc_nodes "$list" load_lnet || return $?
+	fi
+
+	return 0
+}
+
 restore_modules=false
 if module_loaded lnet ; then
 	cleanup_lnet || error "Failed to unload modules before test execution"
@@ -63,7 +82,7 @@ cleanup_testsuite() {
 	if $restore_mounts; then
 		setupall || error "Failed to setup Lustre after test execution"
 	elif $restore_modules; then
-		load_modules ||
+		restore_lnet ||
 			error "Couldn't load modules after test execution"
 	fi
 	return 0
@@ -4975,7 +4994,18 @@ do_basic_rtr_test() {
 	return 0
 }
 
+# lst.sh and the lst binary live in the build tree (lustre-iokit/lst-survey/
+# and lnet/utils/) and are not necessarily installed in the PATH
+check_lst_tools() {
+	[[ -x "$LSTSH" ]] || { skip "lst.sh is not available"; return 1; }
+	[[ -x "$LST" ]] || { skip "lst is not available"; return 1; }
+
+	return 0
+}
+
 test_220() {
+	check_lst_tools || return $?
+
 	setup_router_test || return $?
 
 	do_basic_rtr_test || return $?
@@ -5242,6 +5272,8 @@ test_227() {
 run_test 227 "Check router peer health w/DD disabled"
 
 test_228() {
+	check_lst_tools || return $?
+
 	setup_router_test -r 2 || return $?
 
 	do_basic_rtr_test || return $?
@@ -6340,6 +6372,8 @@ test_256() {
 run_test 256 "Router should not drop messages that are past the deadline"
 
 test_257() {
+	check_lst_tools || return $?
+
 	setup_router_test -r 2 -p 1 || return $?
 
 	do_basic_rtr_test || return $?

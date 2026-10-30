@@ -549,8 +549,13 @@ init_test_env() {
 	if ! echo $PATH | grep -q $LUSTRE/../lustre-iokit/sgpdd-survey; then
 		export PATH=$LUSTRE/../lustre-iokit/sgpdd-survey:$PATH
 	fi
+	# 'lst' is built in lnet/utils/ and is not in the PATH when running
+	# from a build tree
+	if ! echo $PATH | grep -q $LUSTRE/../lnet/utils; then
+		export PATH=$LUSTRE/../lnet/utils:$PATH
+	fi
 	export LST=${LST:-"$LUSTRE/../lnet/utils/lst"}
-	[ ! -f "$LST" ] && export LST=$(which lst)
+	[ ! -f "$LST" ] && export LST=$(which lst 2> /dev/null)
 	export LSTSH=${LSTSH:-"$LUSTRE/../lustre-iokit/lst-survey/lst.sh"}
 	[ ! -f "$LSTSH" ] && export LSTSH=$(which lst.sh)
 	export SGPDDSURVEY=${SGPDDSURVEY:-"$LUSTRE/../lustre-iokit/sgpdd-survey/sgpdd-survey")}

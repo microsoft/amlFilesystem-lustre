@@ -98,7 +98,7 @@ stop_lst() {
 		[[ -n ${ALL_HOSTS} ]] &&
 			$PDSH "${ALL_HOSTS}" "$LCTL mark 'lst stop ${BATCH_NAME}'"
 
-		lst stop "${BATCH_NAME}" || rc=$?
+		$LST stop "${BATCH_NAME}" || rc=$?
 		LST_BATCH_STARTED=false
 	fi
 
@@ -109,7 +109,7 @@ stop_lst() {
 		[[ -n ${ALL_HOSTS} ]] &&
 			$PDSH "${ALL_HOSTS}" "$LCTL mark 'Stop LST $MODE'"
 
-		lst end_session || rc=$((rc + $?))
+		$LST end_session || rc=$((rc + $?))
 		LST_SESSION_CREATED=false
 	fi
 
@@ -202,6 +202,16 @@ fi
 #echo "using LCTL='$LCTL' lustre_root='$lustre_root' LUSTRE='$LUSTRE'"
 [[ -n "$(which $LCTL)" ]] || { echo "error: lctl not found"; exit 99; }
 
+# find where the 'lst' binary is installed on this system. When running from
+# a build tree it is in lnet/utils/ and is usually not in the PATH.
+if [[ -x "$LST" ]]; then	# full pathname specified
+	: # echo "LST=$LST"
+elif [[ -n "$LUSTRE" && -x "$LUSTRE/../lnet/utils/lst" ]]; then
+	LST=$LUSTRE/../lnet/utils/lst
+else				# hope that it is in the PATH
+	LST=${LST:-lst}
+fi
+
 if [[ -z $CLIENTS ]]; then
 	echo "Must specify \"clients\" group (-f)"
 	exit 1
@@ -214,8 +224,8 @@ elif [[ -z $MODE ]]; then
 elif ! [[ $MODE =~ read|write|rw|ping ]]; then
 	echo "Invalid mode - \"$MODE\". (-m <read|write|rw|ping>)"
 	exit 1
-elif [[ -z $(which lst 2>/dev/null) ]]; then
-	echo "Cannot find lst executable in PATH."
+elif [[ -z $(which $LST 2>/dev/null) ]]; then
+	echo "Cannot find lst executable ('$LST')."
 	exit 1
 elif ${LOAD_MODULES} && ! ${HOST_MODE}; then
 	echo "Module loading ('-L') is only available in host mode ('-H')"
@@ -343,18 +353,18 @@ trap 'exit_handler' EXIT
 
 export LST_SESSION=$$
 echo "LST_SESSION=$LST_SESSION"
-lst new_session lnet_session || { echo "new_session failed $?"; exit; }
+$LST new_session lnet_session || { echo "new_session failed $?"; exit; }
 LST_SESSION_CREATED=true
 
 echo "Adding clients: ${CLIENT_NIDS[*]}"
-lst add_group clients "${CLIENT_NIDS[@]}" || exit
+$LST add_group clients "${CLIENT_NIDS[@]}" || exit
 echo "Adding servers: ${SERVER_NIDS[*]}"
-lst add_group servers "${SERVER_NIDS[@]}" || exit
+$LST add_group servers "${SERVER_NIDS[@]}" || exit
 
 if [[ -z ${BATCH_NAME} ]]; then
 	BATCH_NAME="brw_${MODE}"
 fi
-lst add_batch "${BATCH_NAME}" || exit
+$LST add_batch "${BATCH_NAME}" || exit
 
 test_opts+=( --batch "${BATCH_NAME}" --concurrency "${CONCURRENCY}" )
 test_opts+=( --from clients --to servers --distribute "${DISTRIBUTION}" )
@@ -405,22 +415,22 @@ if [[ $MODE == rw ]]; then
 	echo "Test: ${read_opts[*]}"
 	echo "Test: ${write_opts[*]}"
 	echo "Stat: ${stat_opts[*]}"
-	lst add_test "${read_opts[@]}" || exit
-	lst add_test "${write_opts[@]}" || exit
+	$LST add_test "${read_opts[@]}" || exit
+	$LST add_test "${write_opts[@]}" || exit
 else
 	echo "Test: ${test_opts[*]}"
 	echo "Stat: ${stat_opts[*]}"
-	lst add_test "${test_opts[@]}" || exit
+	$LST add_test "${test_opts[@]}" || exit
 fi
 
-lst run "${BATCH_NAME}" || exit
+$LST run "${BATCH_NAME}" || exit
 
 LST_BATCH_STARTED=true
 
-lst stat "${stat_opts[@]}"
+$LST stat "${stat_opts[@]}"
 
 if ${SHOW_ERRORS}; then
-	lst show_error --session servers clients
+	$LST show_error --session servers clients
 fi
 
 exit
