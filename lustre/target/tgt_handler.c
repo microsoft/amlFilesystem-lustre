@@ -3250,9 +3250,16 @@ EXPORT_SYMBOL(tgt_lseek);
 int req_can_reconstruct(struct ptlrpc_request *req,
 			 struct tg_reply_data *trd)
 {
-	struct tg_export_data *ted = &req->rq_export->exp_target_data;
-	struct lsd_client_data *lcd = ted->ted_lcd;
+	struct tg_export_data *ted;
+	struct lsd_client_data *lcd;
 	int found;
+
+	/* without a client export there is no saved reply to reconstruct */
+	if (req->rq_export == NULL)
+		return 0;
+
+	ted = &req->rq_export->exp_target_data;
+	lcd = ted->ted_lcd;
 
 	if (tgt_is_multimodrpcs_client(req->rq_export))
 		return tgt_lookup_reply(req, trd);

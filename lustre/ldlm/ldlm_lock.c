@@ -2059,8 +2059,15 @@ enum ldlm_error ldlm_lock_enqueue(const struct lu_env *env,
 	}
 
 #if IS_ENABLED(CONFIG_LUSTRE_FS_SERVER)
+	/*
+	 * The reconstruct path treats the enqueue cookie as the client
+	 * request and reaches its reply data.  That only holds for a flock
+	 * request enqueued for a client export; a server-internal enqueue
+	 * passes a policy as the cookie and has no client export, so require
+	 * one here rather than following the cookie as a request.
+	 */
 	reconstruct = !local && lock->l_resource->lr_type == LDLM_FLOCK &&
-		      !(*flags & LDLM_FL_TEST_LOCK);
+		      !(*flags & LDLM_FL_TEST_LOCK) && lock->l_export != NULL;
 	if (reconstruct) {
 		rc = req_can_reconstruct(cookie, NULL);
 		if (rc != 0) {
