@@ -20,6 +20,8 @@ bash <prepared>/source/packaging/amlfs/native-build.sh <prepared>
 The external producer must inspect final native relationships and compare
 extracted payload bytes with the staged input before accepting any output.
 Python >=3.10 runs in the external renderer/verifier, not these distro scripts.
+`check-platform.sh` requires the exact native target for real compilation and
+userspace shared-library dependency discovery; fixture archive tests are distinct.
 Build tools and target dependencies must already be present; no package manager,
 publisher, signing service or kernel mutation is invoked by these builders.
 

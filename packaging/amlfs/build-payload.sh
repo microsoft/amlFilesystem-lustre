@@ -15,19 +15,7 @@ case "$KIND" in
         cp "$plan/dkms.conf" "$dest/dkms.conf"
         ;;
     utils|modules)
-        source /etc/os-release
-        case "$DISTRO:$ID:$VERSION_ID:$(uname -m)" in
-            ubuntu*:"ubuntu":*:x86_64) native_arch=amd64 ;;
-            ubuntu*:"ubuntu":*:aarch64) native_arch=arm64 ;;
-            rhel*:"rhel":*:x86_64|azurelinux*:"azurelinux":*:x86_64) native_arch=x86_64 ;;
-            rhel*:"rhel":*:aarch64|azurelinux*:"azurelinux":*:aarch64) native_arch=aarch64 ;;
-            *) echo "Source build requires the matching native distro/architecture" >&2; exit 1 ;;
-        esac
-        if [[ "$DISTRO" = ubuntu* ]]; then native_distro="ubuntu$VERSION_ID"
-        else native_distro="$ID${VERSION_ID%%.*}"; fi
-        [ "$DISTRO" = "$native_distro" ] && [ "$ARCH" = "$native_arch" ] || {
-            echo "Native source build target mismatch" >&2; exit 1
-        }
+        bash packaging/amlfs/check-platform.sh "$plan"
         for tool in libtoolize aclocal autoheader automake autoconf make gcc; do
             command -v "$tool" >/dev/null || {
                 echo "Missing source-build prerequisite: $tool" >&2
