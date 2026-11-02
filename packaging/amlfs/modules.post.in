@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+# Never use uname here: this payload belongs to one exact UTS release.
+if [ -d "/lib/modules/@KERNEL@" ]; then
+    depmod -a '@KERNEL@'
+    @INITRAMFS@
+fi
