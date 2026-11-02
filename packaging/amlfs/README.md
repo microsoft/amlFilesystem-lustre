@@ -33,6 +33,8 @@ packaging commits require new release identities. The prebuilt recipe uses the
 legacy client-only, in-kernel RDMA/socket, GSS-disabled configuration. Utilities
 also compile against explicit target headers, then discard all module files.
 Ubuntu enables crypto as its legacy producer does; RPM retains its source default.
+The in-kernel RDMA install alias is materialized as one regular `ko2iblnd.ko`
+before ELF finalization/signing; external RDMA variants are not mixed into it.
 DKMS uses the bounded in-kernel RDMA/GSS-off case. External OFED, mutable DKMS
 overrides, GSS-enabled and other optional profiles still need explicit qualification;
 these are not silently mapped to the tested case.

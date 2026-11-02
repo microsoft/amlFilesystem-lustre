@@ -58,6 +58,14 @@ case "$KIND" in
             mkdir -p "$plan/payload/lib/modules"
             mv "$plan/module-tree/$KERNEL_RELEASE" "$plan/payload/lib/modules/"
             rmdir "$plan/module-tree"
+            # Upstream installs an alias for its in-kernel RDMA copy. This fixed
+            # profile ships one regular ko2iblnd.ko, as DKMS does, without links.
+            rdma="$plan/payload/lib/modules/$KERNEL_RELEASE/updates/amlfs-lustre/net"
+            test "$(readlink "$rdma/ko2iblnd.ko")" = in-kernel-ko2iblnd.ko
+            test -f "$rdma/in-kernel-ko2iblnd.ko"
+            test ! -L "$rdma/in-kernel-ko2iblnd.ko"
+            rm "$rdma/ko2iblnd.ko"
+            mv "$rdma/in-kernel-ko2iblnd.ko" "$rdma/ko2iblnd.ko"
             # Finalize unsigned ELF before the external signing step.
             find "$plan/payload" -type f -name '*.ko' -exec strip --strip-debug '{}' \;
         else
