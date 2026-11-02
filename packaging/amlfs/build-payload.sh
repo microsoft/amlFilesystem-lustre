@@ -24,17 +24,26 @@ case "$KIND" in
         done
         args=(--disable-server --disable-ldiskfs --without-zfs --disable-tests
               --disable-iokit --disable-mpitests --disable-doc --disable-gss
-              --disable-gss-keyring --disable-dependency-tracking --with-o2ib=no
+              --disable-gss-keyring --disable-dependency-tracking --with-o2ib=yes
+              --enable-client --enable-quota
               --with-systemdsystemunitdir=no --prefix=/usr --sbindir=/usr/sbin)
+        # The supported source build also needs kernel checks for utilities.
+        # Match the legacy in-kernel RDMA profile, not mutable external OFED.
+        if command -v ofed_info >/dev/null; then
+            echo "External OFED requires a separately qualified build profile" >&2
+            exit 1
+        fi
+        test -n "$KERNEL_HEADERS"
+        test -r "$KERNEL_HEADERS/include/generated/utsrelease.h"
+        grep -Fx "#define UTS_RELEASE \"$KERNEL_RELEASE\"" \
+            "$KERNEL_HEADERS/include/generated/utsrelease.h"
+        args+=(--enable-modules --with-linux="$KERNEL_HEADERS"
+               --with-linux-obj="$KERNEL_HEADERS" --with-kmp-moddir=updates/amlfs-lustre)
+        if [[ "$DISTRO" = ubuntu* ]]; then args+=(--enable-crypto); fi
         if [ "$KIND" = modules ]; then
-            test -n "$KERNEL_HEADERS"
-            test -r "$KERNEL_HEADERS/include/generated/utsrelease.h"
-            grep -Fx "#define UTS_RELEASE \"$KERNEL_RELEASE\"" \
-                "$KERNEL_HEADERS/include/generated/utsrelease.h"
-            args+=(--enable-modules --disable-utils --with-linux="$KERNEL_HEADERS"
-                   --with-linux-obj="$KERNEL_HEADERS" --with-kmp-moddir=updates/amlfs-lustre)
+            args+=(--disable-utils)
         else
-            args+=(--disable-modules --enable-utils)
+            args+=(--enable-utils)
         fi
         bash ./autogen.sh
         ./configure "${args[@]}"
@@ -52,6 +61,8 @@ case "$KIND" in
             # Finalize unsigned ELF before the external signing step.
             find "$plan/payload" -type f -name '*.ko' -exec strip --strip-debug '{}' \;
         else
+            # Kernel checks/builds do not make modules part of the utility payload.
+            rm -r "$plan/payload/lib/modules"
             # libtool archives and static libraries are not runtime payloads.
             find "$plan/payload" -type f \( -name '*.la' -o -name '*.a' \) -delete
         fi

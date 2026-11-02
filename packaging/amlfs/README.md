@@ -29,8 +29,13 @@ publisher, signing service or kernel mutation is invoked by these builders.
 Autotools and `make install DESTDIR=...`, or exports complete DKMS sources.
 Native packages preserve the source runtime version file and full source commit.
 DKMS cache identities include source and packaging revision; new source-owned
-packaging commits require new release identities. The initial build recipe is a
-client-only, socket-transport recipe, not approval of additional transports.
+packaging commits require new release identities. The prebuilt recipe uses the
+legacy client-only, in-kernel RDMA/socket, GSS-disabled configuration. Utilities
+also compile against explicit target headers, then discard all module files.
+Ubuntu enables crypto as its legacy producer does; RPM retains its source default.
+DKMS uses the bounded in-kernel RDMA/GSS-off case. External OFED, mutable DKMS
+overrides, GSS-enabled and other optional profiles still need explicit qualification;
+these are not silently mapped to the tested case.
 It neither consumes mutable global DKMS recipe overrides nor uses weak modules.
 
 Package scriptlets update target-specific depmod/initramfs without loading or
