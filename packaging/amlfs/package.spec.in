@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0
+# Repack final payloads without any post-install buildroot processing.
+%global __os_install_post %{nil}
+%global debug_package %{nil}
+@NATIVE_FIELDS@
+Summary: AMLFS Lustre @KIND@ (isolated test build)
+License: GPL-2.0-only AND LGPL-2.1-or-later
+URL: https://github.com/microsoft/amlFilesystem-lustre
+@AUTO_DEPS@
+
+%description
+Isolated test package. Not approved for production or host enrollment.
+Source/runtime identity is independent of the native package version.
+
+%prep
+
+%build
+
+%install
+mkdir -p "%{buildroot}"
+cp -a @ROOT@/. "%{buildroot}/"
+
+@SCRIPTLETS@
+
+%files -f @FILELIST@
+%defattr(-,root,root)

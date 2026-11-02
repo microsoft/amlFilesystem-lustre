@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+# Independent cache identity includes the native revision and full source SHA.
+PACKAGE_NAME="amlfs-lustre-client"
+PACKAGE_VERSION="@DKMS_VERSION@"
+AUTOINSTALL="yes"
+NO_WEAK_MODULES="yes"
+STRIP="no"
+MAKE[0]="bash autogen.sh && ./configure --with-linux=$kernel_source_dir --with-linux-obj=$kernel_source_dir --disable-server --disable-ldiskfs --without-zfs --disable-utils --disable-tests --disable-iokit --disable-mpitests --disable-doc --disable-gss --disable-gss-keyring --with-o2ib=no --with-kmp-moddir=updates/amlfs-lustre && make"
+CLEAN="make clean"
+# This bounded client recipe does not auto-enable external transports/config.
+# Changing it is a source change, not an unchanged-SHA packaging revision.
+@MODULES@
