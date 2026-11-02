@@ -6,6 +6,11 @@ plan=$(realpath "${1:?prepared build directory required}")
 source "$plan/native.env"
 test -d "$plan/payload"
 test -s "$plan/payload-inventory.json"
+if [ "$KIND" = utils ] && [ "$FIXTURE_PAYLOAD" = 0 ]; then
+    # Shared-library dependency discovery must use the target's native database,
+    # even when preparation/sealing/verification ran outside this container.
+    bash "$plan/source/packaging/amlfs/check-platform.sh" "$plan"
+fi
 test ! -e "$plan/root"
 mkdir "$plan/root"
 cp -a "$plan/payload/." "$plan/root/"
