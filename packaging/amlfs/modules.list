@@ -2,6 +2,7 @@ libcfs libcfs/libcfs
 lnet lnet/lnet
 lnet_selftest lnet/selftest
 ksocklnd lnet/klnds/socklnd
+ko2iblnd lnet/klnds/in-kernel-o2iblnd
 fid lustre/fid
 fld lustre/fld
 lmv lustre/lmv
