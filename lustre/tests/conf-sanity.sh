@@ -5595,6 +5595,95 @@ test_56b() {
 }
 run_test 56b "test target_obd correctness with nonconsecutive MDTs"
 
+cleanup_56c() {
+	umount_client $MOUNT -f || error_noexit "unmount client failed"
+	stop mds1
+	stop mds2
+	stopall
+	reformat_and_config
+}
+
+# Create 4 dirs round-robin, so 2 of them go to each MDT first, and check
+# that all of them end up on the MDT with index $2.
+mkdir_rr_56c() {
+	local dir=$1
+	local expect=$2
+	local index
+	local i
+
+	for ((i = 0; i < 4; i++)); do
+		$LFS mkdir -i -1 -c 1 $dir.$i || error "mkdir $dir.$i failed"
+		index=$($LFS getdirstripe -i $dir.$i)
+		(( index == expect )) ||
+			error "$dir.$i on MDT$index, not MDT$expect"
+	done
+}
+
+test_56c() {
+	(( MDSCOUNT >= 2 )) || skip "needs >= 2 MDTs"
+	(( MDS1_VERSION >= $(version_code 2.17.54.39) )) ||
+		skip "need MDS >= 2.17.54.39 for per-MDT EDQUOT injection"
+
+	# above 128 and the MDT count, which the mkdir -EDQUOT retry missed
+	local idx=200
+
+	stopall
+	stack_trap cleanup_56c
+
+	if ! combined_mgs_mds ; then
+		format_mgs
+		start_mgs
+	fi
+
+	add mds1 $(mkfs_opts mds1 $(mdsdevname 1)) --index=0 --reformat \
+		$(mdsdevname 1) $(mdsvdevname 1)
+	add mds2 $(mkfs_opts mds2 $(mdsdevname 2)) --index=$idx --reformat \
+		$(mdsdevname 2) $(mdsvdevname 2)
+	format_ost 1
+	format_ost 2
+
+	start_mdt 1 || error "start MDT0000 failed"
+	start_mdt 2 || error "start MDT$idx failed"
+	start_ost || error "start ost1 failed"
+	start_ost2 || error "start ost2 failed"
+	mount_client $MOUNT || error "mount client failed"
+
+	local mdt=$(printf "%s-MDT%04x" $FSNAME $idx)
+
+	wait_import_state FULL mdc.$mdt-mdc-*.mds_server_uuid
+	# the MDTs have about the same free space, so mkdirs go round-robin
+	$LCTL set_param lmv.*.qos_threshold_rr=100 ||
+		error "set qos_threshold_rr failed"
+
+	#define OBD_FAIL_QUOTA_EDQUOT            0xA02
+	# fail_val=N+1 fails dir creates on MDT index N, fail_val=0 on all
+	stack_trap "do_nodes $(mdts_nodes) \
+		$LCTL set_param fail_loc=0 fail_val=0"
+
+	# mkdir hits -EDQUOT on MDT0000, so it is retried on MDT$idx
+	do_facet mds1 $LCTL set_param fail_val=1 fail_loc=0xA02 ||
+		error "set fail_loc on mds1 failed"
+	mkdir_rr_56c $DIR/$tdir.0 $idx
+
+	# mkdir hits -EDQUOT on MDT$idx, so it is retried on MDT0000
+	do_facet mds1 $LCTL set_param fail_loc=0 fail_val=0 ||
+		error "reset fail_loc on mds1 failed"
+	do_facet mds2 $LCTL set_param fail_val=$((idx + 1)) fail_loc=0xA02 ||
+		error "set fail_loc on mds2 failed"
+	mkdir_rr_56c $DIR/$tdir.$idx 0
+
+	# mkdir hits -EDQUOT on every MDT, so it fails after trying each
+	do_nodes $(mdts_nodes) $LCTL set_param fail_val=0 fail_loc=0xA02 ||
+		error "set fail_loc on MDTs failed"
+
+	local out
+
+	out=$($LFS mkdir -i -1 -c 1 $DIR/$tdir.all 2>&1) &&
+		error "mkdir $tdir.all succeeded"
+	[[ $out == *"Disk quota exceeded"* ]] || error "mkdir $tdir.all: $out"
+}
+run_test 56c "mkdir retries -EDQUOT on MDTs with big indexes"
+
 test_57a() { # bug 22656
 	do_rpc_nodes $(facet_active_host ost1) load_modules_local
 	local NID=$(do_facet ost1 "$LCTL get_param nis" |

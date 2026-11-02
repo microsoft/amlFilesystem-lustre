@@ -2253,10 +2253,13 @@ static struct lu_tgt_desc *lmv_locate_tgt_by_space(struct lmv_obd *lmv,
  * lmv_locate_tgt_next_avail() - Select next available MDT
  * @lmv: LMV device
  * @op_data: operation data containing user/group IDs
- * @cur: current MDT
  * @exclude_bitmap: bitmap of MDT indices to exclude from selection (already
  * tried)
+ * @exclude_size: number of bits in @exclude_bitmap
  *
+ * MDT indices may be sparse and larger than the MDT count, so walk the
+ * configured MDTs rather than the indices below the count.  Choose one of
+ * the usable MDTs at random to spread creates across them.
  *
  * Return:
  * Pointer to lu_tgt_desc of selected MDT, or error pointer.
@@ -2264,38 +2267,31 @@ static struct lu_tgt_desc *lmv_locate_tgt_by_space(struct lmv_obd *lmv,
 static
 struct lu_tgt_desc *lmv_locate_tgt_next_avail(struct lmv_obd *lmv,
 					      struct md_op_data *op_data,
-					      struct lmv_tgt_desc *cur,
-					      unsigned long *exclude_bitmap)
+					      unsigned long *exclude_bitmap,
+					      __u32 exclude_size)
 {
-	__u32 count = lmv->lmv_mdt_count;
-	__u32 start;
-	__u32 i;
+	struct lu_tgt_desc *found = ERR_PTR(-EDQUOT);
+	struct lu_tgt_desc *tgt;
+	__u32 count = 0;
 
-	if (count <= 1)
-		return ERR_PTR(-EDQUOT);
-
-	/* Make start random to spread creates across MDTs */
-	start = (cur->ltd_index + 1 + get_random_u32_below(count - 1)) % count;
-
-	for (i = 0; i < count ; i++) {
-		__u32 idx = (start+i) % count;
-
-		struct lu_tgt_desc *tgt;
-
-		if (test_bit(idx, exclude_bitmap))
+	lmv_foreach_connected_tgt(lmv, tgt) {
+		if (tgt->ltd_index < exclude_size &&
+		    test_bit(tgt->ltd_index, exclude_bitmap))
 			continue;
-
-		tgt = lmv_tgt_retry(lmv, idx);
-		if (!tgt || !tgt->ltd_active)
+		if (!tgt->ltd_active)
 			continue;
 		if (tgt->ltd_statfs.os_state & OS_STATFS_NOCREATE)
 			continue;
 
-		op_data->op_mds = tgt->ltd_index;
-		return tgt;
+		/* choose each usable MDT with the same probability */
+		if (get_random_u32_below(++count) == 0)
+			found = tgt;
 	}
 
-	return ERR_PTR(-EDQUOT);
+	if (!IS_ERR(found))
+		op_data->op_mds = found->ltd_index;
+
+	return found;
 }
 
 static bool lmv_tgt_nocreate(struct lmv_obd *lmv, struct lmv_tgt_desc *tgt)
@@ -2395,13 +2391,12 @@ static int lmv_create(struct obd_export *exp, struct md_op_data *op_data,
 	struct lmv_obd *lmv = &obd->u.lmv;
 	struct lmv_tgt_desc *tgt;
 	struct mdt_body *repbody;
-	DECLARE_BITMAP(exclude_bitmap, LMV_MAX_TGT_COUNT);
+	unsigned long *exclude_bitmap = NULL;
+	__u32 exclude_size = 0;
 	int quota_retry = 0;
 	int rc;
 
 	ENTRY;
-
-	bitmap_zero(exclude_bitmap, LMV_MAX_TGT_COUNT);
 
 	if (!lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count)
 		RETURN(-EIO);
@@ -2428,7 +2423,7 @@ static int lmv_create(struct obd_export *exp, struct md_op_data *op_data,
 retry:
 	rc = lmv_fid_alloc(NULL, exp, &op_data->op_fid2, op_data);
 	if (rc)
-		RETURN(rc);
+		GOTO(out, rc);
 
 	if (lmv_dir_striped(op_data->op_lso1))
 		op_data->op_layout_version =
@@ -2447,7 +2442,7 @@ retry:
 		       cap_effective, rdev, request);
 	if (rc == 0) {
 		if (*request == NULL)
-			RETURN(rc);
+			GOTO(out, rc);
 		CDEBUG(D_INODE, "Created - "DFID"\n", PFID(&op_data->op_fid2));
 	}
 
@@ -2465,10 +2460,23 @@ retry:
 		       lmv2obd_dev(lmv)->obd_name, tgt->ltd_index, quota_retry,
 		       lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count, rc);
 
-		set_bit(tgt->ltd_index, exclude_bitmap);
+		/* MDT indices may be sparse and large, so size the set of
+		 * MDTs tried by the target table, and only when needed.
+		 */
+		if (!exclude_bitmap) {
+			exclude_size = lmv->lmv_mdt_descs.ltd_tgts_size;
+			OBD_ALLOC_PTR_ARRAY(exclude_bitmap,
+					    BITS_TO_LONGS(exclude_size));
+			if (!exclude_bitmap)
+				GOTO(out, rc);
+		}
+		/* an MDT added since may be beyond the bitmap */
+		if (tgt->ltd_index < exclude_size)
+			set_bit(tgt->ltd_index, exclude_bitmap);
 
-		new_tgt = lmv_locate_tgt_next_avail(lmv, op_data, tgt,
-						    exclude_bitmap);
+		new_tgt = lmv_locate_tgt_next_avail(lmv, op_data,
+						    exclude_bitmap,
+						    exclude_size);
 		if (!IS_ERR(new_tgt) && new_tgt != tgt) {
 			CDEBUG(D_INFO,
 			       "\nretrying mkdir on MDT%04x (was MDT%04x)\n",
@@ -2481,11 +2489,7 @@ retry:
 
 			tgt = new_tgt;
 			quota_retry++;
-			/* Reset FID2 for retry, and allocate a new FID */
-			fid_zero(&op_data->op_fid2);
-			rc = lmv_fid_alloc(NULL, exp, &op_data->op_fid2, op_data);
-			if (rc)
-				RETURN(rc);
+			/* a new FID is allocated on the new MDT at retry */
 			goto retry;
 		}
 
@@ -2505,15 +2509,15 @@ retry:
 	/* dir restripe needs to send to MDT where dir is located */
 	if (rc != -EREMOTE ||
 	    !(exp_connect_flags2(exp) & OBD_CONNECT2_CRUSH))
-		RETURN(rc);
+		GOTO(out, rc);
 
 	repbody = req_capsule_server_get(&(*request)->rq_pill, &RMF_MDT_BODY);
 	if (repbody == NULL)
-		RETURN(-EPROTO);
+		GOTO(out, rc = -EPROTO);
 
 	/* Not cross-ref case, just get out of here. */
 	if (likely(!(repbody->mbo_valid & OBD_MD_MDS)))
-		RETURN(rc);
+		GOTO(out, rc);
 
 	op_data->op_fid2 = repbody->mbo_fid1;
 	ptlrpc_req_put(*request);
@@ -2521,10 +2525,14 @@ retry:
 
 	tgt = lmv_fid2tgt(lmv, &op_data->op_fid2);
 	if (IS_ERR(tgt))
-		RETURN(PTR_ERR(tgt));
+		GOTO(out, rc = PTR_ERR(tgt));
 
 	op_data->op_mds = tgt->ltd_index;
 	goto retry;
+out:
+	OBD_FREE_PTR_ARRAY(exclude_bitmap, BITS_TO_LONGS(exclude_size));
+
+	RETURN(rc);
 }
 
 static int

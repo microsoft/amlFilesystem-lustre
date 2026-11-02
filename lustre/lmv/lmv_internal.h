@@ -17,8 +17,6 @@
 #include <obd.h>
 #include <lustre_lmv.h>
 
-#define LMV_MAX_TGT_COUNT 128
-
 #define LL_IT2STR(it)				        \
 	((it) ? ldlm_it2str((it)->it_op) : "0")
 
