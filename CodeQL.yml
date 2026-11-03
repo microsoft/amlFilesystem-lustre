@@ -1,0 +1,16 @@
+# CAP post-analysis exclusions for unused upstream LUTF test tooling.
+# These modules are retained as source in DKMS packages but are not executed
+# by supported AMLFS client build, installation, or qualification flows.
+# Reassess these exclusions and harden LUTF's remote-control paths before use.
+queries:
+  - exclude:
+      path:
+        - "lustre/tests/lutf/python/infra/lutf_telnet_cl.py"
+      opaqueid:
+        - SM03161
+        - SM03129
+  - exclude:
+      path:
+        - "lustre/tests/lutf/python/infra/lutf_paramiko.py"
+      opaqueid:
+        - SM03116
