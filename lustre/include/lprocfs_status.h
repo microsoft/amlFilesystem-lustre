@@ -26,6 +26,7 @@
 #include <linux/spinlock.h>
 #include <linux/string_helpers.h>
 #include <linux/seq_file.h>
+#include <linux/xarray.h>
 #include <linux/libcfs/libcfs.h>
 #include <lustre_compat/linux/sysfs.h>
 
@@ -531,6 +532,8 @@ lprocfs_stats_alloc(unsigned int num, enum lprocfs_stats_flags flags);
 extern void lprocfs_stats_clear(struct lprocfs_stats *stats);
 extern void lprocfs_stats_free(struct lprocfs_stats **stats);
 extern struct lprocfs_stats *lprocfs_stats_dup(struct lprocfs_stats *stats);
+int lprocfs_stats_register_netlink(struct lprocfs_stats *stats);
+int lprocfs_stats_scan(struct xa_state *xas, const char *filter);
 extern void lprocfs_init_ldlm_stats(struct lprocfs_stats *ldlm_stats);
 struct lprocfs_stats *ldebugfs_stats_alloc(int num, char *name,
 					   struct dentry *entry,

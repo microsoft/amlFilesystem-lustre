@@ -2108,6 +2108,8 @@ static inline bool do_dump_on_eviction(struct obd_device *exp_obd,
 	return do_dump_subs_mask(obd_dump_on_eviction, subs);
 }
 
+int lustre_cache_object(struct xa_state *xas, void *item);
+
 /* statfs_pack.c */
 struct kstatfs;
 void statfs_pack(struct obd_statfs *osfs, struct kstatfs *sfs);

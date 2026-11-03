@@ -119,7 +119,7 @@ AC_DEFUN([LIBCFS_CACHE_DETAIL_WRITERS], [
 ]) # LIBCFS_CACHE_DETAIL_WRITERS
 
 #
-# LIBCFS_GENL_DUMPIT_INFO_FAMILY
+# LIBCFS_GENL_INFO_FAMILY
 #
 # kernel v5.4-rc1 commit bf813b0afeae2f012f0e527a526c1b78ca21ad82
 # expanded struct genl_dumpit_info to include struct genl_family.
@@ -127,25 +127,27 @@ AC_DEFUN([LIBCFS_CACHE_DETAIL_WRITERS], [
 # kernel v6.5-rc5 commit 5c670a010de46 moved genl_family from
 # struct genl_dumpit_info to struct genl_info.
 #
-# Note RHEL8 while earlier than 5.4 does have family info in
-# struct genl_dumpit_info
+# Before kernel 5.4 all struct genl_*_info lacked the
+# struct genl_family field. While RHEL8 is older than 5.4
+# struct genl_dumpit_info was patched to contain a family
+# field.
 #
-AC_DEFUN([LIBCFS_SRC_GENL_DUMPIT_INFO_FAMILY], [
-	LB2_LINUX_TEST_SRC([genl_dumpit_info_family], [
+AC_DEFUN([LIBCFS_SRC_GENL_INFO_FAMILY], [
+	LB2_LINUX_TEST_SRC([genl_info_family], [
 		#include <net/genetlink.h>
 	],[
-		static struct genl_dumpit_info info;
+		static struct genl_info info;
 
 		info.family = NULL;
 	],[-Werror])
 ])
-AC_DEFUN([LIBCFS_GENL_DUMPIT_INFO_FAMILY], [
-	LB2_MSG_LINUX_TEST_RESULT([if struct genl_dumpit_info has family field],
-	[genl_dumpit_info_family], [
-		AC_DEFINE(HAVE_GENL_DUMPIT_INFO_FAMILY, 1,
-			[struct genl_dumpit_info has family field])
+AC_DEFUN([LIBCFS_GENL_INFO_FAMILY], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct genl_info has family field],
+	[genl_info_family], [
+		AC_DEFINE(HAVE_GENL_INFO_FAMILY, 1,
+			[struct genl_info has family field])
 	])
-]) # LIBCFS_GENL_DUMPIT_INFO_FAMILY
+]) # LIBCFS_GENL_INFO_FAMILY
 
 #
 # LIBCFS_KALLSYMS_LOOKUP
@@ -894,8 +896,6 @@ AC_DEFUN([LIBCFS_PROG_LINUX_SRC], [
 	LIBCFS_SRC_USER_UID_KEYRING
 	# 5.3
 	LIBCFS_SRC_CACHE_DETAIL_WRITERS
-	# 5.4
-	LIBCFS_SRC_GENL_DUMPIT_INFO_FAMILY
 	# 5.6
 	LIBCFS_SRC_HAVE_PROC_OPS
 	# 5.7
@@ -933,6 +933,8 @@ AC_DEFUN([LIBCFS_PROG_LINUX_SRC], [
 	# 6.2
 	LIBCFS_SRC_TIMER_DELETE_SYNC
 	LIBCFS_SRC_TIMER_DELETE
+	# 6.5
+	LIBCFS_SRC_GENL_INFO_FAMILY
 	# 6.11
 	LIBCFS_SRC_BLK_INTEGRITY_NOVERIFY
 	# 6.15
@@ -948,8 +950,6 @@ AC_DEFUN([LIBCFS_PROG_LINUX_RESULTS], [
 	LIBCFS_USER_UID_KEYRING
 	# 5.3
 	LIBCFS_CACHE_DETAIL_WRITERS
-	# 5.4
-	LIBCFS_GENL_DUMPIT_INFO_FAMILY
 	# 5.6
 	LIBCFS_HAVE_PROC_OPS
 	# 5.7
@@ -988,6 +988,8 @@ AC_DEFUN([LIBCFS_PROG_LINUX_RESULTS], [
 	# 6.2
 	LIBCFS_TIMER_DELETE_SYNC
 	LIBCFS_TIMER_DELETE
+	# 6.5
+	LIBCFS_GENL_INFO_FAMILY
 	# 6.11
 	LIBCFS_BLK_INTEGRITY_NOVERIFY
 	# 6.15

@@ -1417,8 +1417,12 @@ static int yaml_create_nested_list(struct yaml_netlink_output *out,
 
 		fmt &= ~LNKF_FLOW;
 		while ((line = strsep(hdr, ",")) != NULL) {
-			while (!isalnum(line[0]))
+			while (line[0] != '\0' && !isalnum(line[0])) {
+				/* handle empty flow set */
+				if (line[0] == ']' || line[0] == '}')
+					break;
 				line++;
+			}
 
 			/* Flow can be splt across lines by libyaml library. */
 			if (strchr(line, ',')) {

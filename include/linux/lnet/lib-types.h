@@ -2318,6 +2318,12 @@ struct lnet {
 	atomic_t			ln_ni_total;
 };
 
+enum lgn_state {
+	LS_KEYS_SENT	= 0,
+	LS_HDR_CLEARED	= 1,
+	LS_BIT_2	= 2,
+};
+
 static const struct nla_policy scalar_attr_policy[LN_SCALAR_MAX + 1] = {
 	[LN_SCALAR_ATTR_LIST]		= { .type = NLA_NESTED },
 	[LN_SCALAR_ATTR_LIST_SIZE]	= { .type = NLA_U16 },

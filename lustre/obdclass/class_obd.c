@@ -86,6 +86,20 @@ EXPORT_SYMBOL(at_extra);
 struct percpu_counter obd_memory;
 EXPORT_SYMBOL(obd_memory);
 
+int lustre_cache_object(struct xa_state *xas, void *item)
+{
+	do {
+		xa_lock(xas->xa);
+		xas_store(xas, item);
+		if (!xas_error(xas))
+			xas_next(xas);
+		xa_unlock(xas->xa);
+	} while (xas_nomem(xas, GFP_KERNEL));
+
+	return xas_error(xas);
+}
+EXPORT_SYMBOL(lustre_cache_object);
+
 static int obdclass_oom_handler(struct notifier_block *self,
 				unsigned long notused, void *nfreed)
 {

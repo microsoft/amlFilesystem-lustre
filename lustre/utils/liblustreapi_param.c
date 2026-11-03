@@ -600,7 +600,7 @@ static int print_out_targets(yaml_parser_t *reply, int version, int flags)
 		done = (event.type == YAML_DOCUMENT_END_EVENT);
 		yaml_event_delete(&event);
 	}
-	return rc == 1 ? 0 : -EINVAL;
+	return rc;
 }
 
 static int print_out_stats(yaml_parser_t *reply, int version, int flags)
@@ -809,7 +809,9 @@ static int lcfg_param_get_yaml(yaml_parser_t *reply, struct nl_sock *sk,
 		goto error;
 
 	if (source[0]) {
-		const char *key = cmd == LUSTRE_CMD_DEVICES ? "name" : "source";
+		const char *key = (strcmp(family, "lustre") == 0 &&
+				   cmd == LUSTRE_CMD_DEVICES) ? "name" :
+								"source";
 
 		/* Now fill in 'path' filter */
 		yaml_sequence_start_event_initialize(&event, NULL,

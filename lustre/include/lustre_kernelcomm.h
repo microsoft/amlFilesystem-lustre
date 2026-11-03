@@ -19,8 +19,8 @@
 #ifndef __LUSTRE_KERNELCOMM_H__
 #define __LUSTRE_KERNELCOMM_H__
 
-#include <linux/generic-radix-tree.h>
-#include <net/genetlink.h>
+#include <lustre_compat/linux/xarray.h>
+#include <lustre_compat/net/genetlink.h>
 #include <net/sock.h>
 /* For declarations shared with userspace */
 #include <uapi/linux/lustre/lustre_kernelcomm.h>
@@ -29,7 +29,7 @@
  * enum lustre_device_attrs	      - Lustre general top-level netlink
  *					attributes that describe lustre
  *					'devices'. These values are used
- *					to piece togther messages for
+ *					to piece together messages for
  *					sending and receiving.
  *
  * @LUSTRE_DEVICE_ATTR_UNSPEC:		unspecified attribute to catch errors
@@ -67,17 +67,70 @@ enum lustre_device_attrs {
  *
  * @LUSTRE_PARAM_ATTR_HDR:		groups params belong to (NLA_NUL_STRING)
  * @LUSTRE_PARAM_ATTR_SOURCE:		source of the params (NLA_STRING)
+ * @LUSTRE_PARAM_ATTR_LIST:		This handles the special case of 1 obd
+ *					to N items that define the source.
+ *					Example is pools.
  */
 enum lustre_param_list_attrs {
 	LUSTRE_PARAM_ATTR_UNSPEC = 0,
 
 	LUSTRE_PARAM_ATTR_HDR,
 	LUSTRE_PARAM_ATTR_SOURCE,
+	LUSTRE_PARAM_ATTR_LIST,
 
 	__LUSTRE_PARAM_ATTR_MAX_PLUS_ONE
 };
 
 #define LUSTRE_PARAM_ATTR_MAX (__LUSTRE_PARAM_ATTR_MAX_PLUS_ONE - 1)
+
+/**
+ * enum lustre_target_attrs	      - Lustre general top-level netlink
+ *					attributes that describe lustre
+ *					'target_obd'. These values are used
+ *					to piece together messages for
+ *					sending and receiving.
+ *
+ * @LUSTRE_TARGET_ATTR_UNSPEC:		unspecified attribute to catch errors
+ *
+ * @LUSTRE_TARGET_ATTR_HDR:		Netlink group this data is for
+ *					(NLA_NUL_STRING)
+ * @LUSTRE_TARGET_ATTR_SOURCE:		obd device targets belong too
+ *					(NLA_STRING)
+ * @LUSTRE_TARGET_ATTR_PROP_LIST:	list of target properties (NLA_NESTED)
+ */
+enum lustre_target_attrs {
+	LUSTRE_TARGET_ATTR_UNSPEC = 0,
+
+	LUSTRE_TARGET_ATTR_HDR,
+	LUSTRE_TARGET_ATTR_SOURCE,
+	LUSTRE_TARGET_ATTR_PROP_LIST,
+
+	__LUSTRE_TARGET_ATTR_MAX_PLUS_ONE,
+};
+
+#define LUSTRE_TARGET_ATTR_MAX	(__LUSTRE_TARGET_ATTR_MAX_PLUS_ONE - 1)
+
+/**
+ * enum lustre_target_props_attrs     - Lustre target netlink attributes used
+ *					to compose message for sending or
+ *					receiving.
+ *
+ * @LUSTRE_TARGET_PROP_ATTR_UNSPEC:	unspecified attribute to catch errors
+ * @LUSTRE_TARGET_PROP_ATTR_INDEX:	target number used as an index (NLA_U16)
+ * @LUSTRE_TARGET_PROP_ATTR_UUID:	UUID of the target (NLA_STRING)
+ * @LUSTRE_TARGET_PROP_ATTR_STATUS:	status of the target (NLA_STRING)
+ */
+enum lustre_target_prop_attrs {
+	LUSTRE_TARGET_PROP_ATTR_UNSPEC = 0,
+
+	LUSTRE_TARGET_PROP_ATTR_INDEX,
+	LUSTRE_TARGET_PROP_ATTR_UUID,
+	LUSTRE_TARGET_PROP_ATTR_STATUS,
+
+	__LUSTRE_TARGET_PROP_ATTR_MAX_PLUS_ONE,
+};
+
+#define LUSTRE_TARGET_PROP_ATTR_MAX	(__LUSTRE_TARGET_PROP_ATTR_MAX_PLUS_ONE - 1)
 
 /**
  * enum lustre_stats_attrs	     - Lustre stats netlink attributes used
@@ -149,62 +202,73 @@ enum lustre_stats_dataset_attrs {
 
 #define LUSTRE_STATS_ATTR_DATASET_MAX	(__LUSTRE_STATS_ATTR_DATASET_MAX_PLUS_ONE - 1)
 
-struct lustre_stats_list {
-	GENRADIX(struct lprocfs_stats *)	gfl_list;
-	unsigned int				gfl_count;
-	unsigned int				gfl_index;
+/*
+ * Table-driven netlink handler framework.
+ *
+ * Commands that iterate OBD devices share a common start/dump/done
+ * pattern.  Each command provides callbacks for the parts that differ.
+ *
+ * @lnc_collect: append entries for @ctx context. The number of entries
+ *		 added to the XAS is dependent on the implementation.
+ *		 The passed in nlattr and rem are used to allow far
+ *		 more complex filtering beyond just the 'source. This
+ *		 ensure we are in the proper place when returning from
+ *		 this function.
+ * @lnc_release: release what @lnc_collect stored in an entry
+ * @lnc_setup_keys: setup the key table for the first message sent.
+ *		    Additional calculate the largest single message
+ *		    size to ensure every message sent fits the sk_buff
+ * @lnc_free_keys: optional depending on if keytables was allocated.
+ *		   Free the key table if allocated.
+ * @lnc_get_source: Required when LS_NL_SCAN is not set. Return the
+ *		    'source' that the data entry belongs to. This is
+ *		    used to check if the source is still available
+ *		    since time has passed between Netlink start and dump.
+ * @lnc_pack_msg: put the attributes into @msg;  Return -EMSGSIZE when
+ *		  @msg is full and the entry is retried in the next skb.
+ */
+struct lustre_nl_ctx {
+	/* For obd devices all but free_keys is mandatory. */
+	int			(*lnc_collect)(struct lustre_nl_ctx *ctx,
+					      void *source,
+					      struct nlattr **next, int *rem);
+	void			(*lnc_release)(struct lustre_nl_ctx *ctx,
+					       void *data);
+	ssize_t			(*lnc_setup_keys)(struct lustre_nl_ctx *ctx);
+	void			(*lnc_free_keys)(struct lustre_nl_ctx *ctx);
+	void*			(*lnc_get_source)(void *data);
+	int			(*lnc_pack_msg)(struct lustre_nl_ctx *ctx,
+						struct sk_buff *msg,
+						void *data);
+	struct xa_state			lnc_xas;
+	struct xarray			lnc_array;
+	const struct ln_key_list	**lnc_keys;
+	void				*lnc_prev;
+#ifndef HAVE_GENL_INFO_FAMILY
+	struct compat_genl_info		lnc_info;
+#endif
+	unsigned long			lnc_state;
 };
 
-unsigned int lustre_stats_scan(struct lustre_stats_list *slist, const char *filter);
+static inline struct lustre_nl_ctx *
+lustre_nl_dump_ctx(struct netlink_callback *cb)
+{
+	return (struct lustre_nl_ctx *)cb->args[0];
+}
+
+/* Special obd device handling */
+int lustre_obd_nl_start(struct netlink_callback *cb,
+			  struct lustre_nl_ctx *settings);
+int lustre_obd_nl_simple_dump(struct sk_buff *msg,
+				struct netlink_callback *cb);
+int lustre_obd_nl_dump(struct sk_buff *msg,
+			 struct netlink_callback *cb);
+int lustre_obd_nl_done(struct netlink_callback *cb);
+
+/* Special stats handling */
 int lustre_stats_dump(struct sk_buff *msg, struct netlink_callback *cb);
-int lustre_stats_done(struct netlink_callback *cb);
-
-/**
- * enum lustre_target_attrs	      - Lustre general top-level netlink
- *					attributes that describe lustre
- *					'target_obd'. These values are used
- *					to piece together messages for
- *					sending and receiving.
- *
- * @LUSTRE_TARGET_ATTR_UNSPEC:		unspecified attribute to catch errors
- *
- * @LUSTRE_TARGET_ATTR_HDR:		Netlink group this data is for
- *					(NLA_NUL_STRING)
- * @LUSTRE_TARGET_ATTR_SOURCE:		obd device targets belong too
- *					(NLA_STRING)
- * @LUSTRE_TARGET_ATTR_PROP_LIST:	list of target properties (NLA_NESTED)
- */
-enum lustre_target_attrs {
-	LUSTRE_TARGET_ATTR_UNSPEC = 0,
-
-	LUSTRE_TARGET_ATTR_HDR,
-	LUSTRE_TARGET_ATTR_SOURCE,
-	LUSTRE_TARGET_ATTR_PROP_LIST,
-
-	__LUSTRE_TARGET_ATTR_MAX_PLUS_ONE,
-};
-
-#define LUSTRE_TARGET_ATTR_MAX	(__LUSTRE_TARGET_ATTR_MAX_PLUS_ONE - 1)
-
-/**
- * enum lustre_target_props_attrs
- *
- * @LUSTRE_TARGET_PROP_ATTR_UNSPEC:	unspecified attribute to catch errors
- * @LUSTRE_TARGET_PROP_ATTR_INDEX:	target number used as an index (NLA_U16)
- * @LUSTRE_DEVICE_PROP_ATTR_UUID:	UUID of the target (NLA_STRING)
- * @LUSTRE_DEVICE_PROP_ATTR_STATUS:	status of the target (NLA_STRING)
- */
-enum lustre_target_prop_attrs {
-	LUSTRE_TARGET_PROP_ATTR_UNSPEC = 0,
-
-	LUSTRE_TARGET_PROP_ATTR_INDEX,
-	LUSTRE_TARGET_PROP_ATTR_UUID,
-	LUSTRE_TARGET_PROP_ATTR_STATUS,
-
-	__LUSTRE_TARGET_PROP_ATTR_MAX_PLUS_ONE,
-};
-
-#define LUSTRE_TARGET_PROP_ATTR_MAX	(__LUSTRE_TARGET_PROP_ATTR_MAX_PLUS_ONE - 1)
+int lustre_stats_put_dataset(struct lustre_nl_ctx *ctx, struct sk_buff *msg,
+			     void *data);
 
 /* prototype for callback function on kuc groups */
 typedef int (*libcfs_kkuc_cb_t)(void *data, void *cb_arg);

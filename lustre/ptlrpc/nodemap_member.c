@@ -71,6 +71,7 @@ void nm_member_delete_list(struct lu_nodemap *nodemap)
 static void nm_register_obd_stats(struct lu_nodemap *nm, struct obd_export *exp)
 {
 	struct obd_device *obd = exp->exp_obd;
+	int rc;
 
 	if (unlikely(!exp->exp_obd->obd_stats && !exp->exp_obd->obd_md_stats))
 		return;
@@ -103,6 +104,13 @@ static void nm_register_obd_stats(struct lu_nodemap *nm, struct obd_export *exp)
 				    nm->nm_pde_data->npe_debugfs_entry,
 				    nm->nm_md_stats,
 				    &ldebugfs_stats_seq_fops);
+		snprintf(nm->nm_md_stats->ls_source,
+			 sizeof(nm->nm_md_stats->ls_source),
+			 "nodemap_md.%s", nm->nm_name);
+		rc = lprocfs_stats_register_netlink(nm->nm_md_stats);
+		if (rc)
+			CWARN("%s: failed to register md stats for nodemap %s: rc = %d\n",
+			      obd->obd_name, nm->nm_name, rc);
 	}
 	if (obd->obd_stats && !nm->nm_dt_stats) {
 		nm->nm_dt_stats = lprocfs_stats_dup(obd->obd_stats);
@@ -115,6 +123,13 @@ static void nm_register_obd_stats(struct lu_nodemap *nm, struct obd_export *exp)
 				    nm->nm_pde_data->npe_debugfs_entry,
 				    nm->nm_dt_stats,
 				    &ldebugfs_stats_seq_fops);
+		snprintf(nm->nm_dt_stats->ls_source,
+			 sizeof(nm->nm_dt_stats->ls_source),
+			 "nodemap_dt.%s", nm->nm_name);
+		rc = lprocfs_stats_register_netlink(nm->nm_dt_stats);
+		if (rc)
+			CWARN("%s: failed to register dt stats for nodemap %s: rc = %d\n",
+			      obd->obd_name, nm->nm_name, rc);
 	}
 
 unlock:

@@ -16,6 +16,7 @@
 #define DEBUG_SUBSYSTEM S_CLASS
 
 #include <linux/glob.h>
+#include <linux/xarray.h>
 
 #include <obd_class.h>
 #include <lprocfs_status.h>
@@ -1511,18 +1512,6 @@ struct lprocfs_stats *ldebugfs_stats_alloc(int num, char *name,
 	if (!stats)
 		return NULL;
 
-	xa_lock(&lstats_list);
-	stats->ls_index = atomic_read(&lstats_count);
-	rc = __xa_alloc(&lstats_list, &stats->ls_index, stats, xa_limit_31b,
-			GFP_KERNEL);
-	if (rc < 0) {
-		xa_unlock(&lstats_list);
-		lprocfs_stats_free(&stats);
-		return NULL;
-	}
-	atomic_inc(&lstats_count);
-	xa_unlock(&lstats_list);
-
 	param = strrchr(name, '.');
 	if (param) {
 		len -= strlen(param);
@@ -1531,12 +1520,60 @@ struct lprocfs_stats *ldebugfs_stats_alloc(int num, char *name,
 		param = name;
 	}
 
-	strscpy(stats->ls_source, name, len + 1);
+	strscpy(stats->ls_source, name, min(len + 1, sizeof(stats->ls_source)));
+	rc = lprocfs_stats_register_netlink(stats);
+	if (rc < 0) {
+		lprocfs_stats_free(&stats);
+		return NULL;
+	}
+
 	debugfs_create_file(param, 0644, debugfs_entry, stats,
 			    &ldebugfs_stats_seq_fops);
 	return stats;
 }
 EXPORT_SYMBOL(ldebugfs_stats_alloc);
+
+/**
+ * lprocfs_stats_register_netlink() - Make a stats object visible to netlink.
+ * @stats: lprocfs_stats with ls_source already filled in, e.g. the
+ *	dot-separated parameter path minus its ".stats" leaf
+ *
+ * Adds @stats to the lstats_list xarray so it is discoverable by
+ * LUSTRE_CMD_STATS netlink.  Does not create debugfs files -- the caller
+ * is responsible for those.  Cleanup is automatic: lprocfs_stats_free()
+ * removes the xarray entry when ls_index != -1.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+int lprocfs_stats_register_netlink(struct lprocfs_stats *stats)
+{
+	int rc;
+
+	if (!stats || !stats->ls_source[0])
+		return -EINVAL;
+
+	xa_lock(&lstats_list);
+	/* seeding ls_index is only needed before v5.0-rc5-5-ga3e4d3f97e,
+	 * where __xa_alloc() used *id as the starting point of the search
+	 */
+	stats->ls_index = atomic_read(&lstats_count);
+	rc = __xa_alloc(&lstats_list, &stats->ls_index, stats, xa_limit_31b,
+			GFP_KERNEL);
+	if (rc < 0) {
+		/* ls_index is not valid after a failed __xa_alloc(), so
+		 * reset it to -1 so that stats_free() doesn't later
+		 * __xa_erase() an index it doesn't own
+		 */
+		stats->ls_index = -1;
+		xa_unlock(&lstats_list);
+		return rc;
+	}
+	atomic_inc(&lstats_count);
+	xa_unlock(&lstats_list);
+
+	return 0;
+}
+EXPORT_SYMBOL(lprocfs_stats_register_netlink);
 
 static void stats_free(struct kref *kref)
 {
@@ -1606,10 +1643,10 @@ struct lprocfs_stats *lprocfs_stats_dup(struct lprocfs_stats *stats)
 }
 EXPORT_SYMBOL(lprocfs_stats_dup);
 
-unsigned int lustre_stats_scan(struct lustre_stats_list *slist, const char *source)
+int lprocfs_stats_scan(struct xa_state *xas, const char *source)
 {
-	struct lprocfs_stats *item, **stats;
-	unsigned int cnt = 0, snum = 0, i;
+	struct lprocfs_stats *item;
+	unsigned int snum = 0, i;
 	unsigned long idx = 0;
 
 	if (source) {
@@ -1620,6 +1657,8 @@ unsigned int lustre_stats_scan(struct lustre_stats_list *slist, const char *sour
 	}
 
 	xa_for_each(&lstats_list, idx, item) {
+		int rc;
+
 		if (!kref_get_unless_zero(&item->ls_refcount))
 			continue;
 
@@ -1668,7 +1707,6 @@ unsigned int lustre_stats_scan(struct lustre_stats_list *slist, const char *sour
 				len = start - src;
 				snprintf(filter, sizeof(filter), "%.*s%s",
 					 len, src, source + 1);
-				filter[strlen(filter) - 1] = '\0';
 			} else {
 				strscpy(filter, source, strlen(source) + 1);
 			}
@@ -1678,17 +1716,16 @@ unsigned int lustre_stats_scan(struct lustre_stats_list *slist, const char *sour
 				continue;
 			}
 		}
-		stats = genradix_ptr_alloc(&slist->gfl_list, slist->gfl_count++,
-					   GFP_ATOMIC);
-		if (!stats) {
+
+		/* should we be more forgiving */
+		rc = lustre_cache_object(xas, item);
+		if (rc) {
 			lprocfs_stats_free(&item);
-			return -ENOMEM;
+			return rc;
 		}
-		*stats = item;
-		cnt += item->ls_num;
 	}
 
-	return slist->gfl_count ? cnt : -ENOENT;
+	return 0;
 }
 
 u64 lprocfs_stats_collector(struct lprocfs_stats *stats, int idx,
