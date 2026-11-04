@@ -12330,6 +12330,12 @@ test_56Em() {
 }
 run_test 56Em "lfs find --threads resource use on a wide directory"
 
+test_56En() {
+	# the codec needs no filesystem, only the chunks it writes and reads
+	llapi_lfu_test || error "llapi_lfu_test failed"
+}
+run_test 56En "llapi LFU Object Stream codec tests"
+
 test_57a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	# note test will not do anything if MDS is not local

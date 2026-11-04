@@ -72,6 +72,7 @@ endif
 
 pkglib_LTLIBRARIES =
 lib_LTLIBRARIES = liblustreapi.la
+noinst_LTLIBRARIES = liblfu_codec.la
 
 lctl_SOURCES = lctl.c debug.c lustre_cfg.c lustre_param.c
 lctl_SOURCES += lctl_thread.c lctl_thread.h obd.c obdctl.h portals.c
@@ -123,6 +124,7 @@ liblustreapi_la_SOURCES = libhsm_scanner.c \
 			  liblustreapi_ladvise.c \
 			  liblustreapi_layout.c \
 			  liblustreapi_lease.c \
+			  lustreapi_lfu.h \
 			  liblustreapi_lseek.c \
 			  liblustreapi_mirror.c \
 			  liblustreapi_nodemap.c \
@@ -147,9 +149,15 @@ liblustreapi_la_CFLAGS = -fPIC -D_GNU_SOURCE $(LIBNL3_CFLAGS) \
 			 -DLUSTRE_UTILS=1
 liblustreapi_la_LDFLAGS = $(LIBREADLINE) -version-info 1:0:0 \
 			  -Wl,--version-script=liblustreapi.map
-liblustreapi_la_LIBADD = $(top_builddir)/lib/libcfs/libcfs.la \
+liblustreapi_la_LIBADD = liblfu_codec.la \
+			 $(top_builddir)/lib/libcfs/libcfs.la \
 			 $(top_builddir)/lnet/utils/lnetconfig/liblnetconfig.la \
 			 $(LIBNL3_LIBS) -lpthread
+
+# The LFU codec is a library of its own so that llapi_lfu_test can link
+# the writer, which liblustreapi.map does not export.
+liblfu_codec_la_SOURCES = liblustreapi_lfu.c lustreapi_lfu.h
+liblfu_codec_la_CFLAGS = $(liblustreapi_la_CFLAGS)
 
 #
 # llapi_scan_device()'s backend.  With plugins -- the default -- it is a

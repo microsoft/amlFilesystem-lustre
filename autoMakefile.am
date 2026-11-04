@@ -58,6 +58,8 @@ install-data-local:
 			$(INSTALL) -D -m 0644 $${fname} $(DESTDIR)$(includedir)/$${target}; \
 		fi; \
 	done
+	$(INSTALL) -D -m 0644 include/uapi/linux/lustre/lfu.capnp \
+		$(DESTDIR)$(includedir)/linux/lustre/lfu.capnp
 if MODULES
 	mkdir -p $(DESTDIR)$(modulefsdir)
 	for ko in $$(find lustre/ ldiskfs/ -name '*.ko' 2>/dev/null); do \
@@ -113,6 +115,7 @@ EXTRA_DIST = @PACKAGE_TARNAME@.spec	\
 	modules.order			\
 	config/lustre-version.m4 \
 	config/embed-btf.sh \
+	include/uapi/linux/lustre/lfu.capnp \
 	contrib \
 	lustre/kernel_patches \
 	lustre/ChangeLog \

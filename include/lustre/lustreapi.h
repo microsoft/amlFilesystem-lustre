@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <linux/lustre/lustre_user.h>
+#include <linux/lustre/lustre_lfu_capnp.h>
 #include <fcntl.h>
 
 #if defined(__cplusplus)
@@ -1004,6 +1005,98 @@ int llapi_find_device(const char *target, struct find_param *param,
 int llapi_scan_rec_path(int mnt_fd, const char *mnt_path,
 			const struct llapi_scan_rec *rec,
 			char *buf, size_t buflen);
+/*
+ * The LFU Object Stream: many objects at once, in chunks of the Cap'n Proto
+ * format that lfu.capnp defines and lustre_lfu_capnp.h describes.  Unlike
+ * struct llapi_scan_rec, a chunk is flat and position-independent, so it
+ * can be written to a file, passed between processes, or later cross the
+ * kernel and the network as it is.
+ */
+
+/* the longest cursor a Lustre producer writes */
+#define LLAPI_SCAN_CURSOR_MAX	40
+
+/* room in struct llapi_scan_inode for LfuEa's Data fields, and later ones */
+#define LLAPI_SCAN_EA_SLOTS	16
+
+/* A Data field: bytes inside a chunk, or ld_buf NULL when it is null. */
+struct llapi_scan_data {
+	const void	*ld_buf;
+	__u32		 ld_len;
+	__u32		 ld_padding;
+};
+
+/**
+ * struct llapi_scan_inode - one LfuInode, decoded
+ *
+ * The scalars are LfuInode's, in host order.  li_valid holds LFU_ATTR_BIT()
+ * of those that are filled, when the stream has LFU_FEATURE_PARTIAL_RECORDS;
+ * otherwise every scalar is.  li_ea[] are indexed by enum lfu_ea, the Data
+ * fields only: those below LFU_EA_DATA_MAX.  LfuEa.xattrs is a list, is not
+ * decoded, and leaves its slot empty.  The EAs point into the chunk, so they
+ * are valid as long as it is.  Their bytes are the EA values as the target
+ * stores them.
+ *
+ * The times are seconds, and li_*_nsec the nanoseconds within them.  li_ino
+ * is the object's inode number on its target, which is neither unique
+ * across targets nor what a client sees.
+ *
+ * li_spare[] and the slots of li_ea[] from LFU_EA_DATA_MAX on are room for
+ * what a later schema adds, and are zero until then.  The reader fills the
+ * whole struct, so a program built against this header goes on working
+ * with a library that knows more fields.
+ */
+struct llapi_scan_inode {
+	struct lu_fid		li_fid;
+	__u64			li_size;
+	__u64			li_blocks;
+	__s64			li_atime;
+	__s64			li_mtime;
+	__s64			li_ctime;
+	__s64			li_btime;
+	__u32			li_mode;
+	__u32			li_uid;
+	__u32			li_gid;
+	__u32			li_projid;
+	__u32			li_nlink;
+	__u32			li_flags;	/* LUSTRE_*_FL */
+	__u32			li_rdev;
+	__u32			li_valid;	/* LFU_ATTR_BIT() */
+	__u64			li_ino;		/* on the target */
+	__u32			li_atime_nsec;
+	__u32			li_mtime_nsec;
+	__u32			li_ctime_nsec;
+	__u32			li_btime_nsec;
+	__u64			li_spare[8];
+	struct llapi_scan_data	li_ea[LLAPI_SCAN_EA_SLOTS];
+};
+
+/**
+ * struct llapi_scan_chunk - one chunk of a bulk, as llapi_scan_chunk_parse()
+ * found it
+ *
+ * lc_slots is how far to step to the next chunk.  lc_which says which
+ * member of LfuChunk's union this chunk carries; only LFU_CHUNK_INODES
+ * is decoded, with lc_count records.  lc_private is the reader's own state,
+ * and not part of the interface.
+ */
+struct llapi_scan_chunk {
+	__u32			lc_slots;
+	__u32			lc_scanned;	/* LfuChunk.scanned */
+	__u32			lc_errors;	/* LfuChunk.errors */
+	__u32			lc_which;	/* enum lfu_chunk_which */
+	__u32			lc_count;	/* records */
+	__u32			lc_skipped;	/* entries of skipped */
+	struct llapi_scan_data	lc_cursor;
+	__u64			lc_private[6];
+};
+
+int llapi_scan_chunk_parse(const void *buf, size_t len, __u32 chunk_size,
+			   struct llapi_scan_chunk *ch);
+int llapi_scan_chunk_inode(const struct llapi_scan_chunk *ch, __u32 idx,
+			   struct llapi_scan_inode *li);
+int llapi_scan_chunk_skipped(const struct llapi_scan_chunk *ch, __u32 idx,
+			     struct lu_fid *fid, int *error);
 
 int llapi_file_fget_mdtidx(int fd, int *mdtidx);
 int llapi_dir_set_default_lmv(const char *name,

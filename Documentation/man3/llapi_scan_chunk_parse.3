@@ -1,0 +1,251 @@
+.TH LLAPI_SCAN_CHUNK_PARSE 3 2026-11-04 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_scan_chunk_parse, llapi_scan_chunk_inode, llapi_scan_chunk_skipped \- read LFU Object Stream chunks
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_scan_chunk_parse(const void *" buf ", size_t " len ,
+.BI "                           __u32 " chunk_size ,
+.BI "                           struct llapi_scan_chunk *" ch ");"
+.BI "int llapi_scan_chunk_inode(const struct llapi_scan_chunk *" ch ,
+.BI "                           __u32 " idx ,
+.BI "                           struct llapi_scan_inode *" li ");"
+.BI "int llapi_scan_chunk_skipped(const struct llapi_scan_chunk *" ch ,
+.BI "                             __u32 " idx ", struct lu_fid *" fid ,
+.BI "                             int *" error ");"
+.fi
+.SH DESCRIPTION
+The LFU Object Stream carries many objects at once. Its format is
+defined in Cap'n Proto by
+.IR lfu.capnp ,
+installed beside the Lustre headers as
+.IR <linux/lustre/lfu.capnp> ,
+and
+.I <linux/lustre/lustre_lfu_capnp.h>
+gives its enum values and field offsets to C.
+.LP
+A stream is read as a bulk: an array of slots of
+.I chunk_size
+bytes, a power of two between
+.B LFU_CHUNK_SIZE_MIN
+and
+.BR LFU_CHUNK_SIZE_MAX .
+Each chunk is one unpacked, single-segment Cap'n Proto message whose root
+is an
+.BR LfuChunk .
+It starts on a slot boundary and spans one slot, or several for a
+"jumbo" chunk holding an object too large for one. These functions read
+such chunks in place, without a Cap'n Proto library and without copying
+them. Any other Cap'n Proto reader may read the same bytes.
+.LP
+.B llapi_scan_chunk_parse()
+reads the chunk that starts at
+.IR buf ,
+which must be 8-byte aligned, with
+.I len
+bytes valid from there to the end of the bulk. It fills
+.I ch
+with the chunk's counters and the number of slots it spans,
+.IR lc_slots ,
+which is how far to step to the next chunk:
+.LP
+.nf
+.RS
+struct llapi_scan_chunk {
+        __u32   lc_slots;       /* slots this chunk spans */
+        __u32   lc_scanned;     /* LfuChunk.scanned */
+        __u32   lc_errors;      /* LfuChunk.errors */
+        __u32   lc_which;       /* enum lfu_chunk_which */
+        __u32   lc_count;       /* records */
+        __u32   lc_skipped;     /* entries of LfuChunk.skipped */
+        struct llapi_scan_data lc_cursor;
+        __u64   lc_private[6];  /* the reader's own */
+};
+.RE
+.fi
+.LP
+.I lc_which
+says which member of the chunk's union it carries.
+.B LFU_CHUNK_INODES
+holds
+.I lc_count
+records;
+.B LFU_CHUNK_EMPTY
+holds none and reports progress only. The other members are not decoded
+here, and their
+.I lc_count
+is 0.
+.I lc_cursor
+is where a read resumes after this chunk.
+.LP
+.B llapi_scan_chunk_inode()
+decodes record
+.I idx
+of an inodes chunk into
+.IR li :
+.LP
+.nf
+.RS
+struct llapi_scan_data {
+        const void      *ld_buf;        /* NULL: absent */
+        __u32            ld_len;
+        __u32            ld_padding;
+};
+\&
+struct llapi_scan_inode {
+        struct lu_fid   li_fid;
+        __u64           li_size;
+        __u64           li_blocks;
+        __s64           li_atime;
+        __s64           li_mtime;
+        __s64           li_ctime;
+        __s64           li_btime;
+        __u32           li_mode;
+        __u32           li_uid;
+        __u32           li_gid;
+        __u32           li_projid;
+        __u32           li_nlink;
+        __u32           li_flags;
+        __u32           li_rdev;
+        __u32           li_valid;       /* LFU_ATTR_BIT() */
+        __u64           li_ino;
+        __u32           li_atime_nsec;
+        __u32           li_mtime_nsec;
+        __u32           li_ctime_nsec;
+        __u32           li_btime_nsec;
+        __u64           li_spare[1];
+        struct llapi_scan_data li_ea[LLAPI_SCAN_EA_SLOTS];
+};
+.RE
+.fi
+.LP
+The scalars are in host order. The timestamps are seconds since the
+epoch, and
+.IR li_atime_nsec ,
+.IR li_mtime_nsec ,
+.I li_ctime_nsec
+and
+.I li_btime_nsec
+the nanoseconds within those seconds, 0 where the source keeps whole
+seconds; the
+.B LFU_ATTR_*
+bit of each time covers its nanoseconds.
+.I li_ino
+is the object's inode number on its target, as the backend numbers it:
+not unique across targets, and not the number a client sees. It is 0
+where the source has none.
+.I li_flags
+holds
+.B LUSTRE_*_FL
+inode flags.
+.I li_valid
+says which scalars are filled when the stream has
+.BR LFU_FEATURE_PARTIAL_RECORDS ;
+otherwise all of them are.
+.I li_ea
+is indexed by
+.BR "enum lfu_ea" :
+.BR LFU_EA_PATH ,
+the path from the root of a namespace scan, then the values of
+.BR trusted.fid ,
+.BR trusted.link ,
+.BR trusted.lov ,
+.BR trusted.lmv ,
+.BR trusted.hsm ,
+.BR trusted.som ,
+.BR trusted.lma ,
+.BR trusted.dmv ,
+and at
+.B LFU_EA_ENC
+the encryption context, as the target stores them. Only the Data fields,
+those below
+.BR LFU_EA_DATA_MAX ,
+have a slot.
+.BR LFU_EA_XATTRS ,
+the list of other extended attributes, is not decoded and its slot stays
+empty, so a record that carries one shows no sign of it. The pointers
+point into the chunk and are valid as long as it is.
+.LP
+.I li_spare
+and the slots of
+.I li_ea
+from
+.B LFU_EA_DATA_MAX
+on are room for fields a later version of the format adds, and are zero
+until then. The whole structure is always filled, so a program built
+against an older header keeps working with a newer library.
+.LP
+.B llapi_scan_chunk_skipped()
+gives entry
+.I idx
+of the chunk's list of objects that a producer could not send: the
+object's FID in
+.I fid
+and the negative errno that says why in
+.IR error .
+.LP
+The bytes are not trusted. Every pointer is checked against the chunk
+before it is followed, and a struct written by an older version of the
+schema reads as zero past its end. A chunk from another process, a file
+or another node can be read safely.
+.SH RETURN VALUES
+These functions return 0 on success.
+.B llapi_scan_chunk_parse()
+returns
+.B -EINVAL
+for bytes that are not a chunk of this format: an unaligned
+.IR buf ,
+an invalid
+.IR chunk_size ,
+more than one segment, a segment that does not end on a slot boundary
+within
+.IR len ,
+or a root whose pointers leave the chunk.
+.B llapi_scan_chunk_inode()
+returns
+.B -EINVAL
+for a record whose EAs point outside the chunk.
+.B llapi_scan_chunk_inode()
+and
+.B llapi_scan_chunk_skipped()
+return
+.B -ERANGE
+for an
+.I idx
+past the end of their list.
+.SH EXAMPLES
+Print the FID of every object in a bulk of
+.I nslots
+slots:
+.LP
+.EX
+        size_t off = 0;
+\&
+        while (off < (size_t)nslots * chunk_size) {
+                struct llapi_scan_chunk ch;
+                struct llapi_scan_inode li;
+                __u32 i;
+\&
+                if (llapi_scan_chunk_parse(buf + off,
+                                          nslots * chunk_size - off,
+                                          chunk_size, &ch) != 0)
+                        break;
+                for (i = 0; i < ch.lc_count; i++)
+                        if (llapi_scan_chunk_inode(&ch, i, &li) == 0)
+                                printf(DFID"\\n", PFID(&li.li_fid));
+                off += (size_t)ch.lc_slots * chunk_size;
+        }
+.EE
+.SH AVAILABILITY
+.BR llapi_scan_chunk_parse() ,
+.B llapi_scan_chunk_inode()
+and
+.B llapi_scan_chunk_skipped()
+are part of the
+.BR lustre (7)
+user application interface library since release 2.18.0.
+.\" Added in commit v2_17_60-xxx-gxxxxxxxxx
+.SH SEE ALSO
+.BR llapi_scan_device (3),
+.BR lustreapi (7)
