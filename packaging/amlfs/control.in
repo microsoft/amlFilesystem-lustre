@@ -1,0 +1,6 @@
+@NATIVE_FIELDS@
+Maintainer: Azure Managed Lustre FS <amlfs@microsoft.com>
+Section: admin
+Priority: optional
+Description: AMLFS Lustre @KIND@ (isolated test build, not production approved)
+ Source/runtime identity is recorded separately from the native package version.
