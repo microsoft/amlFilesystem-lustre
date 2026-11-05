@@ -61,8 +61,14 @@ else
                 *\"*|*%*|*$'\n'*) echo "Unsafe RPM payload path" >&2; exit 1 ;;
             esac
             if [ -d "$file" ] && [ ! -L "$file" ]; then
-                # The filesystem package owns merged-/usr symlink ancestors.
-                case "$file" in lib|lib64|bin|sbin) continue ;; esac
+                # FHS ancestors belong to the distro, including its 0555 modes
+                # and merged-/usr symlinks, not to this staged payload.
+                case "$file" in
+                    bin|sbin|lib|lib64|etc|usr|var|run|opt|\
+                    usr/bin|usr/sbin|usr/lib|usr/lib64|usr/include|usr/src|usr/share|\
+                    usr/share/doc|usr/share/man|usr/share/man/man[1-9]|\
+                    lib/modules|usr/lib/modules|var/lib|var/run) continue ;;
+                esac
                 printf '%%dir "/%s"\n' "$file"
             elif [[ "$file" = etc/* ]]; then
                 printf '%%config(noreplace) "/%s"\n' "$file"
