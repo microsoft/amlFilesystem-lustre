@@ -108,7 +108,7 @@ index b669bbec..f9a09807 100644
  {
  	struct super_block *sb = pde_data(file_inode(seq->file));
  	ext4_group_t group = (ext4_group_t) ((unsigned long) v);
-+	struct ext4_group_desc *gdp = ext4_get_group_desc(sb, group, NULL);
++	struct ext4_group_desc *gdp;
  	int i, err;
  	char nbuf[16];
 +	int free = 0;
@@ -119,10 +119,10 @@ index b669bbec..f9a09807 100644
  	DEFINE_RAW_FLEX(struct ext4_group_info, sg, bb_counters,
  			EXT4_MAX_BLOCK_LOG_SIZE + 2);
  
+ 	group--;
++	gdp = ext4_get_group_desc(sb, group, NULL);
 +	if (gdp)
 +		free = ext4_free_group_clusters(sb, gdp);
-+
- 	group--;
  	if (group == 0)
 -		seq_puts(seq, "#group: free  frags first ["
 +		seq_puts(seq, "#group: bfree gfree frags first pa    ["
