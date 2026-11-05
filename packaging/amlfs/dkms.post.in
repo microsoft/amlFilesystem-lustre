@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+module=amlfs-lustre-client
+version='@DKMS_VERSION@'
+status=$(dkms status -m "$module" -v "$version")
+if [ -z "$status" ]; then
+    dkms add -m "$module" -v "$version"
+fi
+count=0
+for tree in /lib/modules/*; do
+    [ -d "$tree" ] || continue
+    [ -d "$tree/build" ] || {
+        echo "Missing DKMS headers for ${tree##*/}; install failed, not deferred." >&2
+        exit 1
+    }
+    kernel=${tree##*/}
+    dkms build -m "$module" -v "$version" -k "$kernel"
+    dkms install -m "$module" -v "$version" -k "$kernel"
+    depmod -a "$kernel"
+    @INITRAMFS@
+    count=$((count + 1))
+done
+[ "$count" -gt 0 ] || {
+    echo "No kernel targets for DKMS; installation is incomplete." >&2
+    exit 1
+}

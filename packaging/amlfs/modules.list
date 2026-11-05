@@ -1,0 +1,16 @@
+libcfs libcfs/libcfs
+lnet lnet/lnet
+lnet_selftest lnet/selftest
+ksocklnd lnet/klnds/socklnd
+ko2iblnd lnet/klnds/o2iblnd
+fid lustre/fid
+fld lustre/fld
+lmv lustre/lmv
+lov lustre/lov
+lustre lustre/llite
+mdc lustre/mdc
+mgc lustre/mgc
+obdclass lustre/obdclass
+obdecho lustre/obdecho
+osc lustre/osc
+ptlrpc lustre/ptlrpc
