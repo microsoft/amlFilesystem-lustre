@@ -61,6 +61,8 @@ else
                 *\"*|*%*|*$'\n'*) echo "Unsafe RPM payload path" >&2; exit 1 ;;
             esac
             if [ -d "$file" ] && [ ! -L "$file" ]; then
+                # The filesystem package owns merged-/usr symlink ancestors.
+                case "$file" in lib|lib64|bin|sbin) continue ;; esac
                 printf '%%dir "/%s"\n' "$file"
             elif [[ "$file" = etc/* ]]; then
                 printf '%%config(noreplace) "/%s"\n' "$file"
