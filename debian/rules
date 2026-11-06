@@ -43,6 +43,47 @@ else
         CFLAGS += -O2
 endif
 
+# dh_strip does not process kernel modules (relocatable ELF), so the packages
+# that ship them, the modules packages and lustre-tests, strip them with
+# $(call strip_ko,<package>).  It honors the same DEB_BUILD_OPTIONS: nostrip
+# leaves the modules as built, noautodbgsym and noddebs omit the -dbgsym
+# package.
+KO_DBGSYM := $(if $(filter noautodbgsym noddebs,$(DEB_BUILD_OPTIONS)),,yes)
+# Overridable, e.g. STRIP=llvm-strip for an LLVM toolchain.
+STRIP ?= strip
+OBJCOPY ?= objcopy
+READELF ?= readelf
+
+# Move the debug info of the modules in debian/<package> into its -dbgsym
+# package, laid out as dh_strip would (dh_gencontrol and dh_builddeb pick it
+# up), then strip the module.  Debug info only: .symtab is needed to load the
+# module.  Run it after dh_strip, which may have filled the -dbgsym package
+# with the package's binaries: the build-ids are appended to its list on the
+# same line, as dh_strip writes them.
+ifeq (,$(filter nostrip,$(DEB_BUILD_OPTIONS)))
+define strip_ko
+set -e; \
+info=debian/.debhelper/$(1); \
+bid=$$info/dbgsym-root/usr/lib/debug/.build-id; \
+for ko in $$(find debian/$(1) -type f -name '*.ko' | sort); do \
+	if [ -n "$(KO_DBGSYM)" ]; then \
+		id=$$(LC_ALL=C $(READELF) -n $$ko | \
+		      sed -n 's/^ *Build ID: *//p'); \
+		test -n "$$id" || \
+			{ echo "$$ko: no build-id" >&2; exit 1; }; \
+		sub=$$(echo $$id | sed 's|^..|&/|'); \
+		mkdir -p $$bid/$${sub%/*}; \
+		$(OBJCOPY) --only-keep-debug $$ko $$bid/$$sub.debug; \
+		ids="$$ids $$id"; \
+	fi; \
+	$(STRIP) --strip-debug $$ko; \
+done; \
+test -z "$$ids" || printf '%s ' $$ids >> $$info/dbgsym-build-ids
+endef
+else
+strip_ko =
+endif
+
 # This is the debhelper compatibility version to use.
 export DH_COMPAT=11
 
@@ -435,6 +476,7 @@ binary-$(TESTS_PKG): build-stamp
 	dh_installchangelogs -p $(TESTS_PKG) lustre/ChangeLog
 	dh_compress -p $(TESTS_PKG)
 	dh_strip -p $(TESTS_PKG)
+	$(call strip_ko,$(TESTS_PKG))
 	dh_installdeb -p $(TESTS_PKG)
 	dh_fixperms -p $(TESTS_PKG)
 	dh_gencontrol -p $(TESTS_PKG)
@@ -687,6 +729,7 @@ binary-modules: prep-deb-files
 	dh_installchangelogs -p$(PKGNAME)
 	dh_installmodules -p $(PKGNAME)
 	dh_compress -p $(PKGNAME)
+	$(call strip_ko,$(PKGNAME))
 	dh_fixperms -p $(PKGNAME)
 	sed "s/depmod -a/depmod -a $(KVERS)/" $(CURDIR)/debian/postinst > $(CURDIR)/debian/$(PKGNAME).postinst
 	sed "s/depmod -a/depmod -a $(KVERS)/" $(CURDIR)/debian/postrm > $(CURDIR)/debian/$(PKGNAME).postrm
