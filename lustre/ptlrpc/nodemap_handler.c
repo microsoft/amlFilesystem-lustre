@@ -90,12 +90,13 @@ static void nodemap_destroy(struct lu_nodemap *nodemap)
 	fileset_alt_destroy_tree(nodemap);
 	up_write(&nodemap->nm_fileset_alt_lock);
 
+	if (nodemap->nm_parent_nm)
+		list_del(&nodemap->nm_parent_entry);
+
 	mutex_unlock(&active_config_lock);
 
-	if (nodemap->nm_parent_nm) {
-		list_del(&nodemap->nm_parent_entry);
+	if (nodemap->nm_parent_nm)
 		nodemap_putref(nodemap->nm_parent_nm);
-	}
 
 	if (!list_empty(&nodemap->nm_member_list))
 		CWARN("nodemap_destroy failed to reclassify all members\n");
@@ -5062,47 +5063,79 @@ bool nodemap_has_dynamic_nodemaps(void)
 }
 EXPORT_SYMBOL(nodemap_has_dynamic_nodemaps);
 
+struct nodemap_dyn_names {
+	char		(*ndn_names)[LUSTRE_NODEMAP_NAME_LENGTH + 1];
+	unsigned int	  ndn_count;
+	unsigned int	  ndn_size;
+};
+
+static int nodemap_dyn_names_cb(struct cfs_hash *hs, struct cfs_hash_bd *bd,
+				struct hlist_node *hnode, void *data)
+{
+	struct nodemap_dyn_names *dyn = data;
+	struct lu_nodemap *nodemap;
+
+	nodemap = hlist_entry(hnode, struct lu_nodemap, nm_hash);
+	/*
+	 * nodemap_del() also deletes the sub-nodemaps of a nodemap. Thus take
+	 * only a nodemap with a persistent parent. Skip GSSIAM nodemaps, so
+	 * that nodemap_config_set_active() can migrate them.
+	 */
+	if (!nodemap->nm_dyn || nodemap->nmf_gssiam_managed ||
+	    !nodemap->nm_parent_nm || nodemap->nm_parent_nm->nm_dyn)
+		return 0;
+	if (dyn->ndn_count == dyn->ndn_size)
+		return 1;
+	strscpy(dyn->ndn_names[dyn->ndn_count++], nodemap->nm_name,
+		sizeof(dyn->ndn_names[0]));
+	return 0;
+}
+
 /**
  * nodemap_clear_dynamic_nodemaps() - Remove all dynamic nodemaps
  *
- * This function iterates over all persistent nodemaps and deletes their
- * sub-nodemaps.
+ * Copy the nodemap names under active_config_lock, then delete by name. Do not
+ * walk nm_list after the unlock, because each hash-to-list conversion under
+ * that lock relinks nm_list. The deletes walk nm_subnodemaps without that lock,
+ * so nodemap_clear_lock lets only one call delete at a time.
  */
 void nodemap_clear_dynamic_nodemaps(void)
 {
-	struct lu_nodemap *nodemap, *tmp;
-	struct lu_nodemap *dyn_nm, *dyn_nm_tmp;
-	LIST_HEAD(nodemap_list);
+	static DEFINE_MUTEX(nodemap_clear_lock);
+	struct nodemap_dyn_names dyn = { NULL };
+	struct lu_nodemap *nodemap;
+	unsigned int i;
+	bool is_dyn;
 
+	mutex_lock(&nodemap_clear_lock);
 	mutex_lock(&active_config_lock);
-	cfs_hash_for_each_safe(active_config->nmc_nodemap_hash, nm_hash_list_cb,
-			       &nodemap_list);
-
-	/* take refs on persistent nodemaps, remove dynamic ones from list */
-	list_for_each_entry_safe(nodemap, tmp, &nodemap_list, nm_list) {
-		if (nodemap->nm_dyn)
-			list_del(&nodemap->nm_list);
-		else
-			nodemap_getref(nodemap);
-	}
+	dyn.ndn_size = atomic_read(&active_config->nmc_dyn_count);
+	if (dyn.ndn_size)
+		OBD_ALLOC_PTR_ARRAY_LARGE(dyn.ndn_names, dyn.ndn_size);
+	if (dyn.ndn_names)
+		cfs_hash_for_each_safe(active_config->nmc_nodemap_hash,
+				       nodemap_dyn_names_cb, &dyn);
 	mutex_unlock(&active_config_lock);
 
-	/* for each persistent nodemap, delete its sub-nodemaps */
-	list_for_each_entry_safe(nodemap, tmp, &nodemap_list, nm_list) {
-		list_for_each_entry_safe(dyn_nm, dyn_nm_tmp,
-					 &nodemap->nm_subnodemaps,
-					 nm_parent_entry) {
-			/* nodemap_del() recursively deletes sub-dyn-nodemaps.
-			 * GSSIAM nodemaps are skipped here so they can be
-			 * migrated to the new configuration in
-			 * nodemap_config_set_active().
-			 */
-			if (!dyn_nm->nmf_gssiam_managed)
-				nodemap_del(dyn_nm->nm_name, NULL);
-		}
+	if (!dyn.ndn_names)
+		goto out;
 
+	CFS_FAIL_TIMEOUT(OBD_FAIL_MGS_NODEMAP_CLEAR_DELAY, cfs_fail_val);
+
+	for (i = 0; i < dyn.ndn_count; i++) {
+		/* A persistent nodemap can take the name after the copy. */
+		nodemap = nodemap_lookup_unlocked(dyn.ndn_names[i]);
+		if (IS_ERR(nodemap))
+			continue;
+		is_dyn = nodemap->nm_dyn;
 		nodemap_putref(nodemap);
+		if (is_dyn)
+			nodemap_del(dyn.ndn_names[i], NULL);
 	}
+
+	OBD_FREE_PTR_ARRAY_LARGE(dyn.ndn_names, dyn.ndn_size);
+out:
+	mutex_unlock(&nodemap_clear_lock);
 }
 EXPORT_SYMBOL(nodemap_clear_dynamic_nodemaps);
 

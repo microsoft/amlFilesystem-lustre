@@ -10774,6 +10774,70 @@ test_72f() {
 }
 run_test 72f "fileset_modify on dynamic nodemap"
 
+cleanup_72g() {
+	local nm=$1
+	local dyn=$2
+
+	do_facet mgs $LCTL set_param fail_loc=0 fail_val=0
+	do_facet mds1 $LCTL nodemap_del ${dyn}_1 || true
+	do_facet mds1 $LCTL nodemap_del ${dyn}_2 || true
+	do_facet mgs $LCTL nodemap_del $nm
+}
+
+test_72g() {
+	local nm=nm_test72g
+	local dyn=dyn_test72g
+	local active
+	local pid
+	local i
+
+	(( MGS_VERSION >= $(version_code 2.17.61) )) ||
+		skip "Need MGS >= 2.17.61 for the nodemap clear fail_loc"
+	[[ "$(facet_active_host mgs)" == "$(facet_active_host mds1)" ]] ||
+		skip "The MGS clears dynamic nodemaps only with a local target"
+
+	stack_trap "cleanup_72g $nm $dyn" EXIT
+
+	do_facet mgs $LCTL nodemap_add $nm ||
+		error "adding $nm on MGS failed"
+	wait_nm_sync $nm id '' inactive
+	do_facet mds1 $LCTL nodemap_add -d -p $nm ${dyn}_1 ||
+		error "adding dynamic nodemap ${dyn}_1 failed"
+	do_facet mds1 $LCTL nodemap_add -d -p $nm ${dyn}_2 ||
+		error "adding dynamic nodemap ${dyn}_2 failed"
+	do_facet mds1 $LCTL nodemap_add -d -p ${dyn}_1 ${dyn}_3 ||
+		error "adding dynamic nodemap ${dyn}_3 failed"
+
+	active=$(do_facet mgs $LCTL get_param -n nodemap.active)
+
+	# Stop the first nodemap change after it collects the dynamic nodemaps.
+	# nodemap_activate then relinks nm_list, and the second change starts
+	# the same clear.
+	#define OBD_FAIL_MGS_NODEMAP_CLEAR_DELAY 0x911
+	do_facet mgs $LCTL set_param fail_val=10 fail_loc=0x80000911
+	do_facet mgs $LCTL nodemap_modify --name $nm \
+		--property admin --value 1 &
+	pid=$!
+	sleep 3
+	kill -0 $pid 2>/dev/null ||
+		error "first nodemap change did not stop at the fail_loc"
+	do_facet mgs $LCTL nodemap_activate $active ||
+		error "nodemap_activate $active failed"
+	do_facet mgs $LCTL nodemap_modify --name $nm \
+		--property trusted --value 1 ||
+		error "second nodemap change failed"
+	wait $pid || error "first nodemap change failed"
+
+	for i in 1 2 3; do
+		do_facet mgs $LCTL get_param -n nodemap.${dyn}_$i.id \
+			2>/dev/null &&
+			error "dynamic nodemap ${dyn}_$i is still present"
+	done
+	do_facet mgs $LCTL nodemap_info ||
+		error "cannot list the nodemaps after the changes"
+}
+run_test 72g "concurrent nodemap changes clear dynamic nodemaps"
+
 test_73() {
 	local vaultdir1=$DIR/$tdir/vault1
 	local vaultdir2=$DIR/$tdir/vault2
