@@ -4107,6 +4107,14 @@ ost_watermarks_clear_enospc() {
 	echo "set OST$ost_idx lwm back to $old_lwm, hwm back to $old_hwm"
 }
 
+# Free destroyed objects even when the MDT counters are already zero.
+wait_delete_completed_osts() {
+	do_nodes $(osts_nodes) \
+		"$LCTL set_param -n obdfilter.*.force_sync=1 ||
+		 $LCTL set_param -n osd*.*OS*.force_sync=1" \
+		&> /dev/null || true
+}
+
 wait_delete_completed_mds() {
 	local max_wait=${1:-60}
 	local mds2sync=""
@@ -4127,12 +4135,18 @@ wait_delete_completed_mds() {
 	done
 	if [ -z "$mds2sync" ]; then
 		wait_zfs_commit_all
+		wait_delete_completed_osts
 		return 0
 	fi
 	mds2sync=$(comma_list $mds2sync)
 
 	# sync MDS transactions
 	do_nodes $mds2sync "$LCTL set_param -n os[cd]*.*MD*.force_sync 1"
+
+	# OSPs only learn of an OST commit from a later reply
+	sync_all_data_osts || true
+	do_nodes $mds2sync "$LCTL get_param -n osp.*OST*.ping" &> /dev/null ||
+		true
 
 	# wait till all changes are sent and commmitted by OSTs
 	# for ldiskfs space is released upon execution, but DMU
@@ -4145,6 +4159,7 @@ wait_delete_completed_mds() {
 		#echo "$node: $changes changes on all"
 		if [[ $changes -eq 0 ]]; then
 			wait_zfs_commit_all
+			wait_delete_completed_osts
 			return 0
 		fi
 		sleep 1
@@ -4154,6 +4169,7 @@ wait_delete_completed_mds() {
 	etime=$(date +%s)
 	echo "Delete is not completed in $((etime - stime)) seconds"
 	do_nodes $mds2sync "$LCTL get_param osc.*MDT*.sync_*"
+	wait_delete_completed_osts
 	return 1
 }
 
@@ -4343,6 +4359,7 @@ wait_delete_completed() {
 		   osp.*.destroys_in_flight 2>/dev/null" | calc_sum)
 	if (( pending == 0 )); then
 		wait_zfs_commit_all
+		wait_delete_completed_osts
 	else
 		wait_delete_completed_mds $1 || return $?
 		wait_destroy_complete $1 || return $?

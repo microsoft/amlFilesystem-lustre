@@ -12844,7 +12844,8 @@ test_64d() {
 
 
 	local max_cur_granted=$(($(want_grant $tgt) + $(grant_chunk $tgt)))
-	stack_trap "rm -f $DIR/$tfile && wait_delete_completed" EXIT
+	# the next tests need the MDTs to see OST0000 has space again
+	stack_trap "rm -f $DIR/$tfile && wait_delete_completed && sleep_maxage"
 
 	$LFS setstripe $DIR/$tfile -i 0 -c 1
 	dd if=/dev/zero of=$DIR/$tfile bs=1M count=1000 &
