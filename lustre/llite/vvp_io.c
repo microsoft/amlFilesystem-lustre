@@ -481,12 +481,6 @@ static int vvp_mmap_locks(const struct lu_env *env,
 			struct cl_object *obj = ll_i2info(inode)->lli_clob;
 			int flags = CEF_MUST;
 
-			if (ll_file_nolock(file)) {
-				/* For no lock case is not allowed for mmap */
-				result = -EINVAL;
-				break;
-			}
-
 			/* For EC recovery reads, tolerate stripes that are
 			 * already in LSS_READ_ERR state on the EC object
 			 * being reconstructed. CEF_HEED_ERROR tells the LOV
@@ -585,9 +579,8 @@ static int vvp_io_rw_lock(const struct lu_env *env, struct cl_io *io,
 		if (vio->vui_fd->lfd_file_flags & LL_FILE_GROUP_LOCKED)
 			io->ci_dio_lock = 1;
 
-		if (ll_file_nolock(vio->vui_fd->fd_file) ||
-		    (iocb_ki_flags_check(vio->vui_iocb, IOCB_DIRECT) &&
-		     !io->ci_dio_lock))
+		if (iocb_ki_flags_check(vio->vui_iocb, IOCB_DIRECT) &&
+		    !io->ci_dio_lock)
 			ast_flags |= CEF_NEVER;
 	}
 

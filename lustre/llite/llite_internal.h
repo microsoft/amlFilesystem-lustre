@@ -814,7 +814,7 @@ enum ll_sbi_flags {
 	LL_SBI_FOREIGN_SYMLINK_UPCALL,	/* foreign fake-symlink upcall set */
 	LL_SBI_LAZYSTATFS,		/* lazystatfs mount option */
 	LL_SBI_LRU_RESIZE,		/* lru resize support */
-	LL_SBI_NOLCK,			/* DLM locking disabled directio-only */
+	LL_SBI_NOLCK,			/* nolock mount option, ignored */
 	LL_SBI_STATFS_PROJECT,		/* statfs returns project quota */
 	LL_SBI_SYNC_ON_CLOSE,		/* files sync data on close */
 	LL_SBI_TEST_DUMMY_ENCRYPTION,	/* test dummy encryption */
@@ -1971,16 +1971,6 @@ dentry_may_statahead(struct inode *dir, struct dentry *dentry)
 int cl_sync_file_range(struct inode *inode, loff_t start, loff_t end,
 		       enum cl_fsync_mode mode, int ignore_layout,
 		       enum cl_io_priority prio);
-
-static inline int ll_file_nolock(const struct file *file)
-{
-	struct ll_file_data *fd = file->private_data;
-	struct inode *inode = file_inode((struct file *)file);
-
-	LASSERT(fd != NULL);
-	return ((fd->lfd_file_flags & LL_FILE_IGNORE_LOCK) ||
-		test_bit(LL_SBI_NOLCK, ll_i2sbi(inode)->ll_flags));
-}
 
 static inline void ll_set_lock_data(struct obd_export *exp, struct inode *inode,
 				    struct lookup_intent *it,

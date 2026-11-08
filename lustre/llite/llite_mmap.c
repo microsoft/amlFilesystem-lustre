@@ -91,9 +91,6 @@ ll_fault_io_init(struct lu_env *env, struct vm_area_struct *vma,
 
 	ENTRY;
 
-	if (ll_file_nolock(file))
-		RETURN(ERR_PTR(-EOPNOTSUPP));
-
 restart:
 	io = vvp_env_new_io(env);
 	io->ci_obj = ll_i2info(inode)->lli_clob;
@@ -587,9 +584,6 @@ int ll_file_mmap(struct file *file, struct vm_area_struct *vma)
 	       "VFS_Op: fid="DFID" vma=%p start=%#lx end=%#lx vm_flags=%#lx\n",
 	       PFID(&ll_i2info(inode)->lli_fid),
 	       vma, vma->vm_start, vma->vm_end, vma->vm_flags);
-
-	if (ll_file_nolock(file))
-		RETURN(-EOPNOTSUPP);
 
 	rc = pcc_file_mmap(file, vma, &cached);
 	if (cached && rc != 0)

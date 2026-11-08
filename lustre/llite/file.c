@@ -2073,12 +2073,8 @@ void ll_io_init(struct cl_io *io, struct file *file, enum cl_io_type iot,
 
 	io->ci_obj = ll_i2info(inode)->lli_clob;
 	io->ci_lockreq = CILR_MAYBE;
-	if (ll_file_nolock(file)) {
-		io->ci_lockreq = CILR_NEVER;
-		io->ci_no_srvlock = 1;
-	} else if (flags & IOCB_APPEND) {
+	if (flags & IOCB_APPEND)
 		io->ci_lockreq = CILR_MANDATORY;
-	}
 	io->ci_noatime = file_is_noatime(file);
 	io->ci_async_readahead = false;
 
@@ -3278,8 +3274,6 @@ ll_get_grouplock(struct inode *inode, struct file *file, unsigned long arg)
 		RETURN(rc);
 	}
 
-	if (ll_file_nolock(file))
-		RETURN(-EOPNOTSUPP);
 retry:
 	if (file->f_flags & O_NONBLOCK) {
 		if (!mutex_trylock(&lli->lli_group_mutex))
@@ -4926,37 +4920,6 @@ ll_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case LL_IOC_GETFLAGS:
 		/* Get the current value of the Lustre file flags */
 		return put_user(lfd->lfd_file_flags, (int __user *)arg);
-	case LL_IOC_SETFLAGS:
-	case LL_IOC_CLRFLAGS: {
-		enum ll_file_flags lfd_file_flags;
-
-		/* Set or clear specific Lustre file flags */
-		/* XXX This probably needs checks to ensure the flags are
-		 *     not abused, and to handle any flag side effects.
-		 */
-		if (get_user(lfd_file_flags, (int __user *)arg))
-			RETURN(-EFAULT);
-
-		/* LL_FILE_GROUP_LOCKED is managed via its own ioctls */
-		if (lfd_file_flags & LL_FILE_GROUP_LOCKED)
-			RETURN(-EINVAL);
-
-		if (cmd == LL_IOC_SETFLAGS) {
-			if ((lfd_file_flags & LL_FILE_IGNORE_LOCK) &&
-			    !(file->f_flags & O_DIRECT)) {
-				rc = -EINVAL;
-				CERROR("%s: unable to disable locking on non-O_DIRECT file "DFID": rc = %d\n",
-				       current->comm, PFID(ll_inode2fid(inode)),
-				       rc);
-				RETURN(rc);
-			}
-
-			lfd->lfd_file_flags |= lfd_file_flags;
-		} else {
-			lfd->lfd_file_flags &= ~lfd_file_flags;
-		}
-		RETURN(0);
-	}
 	case LL_IOC_LOV_SETSTRIPE:
 	case LL_IOC_LOV_SETSTRIPE_NEW:
 		if (sbi->ll_enable_setstripe_gid != MDT_INVALID_GID &&

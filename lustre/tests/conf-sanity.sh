@@ -13123,6 +13123,37 @@ test_162() {
 }
 run_test 162 "replace nids with -o noclient"
 
+test_163() {
+	setup
+	stack_trap "cleanup"
+
+	umount_client $MOUNT
+	mount_client $MOUNT "${MOUNT_OPTS:+$MOUNT_OPTS,}nolock" ||
+		error "mount with nolock failed"
+
+	dmesg | tail -30 | grep -q "nolock mount option ignored" ||
+		error "no console warning for ignored nolock option"
+
+	grep " $MOUNT " /proc/mounts | grep -qw nolock &&
+		error "nolock shown in mount options"
+
+	local locks_before=$(total_used_locks osc)
+
+	dd if=/dev/urandom of=$DIR/$tfile bs=1M count=8 ||
+		error "buffered write under nolock failed"
+	sync
+	rm -f $DIR/$tfile
+
+	local locks_after=$(total_used_locks osc)
+
+	(( locks_after > locks_before )) ||
+		error "buffered write under nolock took no DLM lock"
+
+	umount_client $MOUNT
+	mount_client $MOUNT || error "remount without nolock failed"
+}
+run_test 163 "nolock mount option is ignored, not honoured"
+
 cleanup_164() {
 	# Ensure all test mounts are cleaned up
 	for i in {1..5}; do

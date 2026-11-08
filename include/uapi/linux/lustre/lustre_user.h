@@ -700,6 +700,7 @@ struct ll_ioc_io_scope {
 /*	lustre_ioctl.h			101-150 */
 /* ioctl codes 128-143 are reserved for fsverity */
 #define LL_IOC_GETFLAGS			_IOR('f', 151, long)
+/* LL_IOC_SETFLAGS and LL_IOC_CLRFLAGS are unused, reserved */
 #define LL_IOC_SETFLAGS			_IOW('f', 152, long)
 #define LL_IOC_CLRFLAGS			_IOW('f', 153, long)
 #define LL_IOC_LOV_SETSTRIPE		_IOW('f', 154, long)
@@ -829,7 +830,7 @@ struct fsxattr {
 #define O_CIPHERTEXT		(O_NOCTTY | O_NDELAY | O_DSYNC)
 
 enum ll_file_flags {
-	LL_FILE_IGNORE_LOCK     = 0x00000001,
+	LL_FILE_IGNORE_LOCK     = 0x00000001, /* unused, reserved */
 	LL_FILE_GROUP_LOCKED    = 0x00000002,
 	LL_FILE_READAHEA        = 0x00000004,
 	LL_FILE_LOCKED_DIRECTIO = 0x00000008, /* client-side locks with dio */

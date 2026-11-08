@@ -1793,9 +1793,7 @@ enum cl_io_lock_dmd {
 	/** Always lock data (e.g., O_APPEND). */
 	CILR_MANDATORY = 0,
 	/** Layers are free to decide between local and global locking. */
-	CILR_MAYBE,
-	/** Never lock: there is no cache (e.g., liblustre). */
-	CILR_NEVER
+	CILR_MAYBE
 };
 
 enum cl_fsync_mode {
@@ -1984,11 +1982,6 @@ struct cl_io {
 	size_t			ci_bytes;
 	int			ci_result;
 	unsigned int		ci_continue:1,
-	/**
-	 * This io has held grouplock, to inform sublayers that
-	 * don't do lockless i/o.
-	 */
-			     ci_no_srvlock:1,
 	/**
 	 * The whole IO need to be restarted because layout has been changed
 	 */

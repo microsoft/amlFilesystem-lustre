@@ -838,19 +838,11 @@ void osc_lock_to_lockless(const struct lu_env *env,
 		ols->ols_locklessable = 1;
 		slice->cls_ops = ols->ols_lockless_ops;
 	} else {
-		LASSERT(io->ci_lockreq == CILR_MANDATORY ||
-			io->ci_lockreq == CILR_MAYBE ||
-			io->ci_lockreq == CILR_NEVER);
-
 		ocd = &class_exp2cliimp(osc_export(oob))->imp_connect_data;
 		ols->ols_locklessable = (io->ci_type != CIT_SETATTR) &&
 					(io->ci_lockreq == CILR_MAYBE) &&
 					(ocd->ocd_connect_flags &
 					 OBD_CONNECT_SRVLOCK);
-		if (io->ci_lockreq == CILR_NEVER) {
-			ols->ols_locklessable = 1;
-			slice->cls_ops = ols->ols_lockless_ops;
-		}
 	}
 	LASSERT(ergo(ols->ols_glimpse, !osc_lock_is_lockless(ols)));
 }

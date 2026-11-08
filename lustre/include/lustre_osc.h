@@ -841,7 +841,7 @@ static inline struct osc_lock *cl2osc_lock(const struct cl_lock_slice *slice)
 
 static inline int osc_io_srvlock(struct osc_io *oio)
 {
-	return (oio->oi_lockless && !oio->oi_cl.cis_io->ci_no_srvlock);
+	return oio->oi_lockless;
 }
 
 enum osc_extent_state {

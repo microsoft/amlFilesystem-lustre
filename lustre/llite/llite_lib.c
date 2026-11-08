@@ -1268,8 +1268,11 @@ static int ll_options(char *options, struct super_block *sb)
 		case LL_SBI_32BIT_API:
 		case LL_SBI_64BIT_HASH:
 		case LL_SBI_ALWAYS_PING:
-		case LL_SBI_NOLCK:
 			set_bit(token, sbi->ll_flags);
+			break;
+
+		case LL_SBI_NOLCK:
+			LCONSOLE_WARN("nolock mount option ignored, using normal locking\n");
 			break;
 
 		case LL_SBI_FLOCK:
@@ -4261,10 +4264,13 @@ int ll_show_options(struct seq_file *seq, struct dentry *dentry)
 	LASSERT(seq && dentry);
 	sbi = ll_s2sbi(dentry->d_sb);
 
-	if (test_bit(LL_SBI_NOLCK, sbi->ll_flags))
-		seq_puts(seq, "nolock");
-
 	for (i = 1; ll_sbi_flags_name[i].token != LL_SBI_NUM_MOUNT_OPT; i++) {
+		/* nolock is never set; showing it would only be misleading
+		 * since it matches the "no"-prefix check below.
+		 */
+		if (ll_sbi_flags_name[i].token == LL_SBI_NOLCK)
+			continue;
+
 		/* match_table in some cases has patterns for both enabled and
 		 * disabled cases. Ignore 'no'xxx versions if bit is set.
 		 */
