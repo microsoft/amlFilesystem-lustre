@@ -3354,7 +3354,8 @@ EXPORT_SYMBOL(osc_cache_wait_range);
  *           truncated, this implies there is no partially discarding extents.
  * @prio: priority of IO
  *
- * Return how many pages will be issued, or %-ERRNO if error occurred.
+ * Return how many pages this call queued for IO or discarded, or %-ERRNO if
+ * error occurred.
  */
 int osc_cache_writeback_range(const struct lu_env *env, struct osc_object *obj,
 			      pgoff_t start, pgoff_t end, int hp, int discard,
@@ -3364,6 +3365,7 @@ int osc_cache_writeback_range(const struct lu_env *env, struct osc_object *obj,
 	LIST_HEAD(discard_list);
 	bool active_ext_check = false;
 	bool unplug = false;
+	long cached = 0;
 	int result = 0;
 
 	ENTRY;
@@ -3390,7 +3392,7 @@ repeat:
 		ext->oe_fsync_wait = 1;
 		switch (ext->oe_state) {
 		case OES_CACHE:
-			result += ext->oe_nr_pages;
+			cached += ext->oe_nr_pages;
 			if (!discard) {
 				struct list_head *list = NULL;
 
@@ -3410,8 +3412,13 @@ repeat:
 					ext->oe_urgent = 1;
 					list = &obj->oo_urgent_exts;
 				}
-				if (list != NULL)
+				/* pages queued by an earlier call are not
+				 * progress: writeback would loop on them
+				 */
+				if (list != NULL) {
 					list_move_tail(&ext->oe_link, list);
+					result += ext->oe_nr_pages;
+				}
 				unplug = true;
 			} else {
 				struct client_obd *cli = osc_cli(obj);
@@ -3419,6 +3426,8 @@ repeat:
 				pgoff_t align_by = (1 << pcc_bits);
 				pgoff_t a_start = round_down(start, align_by);
 				pgoff_t a_end = round_up(end, align_by);
+
+				result += ext->oe_nr_pages;
 
 				/* overflow case */
 				if (end && !a_end)
@@ -3455,6 +3464,7 @@ repeat:
 					       &obj->oo_urgent_exts);
 				osc_update_pending(obj, OBD_BRW_WRITE,
 						   ext->oe_nr_pages);
+				result += ext->oe_nr_pages;
 				unplug = true;
 			}
 
@@ -3513,7 +3523,7 @@ repeat:
 	 * Otherwise, the user process writing the file may be dirty exceeded
 	 * and waiting endless in balance_dirty_pages().
 	 */
-	if (result == 0 && prio == IO_PRIO_DIRTY_EXCEEDED &&
+	if (cached == 0 && prio == IO_PRIO_DIRTY_EXCEEDED &&
 	    !active_ext_check && atomic_read(&obj->oo_nr_ios) &&
 	    obj->oo_npages > 0) {
 		active_ext_check = true;
