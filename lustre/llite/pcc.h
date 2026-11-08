@@ -136,6 +136,12 @@ struct pcc_dataset {
 };
 
 #define PCC_DEFAULT_ASYNC_THRESHOLD	(256 << 20)
+/*
+ * Mode of a PCC-RW copy of a file.  It may hold the only copy of the file
+ * data, so a purge tool must not remove a PCC file that has write permission.
+ * A PCC-RO copy keeps mode 0000, and can be dropped from the cache at any time.
+ */
+#define PCC_RW_FILE_MODE	0600
 /* buffer size for kernel buffered I/O for pcc attach
  *
  * performance barely varies for buffered I/O once size is more than a few

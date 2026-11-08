@@ -490,7 +490,8 @@ test_1e() {
 
 	local perm=$(do_facet $SINGLEAGT stat -c %a $lpcc_path)
 
-	[[ $perm == "0" ]] || error "PCC file permission ($perm) is not zero"
+	# the PCC-RW copy is writable, so that it is not purged from PCC
+	[[ $perm == "600" ]] || error "PCC file permission ($perm) is not 600"
 
 	do_facet $SINGLEAGT $RUNAS $LFS pcc attach -w -i $HSM_ARCHIVE_NUMBER \
 		$file || error "failed to attach file $file"
@@ -3863,7 +3864,7 @@ test_45() {
 }
 run_test 45 "Concurrent read access from two mount points"
 
-test_46() {
+test_46a() {
 	local loopfile="$TMP/$tfile"
 	local mntpt="/mnt/pcc.$tdir"
 	local hsm_root="$mntpt/$tdir"
@@ -3929,7 +3930,84 @@ test_46() {
 	check_lpcc_state $file "readonly" client
 	$runascmd $LFS pcc detach $file || error "Detach $file failed"
 }
-run_test 46 "Verify PCC mode setting works correctly"
+run_test 46a "Verify PCC mode setting works correctly"
+
+check_lpcc_mode() {
+	local lpcc_path=$1
+	local expected=$2
+	local mode
+
+	mode=$(do_facet $SINGLEAGT stat -c %a $lpcc_path) ||
+		error "stat $lpcc_path failed"
+	[[ $mode == $expected ]] ||
+		error "PCC copy $lpcc_path mode $mode != $expected"
+}
+
+test_46b() {
+	local loopfile="$TMP/$tfile"
+	local mntpt="/mnt/pcc.$tdir"
+	local hsm_root="$mntpt/$tdir"
+	local file=$DIR/$tdir/$tfile
+	local lpcc_path
+	local rule
+
+	$LCTL get_param -n mdc.*.connect_flags | grep -q pcc_ro ||
+		skip "Server does not support PCC-RO"
+
+	# remount before the copytool starts, or the unmount waits on it
+	enable_project_quota
+	setup_loopdev $SINGLEAGT $loopfile $mntpt 50
+	copytool setup -m "$MOUNT" -a "$HSM_ARCHIVE_NUMBER"
+	# no auto attach, so that a kept PCC-RW copy can be attached PCC-RO
+	rule="projid={100}\ rwid=$HSM_ARCHIVE_NUMBER"
+	rule+="\ auto_attach=0\ pccrw=1\ pccro=1"
+	setup_pcc_mapping $SINGLEAGT "$rule"
+	do_facet $SINGLEAGT $LFS mkdir -i0 -c1 $DIR/$tdir ||
+		error "mkdir $DIR/$tdir failed"
+
+	do_facet $SINGLEAGT "echo -n mode_test > $file" ||
+		error "write $file failed"
+	lpcc_path=$(lpcc_fid2path $hsm_root $file)
+
+	echo "a PCC-RO copy is not writable, so it can be purged"
+	do_facet $SINGLEAGT $LFS pcc attach -r -i $HSM_ARCHIVE_NUMBER $file ||
+		error "RO attach $file failed"
+	check_lpcc_state $file "readonly"
+	check_lpcc_mode $lpcc_path 0
+
+	do_facet $SINGLEAGT $LFS pcc detach $file ||
+		error "detach $file failed"
+
+	echo "a reused PCC-RW copy keeps its write permission"
+	file=$DIR/$tdir/$tfile.rw
+	do_facet $SINGLEAGT "echo -n mode_test > $file" ||
+		error "write $file failed"
+	lpcc_path=$(lpcc_fid2path $hsm_root $file)
+	do_facet $SINGLEAGT $LFS pcc attach -w -i $HSM_ARCHIVE_NUMBER $file ||
+		error "RW attach $file failed"
+	check_lpcc_state $file "readwrite"
+	check_lpcc_mode $lpcc_path 600
+	do_facet $SINGLEAGT $LFS pcc detach -k $file ||
+		error "detach -k $file failed"
+	check_lpcc_state $file "none"
+	do_facet $SINGLEAGT $LFS pcc attach -r -i $HSM_ARCHIVE_NUMBER $file ||
+		error "RO attach of RW copy $file failed"
+	check_lpcc_state $file "readonly"
+	check_lpcc_mode $lpcc_path 600
+	do_facet $SINGLEAGT $LFS pcc detach $file ||
+		error "detach $file failed"
+
+	is_project_quota_supported || return 0
+
+	echo "a file cached in PCC-RW at create is writable"
+	$LFS project -sp 100 $DIR/$tdir || error "set project on $DIR/$tdir"
+	file=$DIR/$tdir/$tfile.create
+	do_facet $SINGLEAGT "echo -n create > $file" ||
+		error "create $file failed"
+	check_lpcc_state $file "readwrite"
+	check_lpcc_mode $(lpcc_fid2path $hsm_root $file) 600
+}
+run_test 46b "PCC copy mode is 0000 for PCC-RO, 0600 for PCC-RW"
 
 test_47() {
 	local loopfile="$TMP/$tfile"

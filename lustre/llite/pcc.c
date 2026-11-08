@@ -3536,11 +3536,12 @@ out:
 }
 
 /*
- * Reset uid, gid or size for the PCC copy masked by @valid.
+ * Reset uid, gid, permission bits or size for the PCC copy masked by @valid.
  */
 static int pcc_inode_reset_iattr(struct inode *lustre_inode,
 				 struct dentry *dentry, unsigned int valid,
-				 kuid_t uid, kgid_t gid, loff_t size)
+				 kuid_t uid, kgid_t gid, umode_t mode,
+				 loff_t size)
 {
 	struct inode *inode = dentry->d_inode;
 	struct iattr attr;
@@ -3551,6 +3552,7 @@ static int pcc_inode_reset_iattr(struct inode *lustre_inode,
 	attr.ia_valid = valid;
 	attr.ia_uid = uid;
 	attr.ia_gid = gid;
+	attr.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & S_IFMT);
 	attr.ia_size = size;
 	attr.ia_mtime = inode_get_mtime(lustre_inode);
 
@@ -3678,8 +3680,10 @@ int pcc_inode_create_fini(struct inode *inode, struct pcc_create_attach *pca)
 	if (pcci == NULL)
 		GOTO(out_put, rc = -ENOMEM);
 
-	rc = pcc_inode_reset_iattr(inode, pcc_dentry, ATTR_UID | ATTR_GID,
-				   old_cred->suid, old_cred->sgid, 0);
+	rc = pcc_inode_reset_iattr(inode, pcc_dentry,
+				   ATTR_UID | ATTR_GID | ATTR_MODE,
+				   old_cred->suid, old_cred->sgid,
+				   PCC_RW_FILE_MODE, 0);
 	if (rc)
 		GOTO(out_put, rc);
 
@@ -3818,7 +3822,7 @@ out_free:
 }
 
 static int pcc_attach_data_archive(struct file *file, struct inode *inode,
-				   struct pcc_dataset *dataset,
+				   struct pcc_dataset *dataset, bool readwrite,
 				   struct dentry **pcc_dentry)
 {
 	const struct cred *old_cred;
@@ -3852,8 +3856,15 @@ static int pcc_attach_data_archive(struct file *file, struct inode *inode,
 		GOTO(out_dentry, rc);
 	}
 
-	rc = pcc_inode_reset_iattr(inode, *pcc_dentry, ATTR_UID | ATTR_GID,
-				   old_cred->uid, old_cred->gid, 0);
+	/*
+	 * Only a PCC-RW copy is writable.  A PCC-RO attach keeps the mode of
+	 * the PCC file, since it may reuse a kept PCC-RW copy that is still
+	 * the HSM archive copy of the file.
+	 */
+	rc = pcc_inode_reset_iattr(inode, *pcc_dentry, ATTR_UID | ATTR_GID |
+				   (readwrite ? ATTR_MODE : 0),
+				   old_cred->uid, old_cred->gid,
+				   PCC_RW_FILE_MODE, 0);
 	if (rc)
 		GOTO(out_fput, rc);
 
@@ -3892,7 +3903,7 @@ static int pcc_attach_data_archive(struct file *file, struct inode *inode,
 	 */
 	rc = pcc_inode_reset_iattr(inode, *pcc_dentry,
 				   ATTR_SIZE | ATTR_MTIME | ATTR_MTIME_SET,
-				   KUIDT_INIT(0), KGIDT_INIT(0), ret);
+				   KUIDT_INIT(0), KGIDT_INIT(0), 0, ret);
 out_fput:
 	fput(pcc_file);
 out_dentry:
@@ -3931,7 +3942,7 @@ int pcc_readwrite_attach(struct file *file, struct inode *inode,
 	if (dataset == NULL)
 		RETURN(-ENOENT);
 
-	rc = pcc_attach_data_archive(file, inode, dataset, &dentry);
+	rc = pcc_attach_data_archive(file, inode, dataset, true, &dentry);
 	if (rc)
 		GOTO(out_dataset_put, rc);
 
@@ -4138,7 +4149,7 @@ static int pcc_readonly_attach(struct file *file,
 	if (dataset == NULL)
 		RETURN(-ENOENT);
 
-	rc = pcc_attach_data_archive(file, inode, dataset, &dentry);
+	rc = pcc_attach_data_archive(file, inode, dataset, false, &dentry);
 	if (rc)
 		GOTO(out_dataset_put, rc);
 
