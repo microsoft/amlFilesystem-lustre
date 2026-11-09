@@ -7115,6 +7115,45 @@ test_44h() {
 }
 run_test 44h "MDT file size above ldiskfs maxbytes"
 
+test_44i() {
+	(( MDS1_VERSION >= $(version_code 2.17.61.120) )) ||
+		skip "need MDS >= 2.17.61.120 for DoM fiemap lock fix"
+	[[ "$mds1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only test"
+
+	local dom=$DIR/$tdir/$tfile
+	local dom_lock
+	local pid
+	local i
+
+	test_mkdir -i 0 $DIR/$tdir
+	$LFS setstripe -E 1M -L mdt $dom || error "setstripe DoM failed"
+	dd if=/dev/zero of=$dom bs=4k count=1 status=none ||
+		error "first write failed"
+	dd if=/dev/zero of=$dom bs=4k count=1 seek=128 conv=notrunc \
+		status=none || error "second write failed"
+
+	# With no DoM lock from open, FIEMAP_FLAG_SYNC makes the MDT lock
+	dom_lock=$(do_facet mds1 $LCTL get_param -n \
+		   mdt.$FSNAME-MDT0000.dom_lock)
+	do_facet mds1 $LCTL set_param -n mdt.$FSNAME-MDT0000.dom_lock=never
+	stack_trap "do_facet mds1 $LCTL set_param -n \
+		    mdt.$FSNAME-MDT0000.dom_lock=$dom_lock"
+	cancel_lru_locks mdc
+	$MULTIOP $dom OIc || error "fiemap failed"
+
+	# A DoM lock left on the MDT blocks this write for good
+	dd if=/dev/zero of=$dom bs=4k count=1 seek=64 conv=notrunc,fsync \
+		status=none &
+	pid=$!
+	for (( i = 0; i < 60; i++ )); do
+		kill -0 $pid 2>/dev/null || break
+		sleep 1
+	done
+	kill -0 $pid 2>/dev/null && error "write after fiemap is blocked"
+	wait $pid || error "write after fiemap failed"
+}
+run_test 44i "fiemap SYNC on a sparse DoM file drops the DoM lock"
+
 dirty_osc_total() {
 	tot=0
 	for d in `lctl get_param -n ${OSC}.*.cur_dirty_bytes`; do

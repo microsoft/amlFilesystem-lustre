@@ -1171,9 +1171,12 @@ static int dom_has_zero_regions(struct fiemap *fiemap)
 {
 	struct fiemap_extent *fiemap_start = fiemap->fm_extents;
 	__u64 begin = fiemap->fm_start;
+	unsigned int count;
 	unsigned int i;
 
-	for (i = 0; i < fiemap->fm_mapped_extents; i++) {
+	/* A count-only request (fm_extent_count == 0) returns no extents */
+	count = min(fiemap->fm_mapped_extents, fiemap->fm_extent_count);
+	for (i = 0; i < count; i++) {
 		if (fiemap_start[i].fe_logical > begin)
 			return true;
 		begin = fiemap_start[i].fe_logical + fiemap_start[i].fe_length;
@@ -1272,8 +1275,10 @@ int mdt_fiemap_get(struct tgt_session_info *tsi)
 		       PFID(fid));
 		fid_build_reg_res_name(fid, &tsi->tsi_resid);
 		rc = tgt_mdt_data_lock(ns, &tsi->tsi_resid, &lh, LCK_PR, &flg);
-		if (!rc)
+		if (!rc) {
 			rc = mdt_dom_fiemap(tsi->tsi_env, mdt, fid, fiemap);
+			tgt_data_unlock(&lh, LCK_PR);
+		}
 	}
 
 	RETURN(rc);

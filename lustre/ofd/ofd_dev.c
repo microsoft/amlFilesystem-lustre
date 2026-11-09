@@ -967,14 +967,17 @@ static int lock_zero_regions(const struct lu_env *env,
 			     struct fiemap *fiemap)
 {
 	__u64 begin = fiemap->fm_start;
+	unsigned int count;
 	unsigned int i;
 	int rc = 0;
 	struct fiemap_extent *fiemap_start = fiemap->fm_extents;
 
 	ENTRY;
 
-	CDEBUG(D_OTHER, "extents count %u\n", fiemap->fm_mapped_extents);
-	for (i = 0; i < fiemap->fm_mapped_extents; i++) {
+	/* A count-only request (fm_extent_count == 0) returns no extents */
+	count = min(fiemap->fm_mapped_extents, fiemap->fm_extent_count);
+	CDEBUG(D_OTHER, "extents count %u\n", count);
+	for (i = 0; i < count; i++) {
 		if (fiemap_start[i].fe_logical > begin) {
 			CDEBUG(D_OTHER, "ost lock [%llu,%llu]\n",
 			       begin, fiemap_start[i].fe_logical);
@@ -1166,7 +1169,7 @@ static int ofd_get_info_hdl(struct tgt_session_info *tsi)
 
 		/* LU-3219: Lock the sparse areas to make sure dirty
 		 * flushed back from client, then call fiemap again. */
-		if (fm_key->lfik_oa.o_valid & OBD_MD_FLFLAGS &&
+		if (rc == 0 && fm_key->lfik_oa.o_valid & OBD_MD_FLFLAGS &&
 		    fm_key->lfik_oa.o_flags & OBD_FL_SRVLOCK) {
 			ost_fid_build_resid(fid, &fti->fti_resid);
 			rc = lock_zero_regions(tsi->tsi_env, ofd->ofd_namespace,
