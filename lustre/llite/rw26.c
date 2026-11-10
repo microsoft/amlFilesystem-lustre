@@ -389,6 +389,9 @@ static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	vio = vvp_env_io(env);
 	io = lcc->lcc_io;
 	LASSERT(io != NULL);
+	/* buffered I/O cannot honor a designated mirror */
+	if (cl_io_top(io)->ci_designated_mirror)
+		no_fallback = true;
 
 	CDEBUG(D_VFSTRACE,
 	       "VFS Op:inode="DFID"(%p), size=%zd (max %lu), offset=%lld=%#llx, pages %zd (max %lu)%s%s%s%s\n",

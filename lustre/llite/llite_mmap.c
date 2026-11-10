@@ -578,6 +578,7 @@ static const struct vm_operations_struct ll_file_vm_ops = {
 int ll_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct inode *inode = file_inode(file);
+	struct ll_ioc_io_scope ios;
 	ktime_t kstart = ktime_get();
 	bool cached;
 	int rc;
@@ -590,6 +591,11 @@ int ll_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 	if (ll_file_nolock(file))
 		RETURN(-EOPNOTSUPP);
+
+	/* page faults always use the whole file */
+	ll_io_scope_snapshot(file, &ios);
+	if (ios.ios_scope != LL_IO_SCOPE_FILE)
+		RETURN(-EINVAL);
 
 	rc = pcc_file_mmap(file, vma, &cached);
 	if (cached && rc != 0)

@@ -73,6 +73,7 @@ static struct ll_file_data *ll_file_data_get(void)
 		return NULL;
 
 	lfd->fd_write_failed = false;
+	spin_lock_init(&lfd->fd_io_scope_lock);
 	pcc_file_init(&lfd->fd_pcc_file);
 
 	return lfd;
@@ -1992,7 +1993,8 @@ static int ll_io_scope_validate(const struct ll_ioc_io_scope *scope)
  * @file: open file
  * @scope: I/O scope from the ioctl
  *
- * Non-FILE scopes are only accepted on an O_DIRECT file.
+ * Non-FILE scopes are only accepted on an O_DIRECT file.  An operation
+ * already in progress keeps the scope it started with.
  *
  * Return: 0 on success, negative errno on failure
  */
@@ -2002,34 +2004,54 @@ static int ll_file_io_scope_set(struct file *file,
 	struct ll_file_data *lfd = file->private_data;
 	int rc;
 
+	/* a valid FILE scope is all zero, the same as a new lfd */
 	BUILD_BUG_ON(LL_IO_SCOPE_FILE != 0);
 
 	rc = ll_io_scope_validate(scope);
 	if (rc < 0)
 		return rc;
 
-	if (scope->ios_scope == LL_IO_SCOPE_FILE) {
-		memset(&lfd->fd_io_scope, 0, sizeof(lfd->fd_io_scope));
-		return 0;
-	}
-	if (!(file->f_flags & O_DIRECT))
+	if (scope->ios_scope != LL_IO_SCOPE_FILE &&
+	    !(file->f_flags & O_DIRECT))
 		return -EINVAL;
 
+	spin_lock(&lfd->fd_io_scope_lock);
 	lfd->fd_io_scope = *scope;
+	spin_unlock(&lfd->fd_io_scope_lock);
+
 	return 0;
 }
 
 /**
- * ll_io_scope_init() - Initialize @io from the fd I/O scope
+ * ll_io_scope_snapshot() - Take the I/O scope for one operation
+ * @file: open file
+ * @ios: filled with the current scope of @file
+ *
+ * An operation takes the scope once when it starts and uses @ios for
+ * all of its cl_io, also across restarts, so that LL_IOC_SET_IO_SCOPE
+ * cannot change the scope in the middle of it.
+ */
+void ll_io_scope_snapshot(const struct file *file, struct ll_ioc_io_scope *ios)
+{
+	struct ll_file_data *lfd = file->private_data;
+
+	spin_lock(&lfd->fd_io_scope_lock);
+	*ios = lfd->fd_io_scope;
+	spin_unlock(&lfd->fd_io_scope_lock);
+}
+
+/**
+ * ll_io_scope_init() - Initialize @io from an I/O scope
  * @io: I/O to initialize
  * @file: open file
+ * @ios: scope from ll_io_scope_snapshot()
  *
  * Only scopes accepted by ll_io_scope_validate() reach here.
  */
-void ll_io_scope_init(struct cl_io *io, const struct file *file)
+void ll_io_scope_init(struct cl_io *io, const struct file *file,
+		      const struct ll_ioc_io_scope *ios)
 {
 	struct ll_file_data *lfd = file->private_data;
-	struct ll_ioc_io_scope *ios = &lfd->fd_io_scope;
 
 	/* clear layout version for generic(non-resync) I/O in case it carries
 	 * stale layout version due to I/O restart
@@ -2176,10 +2198,13 @@ void ll_io_init(struct cl_io *io, struct file *file, enum cl_io_type iot,
 	 * out allowed
 	 */
 	io->ci_allow_unaligned_dio = true;
-	if (args)
+	/* async readahead (no @args) runs after its read returned; only
+	 * buffered FILE-scope reads start it
+	 */
+	if (args) {
 		io->ci_hybrid_switched = args->via_hybrid_switched;
-
-	ll_io_scope_init(io, file);
+		ll_io_scope_init(io, file, args->via_scope);
+	}
 }
 
 static void ll_heat_add(struct inode *inode, enum cl_io_type iot,
@@ -2801,10 +2826,12 @@ ll_read_from_cache(struct kiocb *iocb, struct iov_iter *iter)
 	return result;
 }
 
-typedef ssize_t (*iter_fn_t)(struct kiocb *, struct iov_iter *);
+typedef ssize_t (*iter_fn_t)(struct kiocb *, struct iov_iter *,
+			     const struct ll_ioc_io_scope *);
 
 static ssize_t do_loop_readv_writev(struct kiocb *iocb, const struct iovec *iov,
-				    int rw, unsigned long nr_segs, iter_fn_t fn)
+				    int rw, unsigned long nr_segs, iter_fn_t fn,
+				    const struct ll_ioc_io_scope *ios)
 {
 	const struct iovec *vector = iov;
 	ssize_t ret = 0;
@@ -2815,7 +2842,7 @@ static ssize_t do_loop_readv_writev(struct kiocb *iocb, const struct iovec *iov,
 		size_t len = vector->iov_len;
 
 		iov_iter_init(&i, rw, vector, 1, len);
-		nr = fn(iocb, &i);
+		nr = fn(iocb, &i, ios);
 		if (nr < 0) {
 			if (!ret)
 				ret = nr;
@@ -2862,7 +2889,8 @@ static bool is_unaligned_directio(struct kiocb *iocb, struct iov_iter *iter,
 }
 
 /* Read from a file (through the page cache) */
-static ssize_t do_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
+static ssize_t do_file_read_iter(struct kiocb *iocb, struct iov_iter *to,
+				 const struct ll_ioc_io_scope *ios)
 {
 	struct lu_env *env;
 	struct vvp_io_args *args;
@@ -2881,6 +2909,11 @@ static ssize_t do_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 	if (!iov_iter_count(to))
 		RETURN(0);
+
+	/* non-FILE scope is direct I/O only; page cache cannot hold it */
+	if (ios->ios_scope != LL_IO_SCOPE_FILE &&
+	    !iocb_ki_flags_check(iocb, IOCB_DIRECT))
+		RETURN(-EINVAL);
 
 	CFS_FAIL_TIMEOUT_ORSET(OBD_FAIL_LLITE_READ_PAUSE, CFS_FAIL_ONCE,
 			       cfs_fail_val);
@@ -2914,6 +2947,7 @@ static ssize_t do_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	args->via_hybrid_switched = 0;
 	args->u.normal.via_iter = to;
 	args->u.normal.via_iocb = iocb;
+	args->via_scope = ios;
 
 	if (ll_hybrid_bio_dio_switch_check(file, iocb, to, CIT_READ,
 					   iov_iter_count(to)) ||
@@ -2950,10 +2984,14 @@ out:
 
 static ssize_t ll_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
+	struct ll_ioc_io_scope ios;
+
+	ll_io_scope_snapshot(iocb->ki_filp, &ios);
 	if (iter->nr_segs > 1 && is_unaligned_directio(iocb, iter, CIT_READ))
 		return do_loop_readv_writev(iocb, iter->__iov, READ,
-					    iter->nr_segs, do_file_read_iter);
-	return do_file_read_iter(iocb, iter);
+					    iter->nr_segs, do_file_read_iter,
+					    &ios);
+	return do_file_read_iter(iocb, iter, &ios);
 }
 
 /*
@@ -3027,7 +3065,8 @@ static ssize_t ll_do_tiny_write(struct kiocb *iocb, struct iov_iter *iter)
 }
 
 /* Write to a file (through the page cache).*/
-static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
+static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from,
+				  const struct ll_ioc_io_scope *ios)
 {
 	struct file *file = iocb->ki_filp;
 	struct inode *inode = file_inode(file);
@@ -3049,6 +3088,11 @@ static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	if (!iov_iter_count(from))
 		GOTO(out, rc_normal = 0);
+
+	/* non-FILE scope is direct I/O only; page cache cannot hold it */
+	if (ios->ios_scope != LL_IO_SCOPE_FILE &&
+	    !iocb_ki_flags_check(iocb, IOCB_DIRECT))
+		GOTO(out, rc_normal = -EINVAL);
 
 	CDEBUG(D_INODE, "inode %p need_sync_to_oss "DFID"\n",
 	       inode, PFID(&ll_i2info(inode)->lli_fid));
@@ -3100,6 +3144,7 @@ static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	args = ll_env_args(env);
 	args->u.normal.via_iter = from;
 	args->u.normal.via_iocb = iocb;
+	args->via_scope = ios;
 	args->via_hybrid_switched = hybrid_switched;
 
 	rc_normal = ll_file_io_generic(env, args, file, CIT_WRITE,
@@ -3134,10 +3179,14 @@ out:
 
 static ssize_t ll_file_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
+	struct ll_ioc_io_scope ios;
+
+	ll_io_scope_snapshot(iocb->ki_filp, &ios);
 	if (iter->nr_segs > 1 && is_unaligned_directio(iocb, iter, CIT_WRITE))
 		return do_loop_readv_writev(iocb, iter->__iov, WRITE,
-					    iter->nr_segs, do_file_write_iter);
-	return do_file_write_iter(iocb, iter);
+					    iter->nr_segs, do_file_write_iter,
+					    &ios);
+	return do_file_write_iter(iocb, iter, &ios);
 }
 
 int ll_lov_setstripe_ea_info(struct inode *inode, struct dentry *dentry,
@@ -5620,6 +5669,7 @@ out_state:
 static loff_t ll_lseek(struct file *file, loff_t offset, int whence)
 {
 	struct inode *inode = file_inode(file);
+	struct ll_ioc_io_scope ios;
 	struct lu_env *env;
 	struct cl_io *io;
 	struct cl_lseek_io *lsio;
@@ -5635,7 +5685,8 @@ static loff_t ll_lseek(struct file *file, loff_t offset, int whence)
 
 	io = vvp_env_new_io(env);
 	io->ci_obj = ll_i2info(inode)->lli_clob;
-	ll_io_scope_init(io, file);
+	ll_io_scope_snapshot(file, &ios);
+	ll_io_scope_init(io, file, &ios);
 
 	lsio = &io->u.ci_lseek;
 	lsio->ls_start = offset;
@@ -7044,6 +7095,7 @@ static int cl_falloc(struct file *file, struct inode *inode, int mode,
 		     loff_t offset, loff_t len)
 {
 	loff_t size = i_size_read(inode);
+	struct ll_ioc_io_scope ios;
 	struct lu_env *env;
 	struct cl_io *io;
 	__u16 refcheck;
@@ -7056,7 +7108,8 @@ static int cl_falloc(struct file *file, struct inode *inode, int mode,
 
 	io = vvp_env_new_io(env);
 	io->ci_obj = ll_i2info(inode)->lli_clob;
-	ll_io_scope_init(io, file);
+	ll_io_scope_snapshot(file, &ios);
+	ll_io_scope_init(io, file, &ios);
 
 	io->ci_verify_layout = 1;
 	io->u.ci_setattr.sa_parent_fid = lu_object_fid(&io->ci_obj->co_lu);

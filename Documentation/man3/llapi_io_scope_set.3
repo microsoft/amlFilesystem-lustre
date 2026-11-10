@@ -1,4 +1,4 @@
-.TH LLAPI_IO_SCOPE_SET 3 2026-10-22 "Lustre User API" "Lustre Library Functions"
+.TH LLAPI_IO_SCOPE_SET 3 2026-11-10 "Lustre User API" "Lustre Library Functions"
 .SH NAME
 llapi_io_scope_set, llapi_io_scope_clear \- restrict I/O on a file descriptor to a layout subset
 .SH SYNOPSIS
@@ -68,10 +68,27 @@ addressed by file offset.
 .I ios_mirror_id
 must be in the range 1 to
 .BR MIRROR_ID_MAX .
-The scope is intended for
-.B O_DIRECT
-I/O, and is only accepted on a descriptor opened with
+The scope is only accepted on a descriptor opened with
 .BR O_DIRECT .
+While it is set,
+.BR read (2)
+and
+.BR write (2)
+fail with
+.I errno
+set to
+.B EINVAL
+if
+.B O_DIRECT
+has since been cleared on
+.IR fd ,
+or if the direct I/O would otherwise be done through the page cache,
+and
+.BR mmap (2)
+of
+.I fd
+fails with
+.BR EINVAL .
 The mirror is not looked up when the scope is set.
 If an FLR file has no mirror
 .IR ios_mirror_id ,
@@ -205,6 +222,25 @@ setting a mirror ID with that ioctl is equivalent to setting a
 .B LL_IO_SCOPE_MIRROR
 scope, and setting mirror ID 0 is equivalent to
 .BR llapi_io_scope_clear() .
+Descriptors created with
+.BR dup (2)
+or inherited across
+.BR fork (2)
+share the scope.
+.PP
+Each
+.BR read (2),
+.BR write (2),
+.BR lseek (2)
+with
+.B SEEK_DATA
+or
+.BR SEEK_HOLE ,
+.BR ftruncate (2),
+or
+.BR fallocate (2)
+uses the scope that was in place when it started, even if the scope is
+changed before it completes.
 .SH RETURN VALUES
 .B llapi_io_scope_set()
 and

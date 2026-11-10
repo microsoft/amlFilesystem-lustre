@@ -1926,6 +1926,46 @@ test_5b() {
 }
 run_test 5b "EC FLR state transitions with writes to different components"
 
+test_5c() {
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local out=$TMP/$tfile.parity
+	local fsize=$((5 * 1048576))
+	local pmid
+	local psize
+	local off
+	local n
+
+	stack_trap "rm -f $out"
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe $tf failed"
+	dd if=/dev/urandom of=$tf bs=1M count=$((fsize >> 20)) ||
+		error "write $tf failed"
+	$LFS mirror resync $tf || error "mirror resync $tf failed"
+	identify_ec_mirrors $tf
+	pmid=$ec_parity_id
+	[[ -n $pmid ]] || error "$tf has no parity mirror"
+
+	# the parity mirror ends below i_size, reading it must not fail there
+	$LFS mirror read -N $pmid -o $out $tf ||
+		error "read parity mirror $pmid failed"
+	psize=$(stat -c %s $out)
+	(( psize > 0 && psize < fsize )) ||
+		error "parity size $psize, file size $fsize"
+
+	# a read across the parity EOF is short, one at or past it gets EOF
+	n=$(io_scope -s MIRROR -i $pmid -p 0:$fsize $tf) ||
+		error "read across parity EOF failed"
+	(( n == psize )) || error "read across parity EOF: $n != $psize"
+	for off in $psize $((fsize - PAGE_SIZE)); do
+		n=$(io_scope -s MIRROR -i $pmid -p $off:$PAGE_SIZE $tf) ||
+			error "read at $off failed"
+		(( n == 0 )) || error "read at $off: $n bytes"
+	done
+}
+run_test 5c "EC parity mirror read stops at parity EOF"
+
 test_6a() {
 	enable_ec
 

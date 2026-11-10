@@ -48,6 +48,7 @@ static DEFINE_MUTEX(cl_inode_fini_guard);
 int cl_setattr_ost(struct inode *inode, const struct iattr *attr,
 		   enum op_xvalid xvalid, unsigned int attr_flags)
 {
+	struct ll_ioc_io_scope ios = { 0 };
 	struct cl_object *obj;
 	struct lu_env *env;
 	struct cl_io *io;
@@ -83,9 +84,11 @@ int cl_setattr_ost(struct inode *inode, const struct iattr *attr,
 			from_kgid(&init_user_ns, inode->i_gid);
 		io->u.ci_setattr.sa_attr_projid = ll_i2info(inode)->lli_projid;
 	}
+	if (attr->ia_valid & ATTR_FILE)
+		ll_io_scope_snapshot(attr->ia_file, &ios);
 again:
 	if (attr->ia_valid & ATTR_FILE)
-		ll_io_scope_init(io, attr->ia_file);
+		ll_io_scope_init(io, attr->ia_file, &ios);
 
 	if (cl_io_init(env, io, CIT_SETATTR, io->ci_obj) == 0) {
 		struct vvp_io *vio = vvp_env_io(env);

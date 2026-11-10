@@ -1158,8 +1158,11 @@ struct ll_file_data {
 	 * -errno is saved here, and will return to user in close().
 	 */
 	int				fd_partial_readdir_rc;
-	/* I/O scope; FILE / zeroed = whole file */
+	/* I/O scope; FILE / zeroed = whole file.  Under fd_io_scope_lock;
+	 * each operation uses a copy from ll_io_scope_snapshot().
+	 */
 	struct ll_ioc_io_scope		fd_io_scope;
+	spinlock_t			fd_io_scope_lock;
 	/* The layout version when resync starts. Resync I/O should carry this
 	 * layout version for verification to OST objects
 	 */
@@ -1496,7 +1499,9 @@ int __ll_fid2path(struct inode *inode, struct getinfo_fid2path *gfout,
 int ll_data_version(struct inode *inode, __u64 *data_version, int flags);
 int ll_hsm_release(struct inode *inode);
 int ll_hsm_state_set(struct inode *inode, struct hsm_state_set *hss);
-void ll_io_scope_init(struct cl_io *io, const struct file *file);
+void ll_io_scope_snapshot(const struct file *file, struct ll_ioc_io_scope *ios);
+void ll_io_scope_init(struct cl_io *io, const struct file *file,
+		      const struct ll_ioc_io_scope *ios);
 
 /* llite/dcache.c */
 
@@ -1628,6 +1633,8 @@ struct vvp_io_args {
 			struct iov_iter   *via_iter;
 		} normal;
 	} u;
+	/* I/O scope of the whole operation, see ll_io_scope_snapshot() */
+	const struct ll_ioc_io_scope	*via_scope;
 	/* did we switch this IO from BIO to DIO using hybrid IO? */
 	unsigned int	via_hybrid_switched:1;
 };

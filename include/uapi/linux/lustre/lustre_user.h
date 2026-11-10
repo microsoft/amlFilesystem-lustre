@@ -689,9 +689,13 @@ struct ll_ioc_lease_id {
 
 /*
  * I/O scope: restrict this fd to a layout subset. SET_MIRROR is an
- * alias for {MIRROR, id}. Non-FILE scopes require O_DIRECT. ios_flags,
- * ios_padding, and identity fields not used by the scope must be 0.
- * A reserved scope returns -EOPNOTSUPP.
+ * alias for {MIRROR, id}. ios_flags, ios_padding, and identity fields
+ * not used by the scope must be 0. A reserved scope returns -EOPNOTSUPP.
+ *
+ * The scope belongs to the open file description. Non-FILE scopes are
+ * only set on an O_DIRECT fd, and read and write in them fail with
+ * -EINVAL unless they are O_DIRECT; mmap fails with -EINVAL. An
+ * operation in progress keeps the scope it started with.
  *
  * FILE uses the file offset; ios_mirror_id, ios_layout_version, and
  * ios_stripe_idx must be 0.

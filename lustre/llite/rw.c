@@ -1990,6 +1990,15 @@ static int do_read_folio(struct file *file, struct folio *folio)
 		RETURN(result);
 	}
 
+	/* the page cache cannot hold the data of one mirror.  Designated
+	 * mirror I/O is direct I/O only and should not get here; this is a
+	 * last check, as uptodate folios are copied without ->read_folio()
+	 */
+	if (cl_io_top(io)->ci_designated_mirror) {
+		folio_unlock(folio);
+		RETURN(-EINVAL);
+	}
+
 	if (lcc && lcc->lcc_type != LCC_MMAP) {
 		/*
 		 * This handles a kernel bug introduced in kernel 5.12:

@@ -5731,6 +5731,50 @@ test_213b() {
 }
 run_test 213b "I/O scope layout version is not sent for non-FLR file"
 
+test_213c() {
+	local tf=$DIR/$tfile
+	local EINVAL=22
+	local nomid=32767
+	local mid
+	local rc
+
+	stack_trap "rm -f $tf"
+	$LFS mirror create -N2 -c1 $tf || error "mirror create $tf failed"
+	dd if=/dev/urandom of=$tf bs=4k count=1 oflag=direct conv=notrunc ||
+		error "write $tf failed"
+	$LFS mirror resync $tf || error "mirror resync $tf failed"
+	get_mirror_ids $tf
+	mid=${mirror_array[0]}
+
+	# a mirror scope must not reach the page cache
+	io_scope -s MIRROR -i $mid -p 0:$PAGE_SIZE $tf ||
+		error "DIO mirror read failed"
+	io_scope -s MIRROR -i $mid -b -p 0:$PAGE_SIZE $tf
+	rc=$?
+	(( rc == EINVAL )) || error "buffered mirror read: rc = $rc"
+	io_scope -s MIRROR -i $mid -b -w $tf
+	rc=$?
+	(( rc == EINVAL )) || error "buffered mirror write: rc = $rc"
+
+	# a read keeps its scope when the scope is cleared during it
+	[[ " ${mirror_array[*]} " != *" $nomid "* ]] ||
+		error "$tf has mirror $nomid"
+	io_scope -s MIRROR -i $nomid -p 0:$PAGE_SIZE $tf
+	rc=$?
+	(( rc == EINVAL )) || error "read from no mirror: rc = $rc"
+
+	#define OBD_FAIL_LLITE_READ_PAUSE	0x1431
+	$LCTL set_param fail_loc=0x1431 fail_val=5
+	stack_trap "$LCTL set_param fail_loc=0 fail_val=0"
+	io_scope -s MIRROR -i $nomid -S $tf
+	rc=$?
+	# CFS_FAILED is set once the read reached the pause
+	(( $($LCTL get_param -n fail_loc) & 0x40000000 )) ||
+		error "read pause not hit"
+	(( rc == EINVAL )) || error "scope changed during read: rc = $rc"
+}
+run_test 213c "I/O scope is DIO only and stable during an operation"
+
 complete_test $SECONDS
 check_and_cleanup_lustre
 exit_status

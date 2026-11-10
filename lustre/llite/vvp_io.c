@@ -907,6 +907,15 @@ static int vvp_io_read_start(const struct lu_env *env,
 	LASSERT(vio->vui_iocb->ki_pos == pos);
 	iter = *vio->vui_iter;
 
+	/* ll_direct_IO() stops at ci_parity_eof, and generic_file_read_iter()
+	 * would read the rest up to i_size through the page cache
+	 */
+	if (io->ci_parity_io) {
+		if (pos >= io->ci_parity_eof)
+			GOTO(out, result = 0);
+		iov_iter_truncate(&iter, io->ci_parity_eof - pos);
+	}
+
 	lcc = ll_cl_find(inode);
 	lcc->lcc_end_index = DIV_ROUND_UP(pos + iter.count, PAGE_SIZE);
 	CDEBUG(D_VFSTRACE, "count:%ld iocb pos:%lld\n", iter.count, pos);
