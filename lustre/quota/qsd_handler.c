@@ -188,9 +188,14 @@ static bool qsd_calc_adjust(struct lquota_entry *lqe, struct quota_body *qbody)
 
 		LQUOTA_DEBUG(lqe, "revoke pre-acquired quota: %llu - %llu",
 			     granted, usage);
-		qbody->qb_count = granted - usage;
-		qbody->qb_flags = QUOTA_DQACQ_FL_REL;
-		RETURN(true);
+		/* forced space has no grant behind it, so usage can be above
+		 * granted and the subtraction would wrap; report it below
+		 */
+		if (granted > usage) {
+			qbody->qb_count = granted - usage;
+			qbody->qb_flags = QUOTA_DQACQ_FL_REL;
+			RETURN(true);
+		}
 	}
 
 	/* 2. release spare quota space? */
@@ -601,6 +606,8 @@ static int qsd_acquire_remote(const struct lu_env *env,
  * \param env   - the environment passed by the caller
  * \param lqe   - is the qid entry to be processed
  * \param space - is the amount of quota required for the operation
+ * \param force - the operation is carried out even if the quota is exceeded,
+ *                so do not wait for pending writes to be accounted
  * \param ret   - is the return code (-EDQUOT, -EINPROGRESS, ...)
  *
  * \retval true  - stop waiting in wait_event_idle_timeout,
@@ -608,7 +615,7 @@ static int qsd_acquire_remote(const struct lu_env *env,
  * \retval false - continue waiting
  */
 static bool qsd_acquire(const struct lu_env *env, struct lquota_entry *lqe,
-			long long space, int *ret)
+			long long space, bool force, int *ret)
 {
 	int rc = 0, count;
 	int wait_pending = 0;
@@ -638,9 +645,11 @@ again:
 		/*
 		 * There might be a window that commit transaction
 		 * have updated usage but pending write doesn't change
-		 * wait for it before acquiring remotely.
+		 * wait for it before acquiring remotely. A forced operation
+		 * is carried out anyway, so do not sync the pool for it.
 		 */
-		if (lqe->lqe_pending_write >= space && !wait_pending) {
+		if (!force && lqe->lqe_pending_write >= space &&
+		    !wait_pending) {
 			wait_pending = 1;
 			dt_sync(env, qqi->qqi_qsd->qsd_dev);
 			goto again;
@@ -673,6 +682,7 @@ again:
  *                of the operation.
  * \param qid   - is the qid information attached in the transaction handle
  * \param space - is the space required by the operation
+ * \param force - the operation is carried out even if the quota is exceeded
  * \param flags - if the operation is write, return caller no user/group
  *                and sync commit flags
  *
@@ -683,7 +693,7 @@ again:
  */
 static int qsd_op_begin0(const struct lu_env *env, struct qsd_qtype_info *qqi,
 			 struct lquota_id_info *qid, long long space,
-			 enum osd_quota_local_flags *local_flags)
+			 bool force, enum osd_quota_local_flags *local_flags)
 {
 	struct lquota_entry *lqe;
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
@@ -734,7 +744,7 @@ static int qsd_op_begin0(const struct lu_env *env, struct qsd_qtype_info *qqi,
 	remaining = cfs_time_seconds(qsd_wait_timeout(qqi->qqi_qsd));
 	add_wait_queue(&lqe->lqe_waiters, &wait);
 	do {
-		if (qsd_acquire(env, lqe, space, &ret))
+		if (qsd_acquire(env, lqe, space, force, &ret))
 			break;
 
 		remaining = wait_woken(&wait, TASK_IDLE, remaining);
@@ -817,6 +827,19 @@ static inline bool qid_equal(struct lquota_id_info *q1,
 	return (q1->lqi_id.qid_uid == q2->lqi_id.qid_uid) ? true : false;
 }
 
+/* Find the slot of a quota id in a transaction, NULL if none was allocated */
+static inline struct lquota_id_info *qsd_trans_find(struct lquota_trans *trans,
+						    struct lquota_id_info *qi)
+{
+	int i;
+
+	for (i = 0; i < trans->lqt_id_cnt; i++)
+		if (qid_equal(qi, &trans->lqt_ids[i]))
+			return &trans->lqt_ids[i];
+
+	return NULL;
+}
+
 /**
  * Enforce quota, it's called in the declaration of each operation.
  * qsd_op_end() will then be called later once all the operations have been
@@ -839,8 +862,10 @@ int qsd_op_begin(const struct lu_env *env, struct qsd_instance *qsd,
 		 struct lquota_trans *trans, struct lquota_id_info *qi,
 		 enum osd_quota_local_flags *local_flags)
 {
-	int i, rc;
-	bool had_qentry, found = false;
+	struct lquota_id_info *slot;
+	bool force = qi->lqi_force;
+	bool had_qentry;
+	int rc;
 
 	ENTRY;
 
@@ -876,43 +901,81 @@ int qsd_op_begin(const struct lu_env *env, struct qsd_instance *qsd,
 		RETURN(0);
 
 	if (qi->lqi_type == PRJQUOTA && local_flags && qi->lqi_id.qid_projid &&
-	    (qsd->qsd_root_prj_enable || !qi->lqi_ignore_root_proj_quota))
+	    (qsd->qsd_root_prj_enable || !qi->lqi_ignore_root_proj_quota)) {
 		*local_flags |= QUOTA_FL_ROOT_PRJQUOTA;
+		/* root project quota is enforced even when the operation is
+		 * forced, so do not skip the pending write sync
+		 */
+		force = false;
+	}
 
 	LASSERTF(trans->lqt_id_cnt <= QUOTA_MAX_TRANSIDS, "id_cnt=%d\n",
 		 trans->lqt_id_cnt);
 	/* check whether we already allocated a slot for this id */
-	for (i = 0; i < trans->lqt_id_cnt; i++) {
-		if (qid_equal(qi, &trans->lqt_ids[i])) {
-			found = true;
-			break;
-		}
-	}
-
-	if (!found) {
-		if (unlikely(i >= QUOTA_MAX_TRANSIDS)) {
+	slot = qsd_trans_find(trans, qi);
+	if (slot == NULL) {
+		if (unlikely(trans->lqt_id_cnt >= QUOTA_MAX_TRANSIDS)) {
 			CERROR("%s: more than %d qids enforced for a transaction?\n",
-			       qsd->qsd_svname, i);
+			       qsd->qsd_svname, trans->lqt_id_cnt);
 			RETURN(-EINVAL);
 		}
 
 		/* fill new slot */
-		trans->lqt_ids[i].lqi_id     = qi->lqi_id;
-		trans->lqt_ids[i].lqi_type   = qi->lqi_type;
-		trans->lqt_ids[i].lqi_is_blk = qi->lqi_is_blk;
-		trans->lqt_ids[i].lqi_qentry = NULL;
+		slot = &trans->lqt_ids[trans->lqt_id_cnt];
+		slot->lqi_id     = qi->lqi_id;
+		slot->lqi_type   = qi->lqi_type;
+		slot->lqi_is_blk = qi->lqi_is_blk;
+		slot->lqi_qentry = NULL;
 		trans->lqt_id_cnt++;
 	}
 
-	had_qentry = trans->lqt_ids[i].lqi_qentry != NULL;
+	had_qentry = slot->lqi_qentry != NULL;
 	/* manage quota enforcement for this ID */
-	rc = qsd_op_begin0(env, qsd->qsd_type_array[qi->lqi_type],
-			   &trans->lqt_ids[i], qi->lqi_space, local_flags);
-	if (!had_qentry && trans->lqt_ids[i].lqi_qentry)
+	rc = qsd_op_begin0(env, qsd->qsd_type_array[qi->lqi_type], slot,
+			   qi->lqi_space, force, local_flags);
+	if (!had_qentry && slot->lqi_qentry)
 		atomic_inc(&qsd->qsd_trans_count);
 	RETURN(rc);
 }
 EXPORT_SYMBOL(qsd_op_begin);
+
+/**
+ * qsd_forced_space() - Book the space of a refused operation which is
+ *                      still carried out.
+ * @trans: is the quota transaction information
+ * @qi: is the qid & space required by the operation
+ *
+ * The space was not acquired from the master, but it is used, so book it as
+ * pending like a granted write. qsd_op_end() releases it once the backend
+ * accounts it, at txg commit on ZFS.
+ */
+void qsd_forced_space(struct lquota_trans *trans, struct lquota_id_info *qi)
+{
+	struct lquota_id_info	*slot;
+	struct lquota_entry	*lqe;
+	long long		 space;
+
+	ENTRY;
+
+	space = qi->lqi_space;
+	if (space <= 0)
+		RETURN_EXIT;
+
+	slot = qsd_trans_find(trans, qi);
+	/* no slot if the id is not enforced */
+	if (slot == NULL || slot->lqi_qentry == NULL)
+		RETURN_EXIT;
+
+	lqe = slot->lqi_qentry;
+	lqe_write_lock(lqe);
+	lqe->lqe_pending_write += space;
+	lqe_write_unlock(lqe);
+	/* qsd_op_end() releases the space booked here */
+	slot->lqi_space += space;
+
+	EXIT;
+}
+EXPORT_SYMBOL(qsd_forced_space);
 
 /**
  * Adjust quota space (by acquiring or releasing) hold by the quota slave.
@@ -1139,6 +1202,8 @@ int qsd_transfer(const struct lu_env *env, struct qsd_instance *qsd,
 			return -EINVAL;
 
 	qi->lqi_type = qtype;
+	/* EDQUOT & EINPROGRESS are ignored below, the operations are forced */
+	qi->lqi_force = true;
 
 	/* inode accounting */
 	qi->lqi_is_blk = false;
@@ -1147,8 +1212,10 @@ int qsd_transfer(const struct lu_env *env, struct qsd_instance *qsd,
 	qi->lqi_id.qid_uid = new_id;
 	qi->lqi_space = 1;
 	rc = qsd_op_begin(env, qsd, trans, qi, NULL);
-	if (rc == -EDQUOT || rc == -EINPROGRESS)
+	if (rc == -EDQUOT || rc == -EINPROGRESS) {
+		qsd_forced_space(trans, qi);
 		rc = 0;
+	}
 	if (rc)
 		return rc;
 
@@ -1169,8 +1236,10 @@ int qsd_transfer(const struct lu_env *env, struct qsd_instance *qsd,
 	qi->lqi_id.qid_uid = new_id;
 	qi->lqi_space = bspace;
 	rc = qsd_op_begin(env, qsd, trans, qi, NULL);
-	if (rc == -EDQUOT || rc == -EINPROGRESS)
+	if (rc == -EDQUOT || rc == -EINPROGRESS) {
+		qsd_forced_space(trans, qi);
 		rc = 0;
+	}
 	if (rc)
 		return rc;
 
@@ -1323,7 +1392,7 @@ int qsd_reserve_or_free_quota(const struct lu_env *env,
 		/* the acquired quota will add to lqi_space in qsd_op_begin0 */
 		qi->lqi_space = 0;
 		rc = qsd_op_begin0(env, qsd->qsd_type_array[qi->lqi_type], qi,
-				   qspace, NULL);
+				   qspace, false, NULL);
 		if (rc && qi->lqi_qentry) {
 			lqe_putref(qi->lqi_qentry);
 			qi->lqi_qentry = NULL;

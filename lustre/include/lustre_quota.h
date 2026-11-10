@@ -205,6 +205,7 @@ int qsd_op_begin(const struct lu_env *env, struct qsd_instance *qsd,
 		 struct lquota_trans *trans, struct lquota_id_info *lqi,
 		 enum osd_quota_local_flags *flags);
 void qsd_op_end(const struct lu_env *env, struct lquota_trans *trans);
+void qsd_forced_space(struct lquota_trans *trans, struct lquota_id_info *qi);
 void qsd_op_adjust(const struct lu_env *env, struct qsd_instance *qsd,
 		   union lquota_id *id, int i);
 int qsd_transfer(const struct lu_env *env, struct qsd_instance *qsd,
@@ -242,6 +243,8 @@ struct lquota_id_info {
 	bool			 lqi_is_blk;
 	/* enforce project quota for root */
 	bool			 lqi_ignore_root_proj_quota;
+	/* the operation is carried out even if the quota is exceeded */
+	bool			 lqi_force;
 };
 
 /* With the DoM, both inode quota in meta pool and block quota in data pool

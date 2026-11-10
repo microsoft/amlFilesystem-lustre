@@ -574,9 +574,31 @@ test_1_check_write() {
 	# guarantee that slave received new edquot through glimpse.
 	# so wait a little to be sure slave got it.
 	sleep 5
-	$RUNAS $DD of=$testfile count=1 seek=$limit &&
+
+	# The second write above can stop below the hard limit, so keep
+	# writing 1MB past the limit until a write is refused, then check
+	# that the file does not go over the limit (LU-20517).
+	local blocks
+	local count=1
+
+	while $RUNAS $DD of=$testfile count=1 seek=$((limit + count - 1)); do
+		((count++))
+		((count < limit / 2)) ||
+			quota_error $short_qtype $TSTUSR \
+				"$qtype write success, but expect EDQUOT"
+	done
+
+	# On ZFS the blocks only change when the txg commits, so flush the
+	# client cache and sync the backends first.
+	cancel_lru_locks osc
+	sync; sync_all_data || true
+
+	# stat reports 512-byte blocks, so the file must not be over limit MB
+	blocks=$(stat -c %b $testfile)
+	((blocks / 2048 <= limit)) ||
 		quota_error $short_qtype $TSTUSR \
-			"$qtype write success, but expect EDQUOT"
+			"$qtype file is over the limit"
+
 	return 0
 }
 

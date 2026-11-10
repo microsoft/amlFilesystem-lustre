@@ -562,10 +562,13 @@ int osd_declare_quota(const struct lu_env *env, struct osd_device *osd,
 	qi->lqi_type       = USRQUOTA;
 	qi->lqi_space      = space;
 	qi->lqi_is_blk     = !!(osd_qid_declare_flags & OSD_QID_BLK);
+	qi->lqi_force      = force;
 	rcu = qsd_op_begin(env, qsd, &oh->ot_quota_trans, qi, local_flags);
-	if (force && (rcu == -EDQUOT || rcu == -EINPROGRESS))
+	if (force && (rcu == -EDQUOT || rcu == -EINPROGRESS)) {
 		/* ignore EDQUOT & EINPROGRESS when changes are done by root */
+		qsd_forced_space(&oh->ot_quota_trans, qi);
 		rcu = 0;
+	}
 
 	/* For non-fatal error, we want to continue to get the noquota flags
 	 * for group id. This is only for commit write, which has @flags passed
@@ -578,10 +581,13 @@ int osd_declare_quota(const struct lu_env *env, struct osd_device *osd,
 	/* and now group quota */
 	qi->lqi_id.qid_gid = gid;
 	qi->lqi_type       = GRPQUOTA;
+	qi->lqi_force      = force;
 	rcg = qsd_op_begin(env, qsd, &oh->ot_quota_trans, qi, local_flags);
-	if (force && (rcg == -EDQUOT || rcg == -EINPROGRESS))
+	if (force && (rcg == -EDQUOT || rcg == -EINPROGRESS)) {
 		/* as before, ignore EDQUOT & EINPROGRESS for root */
+		qsd_forced_space(&oh->ot_quota_trans, qi);
 		rcg = 0;
+	}
 
 #ifdef ZFS_PROJINHERIT
 	if (rcg && (rcg != -EDQUOT || local_flags == NULL))
@@ -592,6 +598,7 @@ int osd_declare_quota(const struct lu_env *env, struct osd_device *osd,
 		qi->lqi_id.qid_projid = projid;
 		qi->lqi_ignore_root_proj_quota = th->th_ignore_root_proj_quota;
 		qi->lqi_type = PRJQUOTA;
+		qi->lqi_force = force;
 
 		tmp_flags = 0;
 		if (local_flags)
@@ -608,8 +615,10 @@ int osd_declare_quota(const struct lu_env *env, struct osd_device *osd,
 			force = 0;
 		if (local_flags)
 			*local_flags = tmp_flags;
-		if (force && (rcp == -EDQUOT || rcp == -EINPROGRESS))
+		if (force && (rcp == -EDQUOT || rcp == -EINPROGRESS)) {
+			qsd_forced_space(&oh->ot_quota_trans, qi);
 			rcp = 0;
+		}
 	}
 #endif
 
