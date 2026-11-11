@@ -2624,29 +2624,6 @@ AC_DEFUN([LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC], [
 ]) # LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
 
 #
-# LC_HAVE_MMAP_WRITE_TRYLOCK
-#
-# linux kernel v6.5-rc4-110-gcf95e337cb63
-#   mm: delete mmap_write_trylock() and vma_try_start_write()
-#
-AC_DEFUN([LC_SRC_HAVE_MMAP_WRITE_TRYLOCK], [
-	LB2_LINUX_TEST_SRC([mmap_write_trylock_removed], [
-		#include <linux/mmap_lock.h>
-	],[
-		struct mm_struct *mm = NULL;
-
-		(void)mmap_write_trylock(mm);
-	],[-Werror])
-])
-AC_DEFUN([LC_HAVE_MMAP_WRITE_TRYLOCK], [
-	LB2_MSG_LINUX_TEST_RESULT([if 'mmap_write_trylock()' is available],
-	[mmap_write_trylock_removed], [
-		AC_DEFINE(HAVE_MMAP_WRITE_TRYLOCK, 1,
-			['mmap_write_trylock()' is available])
-	])
-]) # LC_HAVE_MMAP_WRITE_TRYLOCK
-
-#
 # LC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
 #
 # linux kernel v6.5-rc1-95-g0d72b92883c6
@@ -4215,7 +4192,6 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_FLUSH___WORKQUEUE
 	LC_SRC_HAVE_INODE_GET_CTIME
 	LC_SRC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
-	LC_SRC_HAVE_MMAP_WRITE_TRYLOCK
 	LC_SRC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
 
 	# 6.7
@@ -4455,7 +4431,6 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_HAVE_FLUSH___WORKQUEUE
 	LC_HAVE_INODE_GET_CTIME
 	LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
-	LC_HAVE_MMAP_WRITE_TRYLOCK
 	LC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
 
 	# 6.7

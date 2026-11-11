@@ -54,7 +54,7 @@ struct vm_area_struct *our_vma(struct mm_struct *mm, unsigned long addr,
 	ENTRY;
 
 	/* mmap_lock must have been held by caller. */
-	LASSERT(!mmap_write_trylock(mm));
+	mmap_assert_locked(mm);
 
 	vma_iter_init(&vmi, mm, addr);
 	for_each_vma(vmi, vma) {

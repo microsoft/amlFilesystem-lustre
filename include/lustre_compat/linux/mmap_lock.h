@@ -17,11 +17,6 @@ static inline void mmap_write_lock(struct mm_struct *mm)
 	down_write(&mm->mmap_sem);
 }
 
-static inline bool mmap_write_trylock(struct mm_struct *mm)
-{
-	return down_write_trylock(&mm->mmap_sem) != 0;
-}
-
 static inline void mmap_write_unlock(struct mm_struct *mm)
 {
 	up_write(&mm->mmap_sem);
@@ -41,14 +36,11 @@ static inline void mmap_read_unlock(struct mm_struct *mm)
 {
 	up_read(&mm->mmap_sem);
 }
-#else
- #ifndef HAVE_MMAP_WRITE_TRYLOCK
-/* Replacement for mmap_write_trylock() */
-static inline bool mmap_write_trylock(struct mm_struct *mm)
+
+static inline void mmap_assert_locked(struct mm_struct *mm)
 {
-	return down_write_trylock(&mm->mmap_lock) != 0;
+	lockdep_assert_held(&mm->mmap_sem);
 }
- #endif /* HAVE_MMAP_WRITE_TRYLOCK */
 #endif
 
 #endif /* __LIBCFS_LINUX_MMAP_LOCK_H__ */
