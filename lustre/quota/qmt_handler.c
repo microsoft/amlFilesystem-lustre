@@ -847,6 +847,7 @@ static int qmt_quotactl(const struct lu_env *env, struct lu_device *ld,
 
 	case Q_SETINFO:  /* modify grace times */
 	case LUSTRE_Q_SETINFOPOOL:
+	case LUSTRE_Q_SETINFOLQA:
 		/* setinfo should be using dqi->dqi_valid, but lfs incorrectly
 		 * sets the valid flags in dqb->dqb_valid instead, try to live
 		 * with that ... */

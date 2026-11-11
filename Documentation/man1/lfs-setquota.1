@@ -1,4 +1,4 @@
-.TH LFS-SETQUOTA 1 2026-03-19 "Lustre" "Lustre User Utilities"
+.TH LFS-SETQUOTA 1 2026-11-20 "Lustre" "Lustre User Utilities"
 .SH NAME
 lfs-setquota \- set quota limits or grace time for users, groups or projects.
 .SH SYNOPSIS
@@ -20,7 +20,9 @@ lfs-setquota \- set quota limits or grace time for users, groups or projects.
 .BR -G | --default-grp " | " -P | --default-prj }
 .RS 1.2i
 .RB [ --pool
-.IR POOL_NAME ]
+.IR POOL_NAME " | "\c
+.B --lqa
+.IR LQA_NAME ]
 .RB [ -b | "--block-softlimit \fIBLOCK_SOFTLIMIT" [ KMGTPE ]]
 .br
 .RB [ -B | "--block-hardlimit \fIBLOCK_HARDLIMIT" [ KMGTPE ]]
@@ -41,7 +43,9 @@ lfs-setquota \- set quota limits or grace time for users, groups or projects.
 .I ID MOUNT_POINT
 .SY
 .BR "lfs setquota " { -t | --times "} {" -u | -g | -p "} [" "--pool " \c
-.IR POOL_NAME ]
+.IR POOL_NAME " | "\c
+.B --lqa
+.IR LQA_NAME ]
 .RS 1.2i
 .RB [ -b | "--block-grace \fIBLOCK_GRACE_TIME" ]
 .br
@@ -157,6 +161,12 @@ Set default group quota limit.
 .BR -h ", " --help
 Print usage message.
 .TP
+.BR --lqa " " \fILQA_NAME
+Set aggregate quota limits or grace times for the Lustre Quota ID Aggregate
+.IR LQA_NAME ,
+see
+.BR lctl-lqa (8).
+.TP
 .BR -i ", " --inode-softlimit " " \fIINODE_SOFTLIMIT
 Specify inode softlimit, zero means unlimited.
 It is recommended to specify inode limits in multiples of 1024.
@@ -236,6 +246,12 @@ Set grace time 10000 seconds for block quotas per pool 'flash_pool':
 .B # lfs setquota -t -u --block-grace 10000 --pool flash_pool /mnt/lustre
 .EE
 .PP
+Set block soft limit 1 TiB and grace time 1 day for users in the LQA 'lqa1':
+.EX
+.B # lfs setquota -U --lqa lqa1 -b 1T /mnt/lustre
+.B # lfs setquota -t -u --block-grace 1d --lqa lqa1 /mnt/lustre
+.EE
+.PP
 Delete unused user 'jack':
 .EX
 .B # lfs setquota -u jack --delete /mnt/lustre
@@ -256,4 +272,5 @@ filesystem package since release 1.5.0.
 .BR lfs (1),
 .BR lfs-project (1),
 .BR lfs-quota (1),
-.BR mdt.enable_chprojid_gid (4)
+.BR mdt.enable_chprojid_gid (4),
+.BR lctl-lqa (8)

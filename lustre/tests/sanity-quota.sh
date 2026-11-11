@@ -235,13 +235,15 @@ wait_grace_time() {
 	local qtype=$1
 	local flavour=$2
 	local pool=${3:-}
-	local extrasleep=${4:-5}
+	local lqa=${4:-}
+	local extrasleep=${5:-5}
 	local qarg
 	local parg
+	local larg
 
 	case $qtype in
-		u|g) qarg=$TSTUSR ;;
-		p) qarg=$TSTPRJID ;;
+		u|g|U|G) qarg=$TSTUSR ;;
+		p|P) qarg=$TSTPRJID ;;
 		*) error "get_grace_time: Invalid quota type: $qtype"
 	esac
 
@@ -251,13 +253,20 @@ wait_grace_time() {
 		$LFS quota -$qtype $qarg $parg $DIR
 	fi
 
+	if [ $lqa ]; then
+		larg="--lqa $lqa"
+		qarg=""
+		echo "Quota info for lqa:$lqa"
+		$LFS quota -$qtype $larg $DIR
+	fi
+
 	case $flavour in
 		block)
-			time=$(lfs quota -$qtype $qarg $parg $DIR|
+			time=$(lfs quota -$qtype $qarg $parg $larg $DIR|
 				   awk 'NR == 3{ print $5 }')
 			;;
 		file)
-			time=$(lfs quota -$qtype $qarg $DIR|
+			time=$(lfs quota -$qtype $qarg $larg $DIR|
 				   awk 'NR == 3{ print $9 }')
 			;;
 		*)
@@ -1486,12 +1495,30 @@ LQA_REMOVE="do_facet mds1 $LCTL lqa remove --fsname $FSNAME"
 LQA_DESTROY="do_facet mds1 $LCTL lqa destroy --fsname $FSNAME"
 LQA_LIST="do_facet mds1 $LCTL lqa list --fsname $FSNAME"
 
+# Use this to create a range for an LQA that is suitable for TSTUSR as well
+# as for TSTPRJID.
+lqa_get_range () {
+	local min=$TSTID
+	local max=$TSTID
+
+	# Cover TSTID and TSTPRJID with ±100 slack. Do not use min/2:
+	# TSTPRJID defaults to 1000, so /2 includes RUNAS_ID/sanityusr (500)
+	# and sanityusr1 (501), which can occupy the 20MB LQA hardlimit.
+	((TSTID < TSTPRJID)) || min=$TSTPRJID
+	((TSTID > TSTPRJID)) || max=$TSTPRJID
+	((min > 100)) && min=$((min - 100))
+	max=$((max + 100))
+	echo "range_min $min, range_max $max"
+	eval "$1=$min"
+	eval "$2=$max"
+}
+
 test_1k() {
 	local lqa="lqa1"
 	local glbl_limit=1024 # MB
 	local hard=20 # MB
-	local range_min=$TSTID
-	local range_max=$TSTID
+	local range_min
+	local range_max
 	local tfile1="$DIR/$tdir/$tfile-0"
 
 	(( $MDS1_VERSION >= $(version_code 2.17.50) )) ||
@@ -1500,14 +1527,7 @@ test_1k() {
 	setup_quota_test || error "setup quota failed with $?"
 	set_ost_qtype $QTYPE || error "enable ost quota failed"
 
-	# Cover TSTID and TSTPRJID with ±100 slack. Do not use min/2:
-	# TSTPRJID defaults to 1000, so /2 includes RUNAS_ID/sanityusr (500)
-	# and sanityusr1 (501), which can occupy the 20MB LQA hardlimit.
-	((TSTID > TSTPRJID)) || range_max=$TSTPRJID
-	((TSTID < TSTPRJID)) || range_min=$TSTPRJID
-	((range_min > 100)) && range_min=$((range_min - 100))
-	range_max=$((range_max + 100))
-	echo "range_min $range_min, range_max $range_max"
+	lqa_get_range "range_min" "range_max"
 
 	$LQA_NEW --name $lqa || error "cannot create $lqa"
 	stack_trap "$LQA_DESTROY --name $lqa"
@@ -1760,6 +1780,7 @@ test_block_soft() {
 	local OFFSET=0
 	local qtype=$4
 	local pool=$5
+	local lqa=$6
 	local soft_limit=$(do_facet $SINGLEMDS $LCTL get_param -n \
 		qmt.$FSNAME-QMT0000.dt-0x0.soft_least_qunit)
 
@@ -1767,7 +1788,7 @@ test_block_soft() {
 
 	$LFS setstripe $testfile -c 1 -i 0
 	chown $TSTUSR.$TSTUSR $testfile
-	[ "$qtype" == "p" ] && is_project_quota_supported &&
+	[[ $qtype == [pP] ]] && is_project_quota_supported &&
 		change_project -p $TSTPRJID $testfile
 
 	echo "Write up to soft limit"
@@ -1800,7 +1821,7 @@ test_block_soft() {
 	OFFSET=$((OFFSET + 1024))
 	cancel_lru_locks osc
 
-	wait_grace_time $qtype "block" $pool
+	wait_grace_time "$qtype" "block" "$pool" "$lqa"
 
 	$SHOW_QUOTA_USER
 	$SHOW_QUOTA_GROUP
@@ -1841,7 +1862,7 @@ test_block_soft() {
 
 	$LFS setstripe $testfile -c 1 -i 0
 	chown $TSTUSR.$TSTUSR $testfile
-	[ "$qtype" == "p" ] && change_project -p $TSTPRJID $testfile
+	[[ $qtype == [pP] ]] && change_project -p $TSTPRJID $testfile
 
 	echo "Write ..."
 	$RUNAS $DD of=$testfile count=$limit ||
@@ -2093,11 +2114,116 @@ test_3c() {
 }
 run_test 3c "Quota pools: check block soft limit on different pools"
 
+test_3d() {
+	local grace=20 # seconds
+	local lqa="lqa1"
+	local range_min
+	local range_max
+	local testfile=$DIR/$tdir/$tfile-0
+
+	(( MDS1_VERSION >= $(version_code 2.17.61.2) )) ||
+		skip "need MDS >= 2.17.61.2 to set grace timeout for LQA"
+
+	# get minimum soft qunit size
+	local limit=$(( $(do_facet $SINGLEMDS $LCTL get_param -n \
+		qmt.$FSNAME-QMT0000.dt-0x0.soft_least_qunit) / 1024 ))
+	[ "$mds1_FSTYPE" = zfs ] && grace=60
+	local glbl_limit=$((2*limit))
+	local glbl_grace=$((2*grace))
+	echo "limit $limit glbl_limit $glbl_limit"
+	echo "grace $grace glbl_grace $glbl_grace"
+
+	set_ost_qtype $QTYPE || error "enable ost quota failed"
+	set_max_dirty_mb 1
+
+	echo "User quota in $lqa(soft limit:$limit MB  grace:$grace seconds)"
+	# make sure the system is clean
+	local used=$(getquota -u $TSTUSR global curspace)
+	[ $used -ne 0 ] && error "Used space($used) for user $TSTUSR isn't 0."
+
+	$LQA_NEW --name $lqa || error "cannot create $lqa"
+	stack_trap "$LQA_DESTROY --name $lqa"
+	lqa_get_range "range_min" "range_max"
+	$LQA_ADD --name $lqa --range $range_min-$range_max ||
+		error "cannot add range $range_min-$range_max to $lqa"
+
+	$LFS setquota -t -u --block-grace $glbl_grace --inode-grace \
+		$MAX_IQ_TIME $DIR || error "set user grace time failed"
+	$LFS setquota -t -u --block-grace $grace --lqa $lqa $DIR ||
+		error "LQA:$lqa: set user grace time failed"
+
+	$LFS setquota -u $TSTUSR -b ${glbl_limit}M -B 0 -i 0 -I 0 $DIR ||
+		error "set user quota failed"
+	$LFS setquota -U -b ${limit}M -B 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: set user quota failed"
+
+	$LFS quota -U --lqa $lqa $DIR
+
+	test_block_soft $testfile $grace $limit "U" "" $lqa
+
+	$LFS setquota -U -b 0 -B 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: cleanup user quota failed"
+
+	echo "Group quota in $lqa(soft limit:$limit MB  grace:$grace seconds)"
+	testfile=$DIR/$tdir/$tfile-1
+	# make sure the system is clean
+	used=$(getquota -g $TSTUSR global curspace)
+	[ $used -ne 0 ] && error "Used space($used) for group $TSTUSR isn't 0."
+
+	$LFS setquota -t -g --block-grace $glbl_grace --inode-grace \
+		$MAX_IQ_TIME $DIR || error "set group grace time failed"
+	$LFS setquota -t -g --block-grace $grace --lqa $lqa $DIR ||
+		error "LQA:$lqa: set group grace time failed"
+
+	$LFS setquota -g $TSTUSR -b ${glbl_limit}M -B 0 -i 0 -I 0 $DIR ||
+		error "set group quota failed"
+	$LFS setquota -G -b ${limit}M -B 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: set group quota failed"
+
+	test_block_soft $testfile $grace $limit "G" "" $lqa
+
+	$LFS setquota -G -b 0 -B 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: cleanup group quota failed"
+
+	if is_project_quota_supported; then
+		echo "Project quota in $lqa(soft:$limit MB  grace:$grace sec)"
+		testfile=$DIR/$tdir/$tfile-2
+		# make sure the system is clean
+		used=$(getquota -p $TSTPRJID global curspace)
+		[ $used -ne 0 ] && error \
+			"Used space($used) for project $TSTPRJID isn't 0."
+
+		$LFS setquota -t -p --block-grace $glbl_grace --inode-grace \
+			$MAX_IQ_TIME $DIR ||
+				error "set project grace time failed"
+		$LFS setquota -t -p --block-grace $grace --lqa $lqa $DIR ||
+			error "LQA:$lqa: set project grace time failed"
+
+		$LFS setquota -p $TSTPRJID -b ${glbl_limit}M -B 0 -i 0 -I 0 \
+			$DIR || error "set project quota failed"
+		$LFS setquota -P -b ${limit}M -B 0 --lqa $lqa $DIR ||
+			error "LQA:$lqa: set project quota failed"
+
+		test_block_soft $testfile $grace $limit "P" "" $lqa
+		$LFS setquota -t -p --block-grace $MAX_DQ_TIME --inode-grace \
+			$MAX_IQ_TIME $DIR ||
+				error "restore project grace time failed"
+	fi
+
+	# cleanup
+	$LFS setquota -t -u --block-grace $MAX_DQ_TIME --inode-grace \
+		$MAX_IQ_TIME $DIR || error "restore user grace time failed"
+	$LFS setquota -t -g --block-grace $MAX_DQ_TIME --inode-grace \
+		$MAX_IQ_TIME $DIR || error "restore group grace time failed"
+}
+run_test 3d "LQA: Block soft limit (start timer, expires, stop timer)"
+
 test_file_soft() {
 	local TESTFILE=$1
 	local LIMIT=$2
 	local grace=$3
 	local qtype=$4
+	local lqa=$5
 	local SOFT_LIMIT=$(do_facet $SINGLEMDS $LCTL get_param -n \
 		qmt.$FSNAME-QMT0000.md-0x0.soft_least_qunit)
 
@@ -2123,7 +2249,7 @@ test_file_soft() {
 			"but expect success. $trigger_time, $cur_time"
 	do_facet mds1 $LCTL set_param -n osd*.*MDT0000.force_sync=1
 
-	wait_grace_time $qtype "file"
+	wait_grace_time $qtype "file" "" "$lqa"
 
 	$SHOW_QUOTA_USER
 	$SHOW_QUOTA_GROUP
@@ -2258,6 +2384,107 @@ test_4b() {
 		$MAX_IQ_TIME $DIR || error "restore group grace time failed"
 }
 run_test 4b "Grace time strings handling"
+
+test_4c() {
+	local limit=$(do_facet $SINGLEMDS $LCTL get_param -n \
+		qmt.$FSNAME-QMT0000.md-0x0.soft_least_qunit)
+	local testf=$DIR/$tdir/$tfile-0
+	local lqa="lqa1"
+	local range_min
+	local range_max
+	local grace=12
+
+	(( MDS1_VERSION >= $(version_code 2.17.61.2) )) ||
+		skip "need MDS >= 2.17.61.2 to set grace timeout for LQA"
+
+	[ "$mds1_FSTYPE" = zfs ] && grace=20
+	local glbl_limit=$((2*limit))
+	local glbl_grace=$((2*grace))
+	echo "limit $limit glbl_limit $glbl_limit"
+	echo "grace $grace glbl_grace $glbl_grace"
+
+	set_mdt_qtype $QTYPE || error "enable mdt quota failed"
+
+	echo "User quota (soft limit:$limit files  grace:$grace seconds)"
+	# make sure the system is clean
+	local used=$(getquota -u $TSTUSR global curinodes)
+	[ $used -ne 0 ] && error "Used space($used) for user $TSTUSR isn't 0."
+
+	$LQA_NEW --name $lqa || error "cannot create $lqa"
+	stack_trap "$LQA_DESTROY --name $lqa"
+	lqa_get_range "range_min" "range_max"
+	$LQA_ADD --name $lqa --range $range_min-$range_max ||
+		error "cannot add range $range_min-$range_max to $lqa"
+
+	$LFS setquota -t -u --block-grace $MAX_DQ_TIME --inode-grace \
+		$glbl_grace $DIR || error "set user grace time failed"
+	$LFS setquota -t -u --block-grace $MAX_DQ_TIME --inode-grace $grace \
+		--lqa $lqa $DIR || error "LQA:$lqa: set user grace time failed"
+
+	$LFS setquota -u $TSTUSR -b 0 -B 0 -i $glbl_limit -I 0 $DIR ||
+		error "set user quota failed"
+	$LFS setquota -U -i $limit -I 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: set user quota failed"
+
+	test_file_soft $testf $limit $grace "U" $lqa
+	$LFS setquota -U -i 0 -I 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: cleanup user quota failed"
+
+	echo "Group quota (soft limit:$limit files  grace:$grace seconds)"
+	# make sure the system is clean
+	used=$(getquota -g $TSTUSR global curinodes)
+	[ $used -ne 0 ] && error "Used space($used) for group $TSTUSR isn't 0."
+
+	$LFS setquota -t -g --block-grace $MAX_DQ_TIME --inode-grace \
+		$glbl_grace $DIR || error "set group grace time failed"
+	$LFS setquota -t -g --block-grace $MAX_DQ_TIME --inode-grace $grace \
+		--lqa $lqa $DIR || error "LQA:$lqa: set group grace time failed"
+
+	$LFS setquota -g $TSTUSR -b 0 -B 0 -i $glbl_limit -I 0 $DIR ||
+		error "set group quota failed"
+	$LFS setquota -G -i $limit -I 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: set group quota failed"
+
+	testf=$DIR/$tdir/$tfile-1
+
+	test_file_soft $testf $limit $grace "G" $lqa
+	$LFS setquota -G -i 0 -I 0 --lqa $lqa $DIR ||
+		error "LQA:$lqa: cleanup group quota failed"
+
+	if is_project_quota_supported; then
+		echo "Project quota (soft limit:$limit files grace:$grace sec)"
+		# make sure the system is clean
+		used=$(getquota -p $TSTPRJID global curinodes)
+		[ $used -ne 0 ] && error \
+			"Used space($used) for project $TSTPRJID isn't 0."
+
+		$LFS setquota -t -p --block-grace $MAX_DQ_TIME --inode-grace \
+			$glbl_grace $DIR || error "set proj grace time failed"
+		$LFS setquota -t -p --block-grace $MAX_DQ_TIME --inode-grace \
+			$grace --lqa $lqa $DIR ||
+				error "LQA:$lqa: set proj grace time failed"
+
+		$LFS setquota -p $TSTPRJID -b 0 -B 0 -i $glbl_limit -I 0 $DIR ||
+			error "set project quota failed"
+		$LFS setquota -P -i $limit -I 0 --lqa $lqa $DIR ||
+			error "LQA:$lqa: set proj quota failed"
+
+		testf=$DIR/$tdir/$tfile-1
+		# one less than limit, because of parent directory included.
+		test_file_soft $testf $((limit-1)) $grace "P" $lqa
+		resetquota -p $TSTPRJID
+		$LFS setquota -t -p --block-grace $MAX_DQ_TIME --inode-grace \
+			$MAX_IQ_TIME $DIR ||
+				error "restore project grace time failed"
+	fi
+
+	# cleanup
+	$LFS setquota -t -u --block-grace $MAX_DQ_TIME --inode-grace \
+		$MAX_IQ_TIME $DIR || error "restore user grace time failed"
+	$LFS setquota -t -g --block-grace $MAX_DQ_TIME --inode-grace \
+		$MAX_IQ_TIME $DIR || error "restore group grace time failed"
+}
+run_test 4c "LQA: File soft limit (start timer, timer goes off, stop timer)"
 
 # chown & chgrp (chown & chgrp successfully even out of block/file quota)
 test_5() {
@@ -8153,6 +8380,10 @@ test_97c ()
 	local bsoft=7000 # KB
 	local ihard=4000
 	local isoft=3000
+	local bgrace=33s
+	local igrace=55s
+	local grace_str="Block grace time: $bgrace; Inode grace time: $igrace"
+	local lqa_grace=false
 	local limit
 
 	(( $MDS1_VERSION >= $(version_code 2.17.50) )) ||
@@ -8167,11 +8398,24 @@ test_97c ()
 		-i ${isoft} $DIR && error "QID can't be set for lqa:$lqa"
 	$LFS setquota -U --lqa $lqa -B ${bhard} -b ${bsoft} -I ${ihard} \
 		-i ${isoft} $DIR || error "set user quota failed for lqa:$lqa"
+	if (( MDS1_VERSION >= $(version_code 2.17.61.2) )); then
+		lqa_grace=true
+		$LFS setquota -u -t -b $bgrace -i $igrace --lqa $lqa $DIR ||
+			error "set user grace periods failed for lqa:$lqa"
+	fi
 	$LFS quota -U --lqa $lqa $DIR
 
 	echo "Verifying the title"
 	$LFS quota -U --lqa $lqa | grep -q "^Disk usr quotas for LQA:$lqa$" ||
 		error "lfs quota title for lqa is wrong"
+
+	if $lqa_grace; then
+		echo "Verifying LQA user grace periods"
+		$LFS quota -u -t --lqa $lqa | grep -q "$grace_str" ||
+			error "(0) grace periods are wrong for lqa:$lqa"
+		$LFS quota -U --lqa $lqa -t | grep -q "$grace_str" ||
+			error "(1) grace periods are wrong for lqa:$lqa"
+	fi
 
 	echo "Verifying initial LQA quota limits"
 	limit=$($LFS quota -U --lqa $lqa -Bq)
@@ -8195,6 +8439,10 @@ test_97c ()
 	$LFS quota -U --lqa $lqa $DIR
 
 	# Check that LFS quota settings haven't been changed after MDS restart
+	if $lqa_grace; then
+		$LFS quota -U -t --lqa $lqa | grep -q "$grace_str" ||
+			error "wrong grace periods after restart for lqa:$lqa"
+	fi
 	limit=$($LFS quota -U --lqa $lqa -Bq)
 	((limit == bhard)) ||
 		error "bhard limit $limit != $bhard after restart for lqa:$lqa"

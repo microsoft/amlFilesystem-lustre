@@ -1,4 +1,4 @@
-.TH LFS-QUOTA 1 2026-08-18 "Lustre" "Lustre User Utilities"
+.TH LFS-QUOTA 1 2026-11-20 "Lustre" "Lustre User Utilities"
 .SH NAME
 lfs-quota \- display quota limits and status for users, groups, or projects.
 .SH SYNOPSIS
@@ -32,10 +32,16 @@ lfs-quota \- display quota limits and status for users, groups, or projects.
 .RI [ MOUNT_POINT " ...]"
 .SY "lfs quota"
 .RB { -U | --default-usr | -G | --default-grp | -P | --default-prj }
+.RB [ --lqa
+.IR LQA_NAME ]
 .RI [ MOUNT_POINT " ...]"
 .SY "lfs quota"
 .BR -t | --times
 .RB { -u | -g | -p }
+.RB [ --pool
+.IR OST_POOL_NAME | \c
+.B --lqa
+.IR LQA_NAME ]
 .RI [ MOUNT_POINT " ...]"
 .SY "lfs quota"
 .BR -a | --all
@@ -257,6 +263,16 @@ Display default user quota limit.
 .BI --pool " POOL_NAME"
 Display default quota information for OST pool
 .IR POOL_NAME .
+.TP
+.BI --lqa " LQA_NAME"
+Display quota limits of the Lustre Quota ID Aggregate
+.IR LQA_NAME .
+With
+.BR -t ,
+display its grace times, and
+.BR -u ", " -g ", or " -p
+may be used in place of
+.BR -U ", " -G ", or " -P .
 .SH EXAMPLES
 Display quotas and usage for current user, group, and project:
 .EX
@@ -292,6 +308,13 @@ Display grace times for group quotas for the OST pool
 .B $ lfs quota -t -g --pool flash_pool /mnt/lustre
 .EE
 .PP
+Display user quota limits and grace times for the LQA
+.BR lqa1 :
+.EX
+.B # lfs quota -U --lqa lqa1 /mnt/lustre
+.B $ lfs quota -t -u --lqa lqa1 /mnt/lustre
+.EE
+.PP
 Display only the filesystem blocks and inodes columns:
 .EX
 .B $ lfs quota --filesystem --blocks --inodes
@@ -325,4 +348,5 @@ filesystem package since release 1.7.0
 .BR lfs (1),
 .BR lfs-project (1),
 .BR lfs-setquota (1),
-.BR projid (5)
+.BR projid (5),
+.BR lctl-lqa (8)

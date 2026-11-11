@@ -568,7 +568,7 @@ command_t cmdlist[] = {
 #ifdef HAVE_SYS_QUOTA_H
 	{"setquota", lfs_setquota, 0, "Set filesystem quotas.\n"
 	 "usage: setquota [-t] {-u|-U|-g|-G|-p|-P ID} {-b|-B|-i|-I LIMIT}\n"
-	 "                [--lqa LQA_NAME] [--pool POOL] MOUNT_POINT\n"
+	 "                [--lqa LQA_NAME] [--pool POOL_NAME] MOUNT_POINT\n"
 	 "       setquota {-u|-g|-p ID} {--default|--delete} MOUNT_POINT\n"},
 	{"quota", lfs_quota, 0, "Display disk usage and limits.\n"
 	 "usage: quota [-q] [-v] [-h] [-o OBD_UUID|-o OST_IDX|-m MDT_IDX]\n"
@@ -588,6 +588,7 @@ command_t cmdlist[] = {
 	 "             [MOUNT_POINT ...]\n"
 	 "       quota -t {-u|-g|-p} [--pool OST_POOL_NAME] [MOUNT_POINT ...]\n"
 	 "       quota [-hqv] {-U|-G|-P} [--pool OST_POOL_NAME] [MOUNT_POINT ...]\n"
+	 "       quota -t {-u|-g|-p} --lqa LQA_NAME [MOUNT_POINT ...]\n"
 	 "       quota -a {-u|-g|-p} [-n] [-s START_QID] [-e END_QID]\n"
 	 "             [--show-root] [MOUNT_POINT ...]\n"},
 	{"project", lfs_project, 0,
@@ -11881,6 +11882,7 @@ static void print_quota_title(char *name, struct if_quotactl *qctl,
 	if (param->qp_quiet ||
 	    qctl->qc_cmd == LUSTRE_Q_GETINFO ||
 	    qctl->qc_cmd == LUSTRE_Q_GETINFOPOOL ||
+	    qctl->qc_cmd == LUSTRE_Q_GETINFOLQA ||
 	    qctl->qc_cmd == Q_GETOINFO)
 		return;
 
@@ -12859,21 +12861,12 @@ static int lfs_quota(int argc, char **argv)
 			qtype = PRJQUOTA;
 			goto quota_type;
 		case LFS_LQA_OPT:
-			if (!param.qp_show_default ||
-			    qctl->qc_type == ALLQUOTA) {
-				fprintf(stderr, "Specify LQA quota type with -U,-G, or -P\n");
-				rc = CMD_HELP;
-				goto out;
-			}
 			rc = llint_lqa_name_verify(optarg);
 			if (rc)
 				goto out;
 			snprintf(qctl->qc_lqaname, LQA_NAME_MAX + 1, "%s",
 				 optarg);
-			qctl->qc_cmd = LUSTRE_Q_GETQUOTALQA;
-			param.qp_show_default = 0;
 			param.qp_show_lqa = 1;
-			qctl->qc_id = 1;
 			break;
 		case LFS_POOL_OPT:
 			if ((!optarg) && (argv[optind] != NULL) &&
@@ -12910,7 +12903,11 @@ static int lfs_quota(int argc, char **argv)
 			start_qid = strtoul(optarg, NULL, 0);
 			break;
 		case 't':
-			qctl->qc_cmd = LUSTRE_Q_GETINFO;
+			if (qctl->qc_cmd == LUSTRE_Q_GETQUOTAPOOL &&
+			    qctl->qc_poolname[0] != '\0')
+				qctl->qc_cmd = LUSTRE_Q_GETINFOPOOL;
+			else
+				qctl->qc_cmd = LUSTRE_Q_GETINFO;
 			break;
 		case 'U':
 			param.qp_show_default = 1;
@@ -12964,6 +12961,25 @@ quota_type:
 			rc = CMD_HELP;
 			goto out;
 		}
+	}
+
+	if (param.qp_show_lqa) {
+		if (qctl->qc_type == ALLQUOTA || param.qp_show_pools ||
+		    (qctl->qc_cmd != LUSTRE_Q_GETINFO &&
+		     (qctl->qc_cmd != LUSTRE_Q_GETQUOTA ||
+		      !param.qp_show_default))) {
+			fprintf(stderr,
+				"%s quota: specify LQA quota type with -U, -G or -P, or -t with -u, -g or -p\n",
+				progname);
+			rc = CMD_HELP;
+			goto out;
+		}
+		if (qctl->qc_cmd == LUSTRE_Q_GETINFO)
+			qctl->qc_cmd = LUSTRE_Q_GETINFOLQA;
+		else
+			qctl->qc_cmd = LUSTRE_Q_GETQUOTALQA;
+		param.qp_show_default = 0;
+		qctl->qc_id = 1;
 	}
 
 	if (!param.qp_detail)
