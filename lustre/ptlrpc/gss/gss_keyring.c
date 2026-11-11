@@ -50,7 +50,7 @@ static struct ptlrpc_ctx_ops gss_keyring_ctxops;
 static struct key_type gss_key_type;
 
 static int sec_install_rctx_kr(struct ptlrpc_sec *sec,
-			       struct ptlrpc_svc_ctx *svc_ctx);
+			       struct ptlrpc_svc_ctx *svc_ctx, bool in_use);
 static void request_key_unlink(struct key *key, bool fullsearch);
 
 /*
@@ -541,7 +541,7 @@ struct ptlrpc_cli_ctx *sec_lookup_root_ctx_kr(struct ptlrpc_sec *sec)
 static
 void rvs_sec_install_root_ctx_kr(struct ptlrpc_sec *sec,
 				 struct ptlrpc_cli_ctx *new_ctx,
-				 struct key *key)
+				 struct key *key, bool in_use)
 {
 	struct gss_sec_keyring *gsec_kr = sec2gsec_keyring(sec);
 	struct ptlrpc_cli_ctx *ctx;
@@ -575,8 +575,9 @@ void rvs_sec_install_root_ctx_kr(struct ptlrpc_sec *sec,
 	 * immediately, we leave it continue operating for a little while.
 	 * hopefully when the first backward rpc with newest ctx send out,
 	 * the client side already have the peer ctx well established.
+	 * A ctx the client already uses has its peer ctx established.
 	 */
-	ctx_enlist_kr(new_ctx, gsec_kr->gsk_root_ctx ? 0 : 1, 1);
+	ctx_enlist_kr(new_ctx, in_use || !gsec_kr->gsk_root_ctx, 1);
 
 	if (key)
 		bind_key_ctx(key, new_ctx);
@@ -620,7 +621,7 @@ struct ptlrpc_sec *gss_sec_create_kr(struct obd_import *imp,
 		goto err_free;
 
 	if (svcctx != NULL &&
-	    sec_install_rctx_kr(&gsec_kr->gsk_base.gs_base, svcctx)) {
+	    sec_install_rctx_kr(&gsec_kr->gsk_base.gs_base, svcctx, false)) {
 		gss_sec_destroy_common(&gsec_kr->gsk_base);
 		goto err_free;
 	}
@@ -1592,9 +1593,34 @@ void gss_cli_ctx_die_kr(struct ptlrpc_cli_ctx *ctx, int grace)
 
 #ifdef HAVE_REVERSE_CTX_NOKEY
 
+static bool rvs_ctx_find_promote_kr(struct ptlrpc_sec *sec,
+				    struct ptlrpc_svc_ctx *svc_ctx,
+				    bool promote)
+{
+	struct gss_sec_keyring *gsec_kr = sec2gsec_keyring(sec);
+	struct gss_rsc *rscp = container_of(gss_svc_ctx2gssctx(svc_ctx),
+					    struct gss_rsc, sc_ctx);
+	struct ptlrpc_cli_ctx *ctx;
+	bool found = false;
+
+	spin_lock(&sec->ps_lock);
+	hlist_for_each_entry(ctx, &gsec_kr->gsk_clist, cc_cache) {
+		if (rawobj_equal(&ctx2gctx(ctx)->gc_svc_handle,
+				 &rscp->sc_handle)) {
+			if (promote)
+				gsec_kr->gsk_root_ctx = ctx;
+			found = true;
+			break;
+		}
+	}
+	spin_unlock(&sec->ps_lock);
+
+	return found;
+}
+
 static
 int sec_install_rctx_kr(struct ptlrpc_sec *sec,
-			struct ptlrpc_svc_ctx *svc_ctx)
+			struct ptlrpc_svc_ctx *svc_ctx, bool in_use)
 {
 	struct ptlrpc_cli_ctx *cli_ctx;
 	struct vfs_cred vcred = { .vc_uid = 0 };
@@ -1602,6 +1628,10 @@ int sec_install_rctx_kr(struct ptlrpc_sec *sec,
 
 	LASSERT(sec);
 	LASSERT(svc_ctx);
+
+	/* a second copy of the same svc ctx would restart its sequence */
+	if (rvs_ctx_find_promote_kr(sec, svc_ctx, in_use))
+		return 0;
 
 	cli_ctx = ctx_create_kr(sec, &vcred);
 	if (cli_ctx == NULL)
@@ -1615,7 +1645,7 @@ int sec_install_rctx_kr(struct ptlrpc_sec *sec,
 		return rc;
 	}
 
-	rvs_sec_install_root_ctx_kr(sec, cli_ctx, NULL);
+	rvs_sec_install_root_ctx_kr(sec, cli_ctx, NULL, in_use);
 
 	ctx_put_kr(cli_ctx, 1);
 
@@ -1626,7 +1656,7 @@ int sec_install_rctx_kr(struct ptlrpc_sec *sec,
 
 static
 int sec_install_rctx_kr(struct ptlrpc_sec *sec,
-			struct ptlrpc_svc_ctx *svc_ctx)
+			struct ptlrpc_svc_ctx *svc_ctx, bool in_use)
 {
 	struct ptlrpc_cli_ctx *cli_ctx = NULL;
 	struct key *key;
@@ -1669,7 +1699,7 @@ int sec_install_rctx_kr(struct ptlrpc_sec *sec,
 		goto err_put;
 	}
 
-	rvs_sec_install_root_ctx_kr(sec, cli_ctx, key);
+	rvs_sec_install_root_ctx_kr(sec, cli_ctx, key, in_use);
 
 	ctx_put_kr(cli_ctx, 1);
 	up_write(&key->sem);
@@ -1703,7 +1733,7 @@ int gss_svc_accept_kr(struct ptlrpc_request *req)
 
 static
 int gss_svc_install_rctx_kr(struct obd_import *imp,
-			    struct ptlrpc_svc_ctx *svc_ctx)
+			    struct ptlrpc_svc_ctx *svc_ctx, bool in_use)
 {
 	struct ptlrpc_sec *sec;
 	int                rc;
@@ -1711,7 +1741,7 @@ int gss_svc_install_rctx_kr(struct obd_import *imp,
 	sec = sptlrpc_import_sec_ref(imp);
 	LASSERT(sec);
 
-	rc = sec_install_rctx_kr(sec, svc_ctx);
+	rc = sec_install_rctx_kr(sec, svc_ctx, in_use);
 	sptlrpc_sec_put(sec);
 
 	return rc;

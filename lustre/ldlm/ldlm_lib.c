@@ -1123,13 +1123,14 @@ EXPORT_SYMBOL(rev_import_init);
  * rev_import_reconnect() - Handle reconnect for an export.
  * @exp: export to handle reconnect process
  * @req: client reconnect request
+ * @reconnected: the export existed before this connect
  *
  * Return:
  * * %0 on success
  * * %negative on failure
  */
 static int rev_import_reconnect(struct obd_export *exp,
-				struct ptlrpc_request *req)
+				struct ptlrpc_request *req, bool reconnected)
 {
 	struct obd_import *revimp = exp->exp_imp_reverse;
 	struct lustre_handle *lh;
@@ -1170,6 +1171,12 @@ static int rev_import_reconnect(struct obd_export *exp,
 		 * be delivered correctly
 		 */
 		return rc;
+	}
+
+	if (reconnected) {
+		rc = sptlrpc_target_reconnect_rvs_ctx(exp, req);
+		if (rc)
+			return rc;
 	}
 
 	/* resend all rpc's via new connection */
@@ -1754,7 +1761,7 @@ dont_check_exports:
 
 	lustre_msg_set_handle(req->rq_repmsg, &conn);
 
-	rc = rev_import_reconnect(export, req);
+	rc = rev_import_reconnect(export, req, reconnected);
 	if (rc != 0)
 		GOTO(out, rc);
 

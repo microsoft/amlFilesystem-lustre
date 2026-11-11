@@ -786,10 +786,12 @@ struct ptlrpc_sec_sops {
 
 	/**
 	 * Install a reverse context based on the server context \a ctx.
+	 * \a in_use: the peer already uses \a ctx, make its copy the root.
 	 *
 	 * \see gss_svc_install_rctx_kr().
 	 */
-	int (*install_rctx)(struct obd_import *imp, struct ptlrpc_svc_ctx *ctx);
+	int (*install_rctx)(struct obd_import *imp, struct ptlrpc_svc_ctx *ctx,
+			    bool in_use);
 
 	/**
 	 * Prepare buffer for incoming bulk write.
@@ -1196,6 +1198,8 @@ void sptlrpc_svc_ctx_invalidate(struct ptlrpc_request *req);
 
 int  sptlrpc_target_export_check(struct obd_export *exp,
 				 struct ptlrpc_request *req);
+int  sptlrpc_target_reconnect_rvs_ctx(struct obd_export *exp,
+				      struct ptlrpc_request *req);
 void sptlrpc_target_update_exp_flavor(struct obd_device *obd,
 				      struct sptlrpc_rule_set *rset);
 int  sptlrpc_target_export_sec_install(struct obd_export *exp,
@@ -1244,7 +1248,7 @@ struct gss_svc_ctx {
 };
 
 int sptlrpc_svc_install_rvs_ctx(struct obd_import *imp,
-				struct ptlrpc_svc_ctx *ctx);
+				struct ptlrpc_svc_ctx *ctx, bool in_use);
 
 /* bulk security api */
 int sptlrpc_cli_wrap_bulk(struct ptlrpc_request *req,

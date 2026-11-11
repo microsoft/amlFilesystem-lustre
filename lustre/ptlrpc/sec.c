@@ -1988,13 +1988,13 @@ void sptlrpc_cli_free_repbuf(struct ptlrpc_request *req)
 EXPORT_SYMBOL(sptlrpc_cli_free_repbuf);
 
 int sptlrpc_svc_install_rvs_ctx(struct obd_import *imp,
-				struct ptlrpc_svc_ctx *ctx)
+				struct ptlrpc_svc_ctx *ctx, bool in_use)
 {
 	struct ptlrpc_sec_policy *policy = ctx->sc_policy;
 
 	if (!policy->sp_sops->install_rctx)
 		return 0;
-	return policy->sp_sops->install_rctx(imp, ctx);
+	return policy->sp_sops->install_rctx(imp, ctx, in_use);
 }
 
 
@@ -2197,6 +2197,30 @@ static int flavor_allowed(struct sptlrpc_flavor *exp,
 
 #define EXP_FLVR_UPDATE_EXPIRE      (OBD_TIMEOUT_DEFAULT + 10)
 
+static void sptlrpc_target_nm_switch(struct obd_export *exp,
+				     struct ptlrpc_request *req)
+{
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	struct ptlrpc_sec *sec;
+	int rc;
+
+	if (!req->rq_svc_ctx || !req->rq_svc_ctx->sc_nodemap)
+		return;
+
+	sec = sptlrpc_import_sec_ref(exp->exp_imp_reverse);
+	if (sec && strcmp(sec->ps_nm_name, req->rq_svc_ctx->sc_nodemap) != 0)
+		strscpy(sec->ps_nm_name, req->rq_svc_ctx->sc_nodemap,
+			sizeof(sec->ps_nm_name));
+	sptlrpc_sec_put(sec);
+
+	rc = nodemap_member_switch(exp, req->rq_svc_ctx->sc_nodemap, false);
+	/* do not fail on issue with nodemap switch */
+	if (rc)
+		CDEBUG(D_SEC, "%s: could not switch nodemap: rc = %d\n",
+		       exp->exp_obd->obd_name, rc);
+#endif
+}
+
 /**
  * sptlrpc_target_export_check() - chk if flavor allowed by the export
  * @exp: export to check if flavor(security protocol) is suppported
@@ -2330,7 +2354,7 @@ int sptlrpc_target_export_check(struct obd_export *exp,
 		       exp->exp_flvr_old[1].sf_rpc);
 
 		rc = sptlrpc_svc_install_rvs_ctx(exp->exp_imp_reverse,
-						 req->rq_svc_ctx);
+						 req->rq_svc_ctx, false);
 		GOTO(nm_switch, rc);
 	}
 
@@ -2405,30 +2429,41 @@ int sptlrpc_target_export_check(struct obd_export *exp,
 	return -EACCES;
 
 nm_switch:
-#ifdef CONFIG_LUSTRE_FS_SERVER
-	if (!rc && req->rq_svc_ctx && req->rq_svc_ctx->sc_nodemap) {
-		struct ptlrpc_sec *sec;
-
-		sec = sptlrpc_import_sec_ref(exp->exp_imp_reverse);
-		if (sec &&
-		    strcmp(sec->ps_nm_name, req->rq_svc_ctx->sc_nodemap) != 0)
-			strscpy(sec->ps_nm_name, req->rq_svc_ctx->sc_nodemap,
-				sizeof(sec->ps_nm_name));
-		sptlrpc_sec_put(sec);
-
-		rc = nodemap_member_switch(exp, req->rq_svc_ctx->sc_nodemap,
-					   false);
-		if (rc) {
-			/* do not fail on issue with nodemap switch */
-			CDEBUG(D_SEC, "%s: could not switch nodemap: rc = %d\n",
-			       exp->exp_obd->obd_name, rc);
-			rc = 0;
-		}
-	}
-#endif
+	if (!rc)
+		sptlrpc_target_nm_switch(exp, req);
 	return rc;
 }
 EXPORT_SYMBOL(sptlrpc_target_export_check);
+
+/**
+ * sptlrpc_target_reconnect_rvs_ctx() - install reverse ctx of a reconnect
+ * @exp: export the client reconnects to
+ * @req: connect request
+ *
+ * Called on every reconnect of an existing export, not only one from idle.
+ * In most of those cases the reverse ctx is already installed and is only
+ * made the root ctx; a reconnect that negotiated its context before the
+ * export handle was available, as happens after an idle reconnect, needs
+ * a new copy installed.
+ *
+ * Return 0 on success, negative errno on failure.
+ */
+int sptlrpc_target_reconnect_rvs_ctx(struct obd_export *exp,
+				     struct ptlrpc_request *req)
+{
+	int rc;
+
+	if (!req->rq_auth_gss ||
+	    (!req->rq_auth_usr_root && !req->rq_auth_usr_mdt &&
+	     !req->rq_auth_usr_ost))
+		return 0;
+
+	rc = sptlrpc_svc_install_rvs_ctx(exp->exp_imp_reverse,
+					 req->rq_svc_ctx, true);
+	if (!rc)
+		sptlrpc_target_nm_switch(exp, req);
+	return rc;
+}
 
 /**
  * sptlrpc_target_export_sec_install() - install security context into export
