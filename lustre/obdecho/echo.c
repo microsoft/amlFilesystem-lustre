@@ -687,7 +687,7 @@ static int esd_setattr_hdl(struct tgt_session_info *tsi)
  * uses such table from each target to process incoming
  * requests.
  */
-static struct tgt_handler esd_tgt_handlers[] = {
+static struct tgt_handler esd_tgt_handlers[OST_LAST_OPC - OST_FIRST_OPC] = {
 TGT_RPC_HANDLER(OST_FIRST_OPC, 0, OST_CONNECT, tgt_connect,
 		&RQF_CONNECT, LUSTRE_OBD_VERSION),
 TGT_RPC_HANDLER(OST_FIRST_OPC, 0, OST_DISCONNECT, tgt_disconnect,

@@ -1496,7 +1496,8 @@ out_free:
 	RETURN(rc);
 }
 
-struct tgt_handler tgt_out_handlers[] = {
+struct tgt_handler tgt_out_handlers[OUT_UPDATE_LAST_OPC -
+				     OUT_UPDATE_FIRST_OPC] = {
 TGT_UPDATE_HDL(IS_MUTABLE,	OUT_UPDATE,	out_handle),
 };
 EXPORT_SYMBOL(tgt_out_handlers);

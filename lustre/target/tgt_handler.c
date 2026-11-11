@@ -1417,7 +1417,7 @@ out:
 	return rc;
 }
 
-struct tgt_handler tgt_obd_handlers[] = {
+struct tgt_handler tgt_obd_handlers[OBD_LAST_OPC - OBD_FIRST_OPC] = {
 TGT_OBD_HDL(0,	OBD_PING,		tgt_obd_ping),
 TGT_OBD_HDL(0,	OBD_IDX_READ,		tgt_obd_idx_read)
 };
@@ -1655,7 +1655,7 @@ int tgt_llog_prev_block(struct tgt_session_info *tsi)
 EXPORT_SYMBOL(tgt_llog_prev_block);
 
 /* generic llog target handler */
-struct tgt_handler tgt_llog_handlers[] = {
+struct tgt_handler tgt_llog_handlers[LLOG_LAST_OPC - LLOG_FIRST_OPC] = {
 TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_CREATE,	tgt_llog_open),
 TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_NEXT_BLOCK,	tgt_llog_next_block),
 TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_READ_HEADER,	tgt_llog_read_header),
@@ -1672,7 +1672,7 @@ static int tgt_sec_ctx_handle(struct tgt_session_info *tsi)
 	return 0;
 }
 
-struct tgt_handler tgt_sec_ctx_handlers[] = {
+struct tgt_handler tgt_sec_ctx_handlers[SEC_LAST_OPC - SEC_FIRST_OPC] = {
 TGT_SEC_HDL_VAR(0,	SEC_CTX_INIT,		tgt_sec_ctx_handle),
 TGT_SEC_HDL_VAR(0,	SEC_CTX_INIT_CONT,	tgt_sec_ctx_handle),
 TGT_SEC_HDL_VAR(0,	SEC_CTX_FINI,		tgt_sec_ctx_handle),
@@ -1762,7 +1762,7 @@ static int tgt_handle_lfsck_query(struct tgt_session_info *tsi)
 	RETURN(rc < 0 ? rc : 0);
 }
 
-struct tgt_handler tgt_lfsck_handlers[] = {
+struct tgt_handler tgt_lfsck_handlers[LFSCK_LAST_OPC - LFSCK_FIRST_OPC] = {
 TGT_LFSCK_HDL(HAS_REPLY,	LFSCK_NOTIFY,	tgt_handle_lfsck_notify),
 TGT_LFSCK_HDL(HAS_REPLY,	LFSCK_QUERY,	tgt_handle_lfsck_query),
 };

@@ -470,7 +470,7 @@ static int seq_handler(struct tgt_session_info *tsi)
 	RETURN(rc);
 }
 
-struct tgt_handler seq_handlers[] = {
+struct tgt_handler seq_handlers[SEQ_LAST_OPC - SEQ_FIRST_OPC] = {
 TGT_SEQ_HDL(HAS_REPLY,	SEQ_QUERY,	seq_handler),
 };
 EXPORT_SYMBOL(seq_handlers);

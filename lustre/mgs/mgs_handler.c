@@ -1387,7 +1387,7 @@ TGT_MGS_HDL_VAR(0,			MGS_TARGET_DEL,	 mgs_target_del),
 TGT_MGS_HDL(HAS_REPLY,			MGS_CONFIG_READ, mgs_config_read),
 };
 
-static struct tgt_handler mgs_obd_handlers[] = {
+static struct tgt_handler mgs_obd_handlers[OBD_LAST_OPC - OBD_FIRST_OPC] = {
 TGT_OBD_HDL(0,	OBD_PING,	tgt_obd_ping),
 };
 
@@ -1410,7 +1410,7 @@ static struct tgt_handler mgs_dlm_handlers[LDLM_LAST_OPC - LDLM_FIRST_OPC] = {
 	},
 };
 
-static struct tgt_handler mgs_llog_handlers[] = {
+static struct tgt_handler mgs_llog_handlers[LLOG_LAST_OPC - LLOG_FIRST_OPC] = {
 TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_CREATE,	mgs_llog_open),
 TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_NEXT_BLOCK,	tgt_llog_next_block),
 TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_READ_HEADER,	tgt_llog_read_header),

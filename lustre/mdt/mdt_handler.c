@@ -6748,7 +6748,7 @@ static int mdt_changelog_get_user_info(struct tgt_session_info *tsi)
 #define OST_BRW_READ	OST_READ
 #define OST_BRW_WRITE	OST_WRITE
 
-static struct tgt_handler mdt_tgt_handlers[] = {
+static struct tgt_handler mdt_tgt_handlers[MDS_LAST_OPC - MDS_FIRST_OPC] = {
 TGT_RPC_HANDLER(MDS_FIRST_OPC,
 		0,			MDS_CONNECT,	mdt_tgt_connect,
 		&RQF_CONNECT, LUSTRE_OBD_VERSION),
@@ -6791,7 +6791,7 @@ TGT_MDT_HDL(IS_MUTABLE,		MDS_RMFID,	mdt_rmfid),
 TGT_MDT_HDL(IS_MUTABLE,		MDS_BATCH,	mdt_batch),
 };
 
-static struct tgt_handler mdt_io_ops[] = {
+static struct tgt_handler mdt_io_ops[OST_LAST_OPC - OST_FIRST_OPC] = {
 TGT_OST_HDL_HP(HAS_BODY | HAS_REPLY, OST_BRW_READ, tgt_brw_read,
 							mdt_hp_brw),
 TGT_OST_HDL_HP(HAS_BODY | IS_MUTABLE,	 OST_BRW_WRITE,	tgt_brw_write,
@@ -6808,17 +6808,17 @@ TGT_RPC_HANDLER(OST_FIRST_OPC,
 		&RQF_OBD_SET_INFO, LUSTRE_OST_VERSION),
 };
 
-static struct tgt_handler mdt_sec_ctx_ops[] = {
+static struct tgt_handler mdt_sec_ctx_ops[SEC_LAST_OPC - SEC_FIRST_OPC] = {
 TGT_SEC_HDL_VAR(0,			SEC_CTX_INIT,	  mdt_sec_ctx_handle),
 TGT_SEC_HDL_VAR(0,			SEC_CTX_INIT_CONT, mdt_sec_ctx_handle),
 TGT_SEC_HDL_VAR(0,			SEC_CTX_FINI,	  mdt_sec_ctx_handle)
 };
 
-static struct tgt_handler mdt_quota_ops[] = {
+static struct tgt_handler mdt_quota_ops[QUOTA_LAST_OPC - QUOTA_DQACQ] = {
 TGT_QUOTA_HDL(HAS_REPLY,		QUOTA_DQACQ,	  mdt_quota_dqacq),
 };
 
-static struct tgt_handler mdt_llog_handlers[] = {
+static struct tgt_handler mdt_llog_handlers[LLOG_LAST_OPC - LLOG_FIRST_OPC] = {
 	TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_CREATE,	mdt_llog_open),
 	TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_NEXT_BLOCK,	tgt_llog_next_block),
 	TGT_LLOG_HDL(0,	LLOG_ORIGIN_HANDLE_READ_HEADER,	tgt_llog_read_header),

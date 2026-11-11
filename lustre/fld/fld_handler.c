@@ -482,7 +482,7 @@ void fld_server_fini(const struct lu_env *env, struct lu_server_fld *fld)
 }
 EXPORT_SYMBOL(fld_server_fini);
 
-struct tgt_handler fld_handlers[] = {
+struct tgt_handler fld_handlers[FLD_LAST_OPC - FLD_FIRST_OPC] = {
 TGT_FLD_HDL_VAR(0,	FLD_QUERY,	fld_handle_query),
 TGT_FLD_HDL_VAR(0,	FLD_READ,	fld_handle_read),
 };
