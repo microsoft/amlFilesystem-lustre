@@ -189,7 +189,7 @@ static int ksocklnd_ni_get_eth_intf_speed(struct lnet_ni *ni)
 	int intf_idx = -1;
 	int ret = -1;
 
-	DECLARE_CONST_IN_IFADDR(ifa);
+	const struct in_ifaddr *ifa;
 
 	/* check if ni has interface assigned */
 	if (!ni->ni_net_ns || !ni->ni_interface)
@@ -212,7 +212,6 @@ static int ksocklnd_ni_get_eth_intf_speed(struct lnet_ni *ni)
 				if (strcmp(ifa->ifa_label, ni->ni_interface) == 0)
 					intf_idx = dev->ifindex;
 			}
-			endfor_ifa(in_dev);
 		} else {
 #if IS_ENABLED(CONFIG_IPV6)
 			struct inet6_dev *in6_dev = __in6_dev_get(dev);

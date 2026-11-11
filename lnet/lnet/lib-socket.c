@@ -129,7 +129,7 @@ int choose_ipv4_src(__u32 *ret, int interface, __u32 dst_ipaddr, struct net *ns)
 	struct net_device *dev;
 	struct in_device *in_dev;
 	int err;
-	DECLARE_CONST_IN_IFADDR(ifa);
+	const struct in_ifaddr *ifa;
 
 	rcu_read_lock();
 	dev = dev_get_by_index_rcu(ns, interface);
@@ -151,7 +151,6 @@ int choose_ipv4_src(__u32 *ret, int interface, __u32 dst_ipaddr, struct net *ns)
 			err = 0;
 		}
 	}
-	endfor_ifa(in_dev);
 out:
 	rcu_read_unlock();
 	return err;
@@ -447,7 +446,7 @@ static int lnet_inet4_enumerate(struct net_device *dev, int flags,
 {
 	struct lnet_inetdev *ifaces = *dev_list;
 	struct in_device *in_dev;
-	DECLARE_CONST_IN_IFADDR(ifa);
+	const struct in_ifaddr *ifa;
 
 	in_dev = __in_dev_get_rtnl(dev);
 	if (!in_dev) {
@@ -481,7 +480,6 @@ static int lnet_inet4_enumerate(struct net_device *dev, int flags,
 		       sizeof(ifaces[nip].li_name));
 		nip++;
 	}
-	endfor_ifa(in_dev);
 
 	*dev_list = ifaces;
 

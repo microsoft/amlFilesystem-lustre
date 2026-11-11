@@ -3190,7 +3190,7 @@ kiblnd_handle_link_state_change(struct net_device *dev,
 
 		if (nid_is_nid4(&ni->ni_nid)) {
 			struct in_device *in_dev = __in_dev_get_rtnl(dev);
-			DECLARE_CONST_IN_IFADDR(ifa);
+			const struct in_ifaddr *ifa;
 
 			if (!in_dev) {
 				CDEBUG(D_NET, "Interface %s has no IPv4 status.\n",
@@ -3202,7 +3202,6 @@ kiblnd_handle_link_state_change(struct net_device *dev,
 				if (ifa->ifa_local == ni->ni_nid.nid_addr[0])
 					found_ip = true;
 			}
-			endfor_ifa(in_dev);
 #if IS_ENABLED(CONFIG_IPV6)
 		} else {
 			struct inet6_dev *in6_dev = __in6_dev_get(dev);

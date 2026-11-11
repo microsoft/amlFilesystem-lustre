@@ -30,7 +30,7 @@ static int ksocknal_ip2index(struct sockaddr *addr, struct lnet_ni *ni,
 {
 	struct net_device *dev;
 	int ret = -1;
-	DECLARE_CONST_IN_IFADDR(ifa);
+	const struct in_ifaddr *ifa;
 
 	*dev_status = -1;
 
@@ -59,7 +59,6 @@ static int ksocknal_ip2index(struct sockaddr *addr, struct lnet_ni *ni,
 				    ((struct sockaddr_in *)addr)->sin_addr.s_addr)
 					ret = dev->ifindex;
 			}
-			endfor_ifa(in_dev);
 			break;
 #if IS_ENABLED(CONFIG_IPV6)
 		case AF_INET6: {
@@ -2001,7 +2000,7 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 		switch (sa->sa_family) {
 		case AF_INET: {
 			struct in_device *in_dev = __in_dev_get_rtnl(dev);
-			DECLARE_CONST_IN_IFADDR(ifa);
+			const struct in_ifaddr *ifa;
 
 			if (in_dev) {
 				struct sockaddr_in *sa4;
@@ -2012,7 +2011,6 @@ ksocknal_handle_link_state_change(struct net_device *dev,
 					    ifa->ifa_local)
 						found_ip = true;
 				}
-				endfor_ifa(in_dev);
 			} else {
 				sa = NULL;
 			}
