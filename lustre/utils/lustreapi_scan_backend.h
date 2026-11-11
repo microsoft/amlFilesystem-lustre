@@ -31,6 +31,8 @@ enum llapi_scan_xattr {
 	LLAPI_SCAN_XA_SOM,		/* trusted.som */
 	LLAPI_SCAN_XA_LINK,		/* trusted.link */
 	LLAPI_SCAN_XA_HSM,		/* trusted.hsm */
+	LLAPI_SCAN_XA_PFID,		/* trusted.fid: an OST object's owner */
+	LLAPI_SCAN_XA_ENC,		/* encryption.c: the fscrypt context */
 	LLAPI_SCAN_XA_MAX
 };
 

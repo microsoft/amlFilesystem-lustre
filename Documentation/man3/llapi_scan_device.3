@@ -119,37 +119,63 @@ with
 bytes at it. The bit is set only when the first entry parses, so a
 .B trusted.link
 that is damaged there is not delivered at all.
+.TP
 .I lfsr_name
-can still be NULL with the bit set, when that entry's name starts with a
-NUL byte.
+.RB ( LLAPI_SCAN_NAME )
+the name the object's first
+.B trusted.link
+entry holds. NULL when not asked for, and when that entry's name starts
+with a NUL byte. A namespace scan sets it always, from the path it walked.
 .TP
 .I lfsr_parent_fid
 .RB ( LLAPI_SCAN_PARENT )
 the FID of the directory the object's first
 .B trusted.link
-entry names, delivered with
-.I lfsr_name
-alongside it. The bit is set only where the FID is a sane one, so a caller
+entry names.
+The bit is set only where the FID is a sane one, so a caller
 that reads the field without testing
 .I lfsr_valid
 gets a zeroed FID rather than one the scan vouched for.
 .LP
 .I lfsr_path
-is always NULL. A device holds names and parent FIDs, not paths: with
+is always NULL. A device holds names and parent FIDs, not paths: the first
+.B trusted.link
+entry is delivered as
+.I lfsr_name
+and
+.I lfsr_parent_fid
+when asked for, and with
 .B LLAPI_SCAN_LINKEA
 asked for, the raw
 .B trusted.link
-is delivered as
-.I lfsr_linkea
-and its first entry as
-.I lfsr_name
-and
-.IR lfsr_parent_fid .
+as
+.IR lfsr_linkea .
 Turning those into a path is a walk of its own.
 .I lfsr_parent_fd
 and
 .I lfsr_fd
 are always \-1: nothing here is open, because nothing here is mounted.
+.LP
+An OST data object has no linkea; what names it is the file that owns it,
+which the object records in its own
+.B trusted.fid
+(on an OST with 256-byte inodes, in its
+.B trusted.lma
+instead).
+With
+.B LLAPI_SCAN_OWNER
+asked for, that file's FID is delivered as
+.IR lfsr_owner_fid .
+It is the FID to resolve for such an object:
+.BR llapi_scan_rec_path (3)
+uses it in preference to
+.IR lfsr_fid ,
+because an OST-sequence FID can only be resolved by asking the OST that
+holds it: the target the scan is reading, which is out of service. The
+stripe index that
+.B filter_fid
+keeps in the same field is dropped, so what is delivered is a FID a lookup
+accepts.
 .LP
 For a regular file with a layout the file's data is on OSTs, so the object's
 own size is not the file's and the target reads
@@ -411,6 +437,37 @@ crash: they are counted in
 Lustre's own open\-unlinked files are not among them: PENDING keeps a
 link to each, so they are read and classified
 .BR LLAPI_SCAN_CLS_ORPHAN .
+.SS Naming the filesystem
+Set
+.I lfsp_fsname
+to the filesystem whose FIDs the records will be resolved against (what
+.BR llapi_search_fsname (3)
+answers for the mount), and the scan refuses a target whose label names
+another one, with
+.BR -EXDEV .
+NULL leaves it unchecked.
+.LP
+The test cannot be made afterwards. FID sequences are not unique across
+filesystems, so a lookup against the wrong mount succeeds and returns that
+filesystem's pathname; only the scan reads the target's label, so only the
+scan can refuse it. A caller pairing this call with
+.BR llapi_scan_rec_path (3)
+wants it set.
+.LP
+.I lfsp_got
+is answered for the target rather than for this call: it is filled once the
+label has been read, so a scan of an OST reports
+.B LLAPI_SCAN_OWNER
+and not
+.BR LLAPI_SCAN_LMV ,
+.B LLAPI_SCAN_MDT_INDEX
+or
+.BR LLAPI_SCAN_LINKEA ,
+a scan of an MDT the reverse, and
+.B LLAPI_SCAN_MDT_INDEX
+is reported only where the label carried an index. See
+.BR llapi_scan_namespace (3)
+for the field itself.
 .SH RETURN VALUES
 .B llapi_scan_device()
 returns:
@@ -469,6 +526,10 @@ e2fsprogs is the stock one.
 .B -ENOENT
 .I device
 does not exist.
+.TP
+.B \-EXDEV
+.I lfsp_fsname
+is set and the target's label names another filesystem.
 .TP 15
 .B -EIO
 a read the scan cannot go on without failed: the superblock, the group

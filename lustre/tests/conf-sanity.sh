@@ -15319,11 +15319,11 @@ test_300a() {
 	# --internal is the same scan without the class filter, so it can
 	# only add: an MDT's own objects -- O, oi.N, the d* buckets -- are
 	# what a cleanup tool must be able to see and must not act on
-	do_facet mds1 "$LFS find --device $mdt1" \
-		> $find_fids.out || error "lfs find on $mdt1 failed"
+	do_facet mds1 "$LFS find --device $mdt1 --print-fid" > $find_fids.out ||
+		error "lfs find on $mdt1 failed"
 	sort $find_fids.out > $find_fids.all
 	do_facet mds1 "$LFS find --device $mdt1 \
-			--internal" > $find_fids.out ||
+			--internal --print-fid" > $find_fids.out ||
 		error "lfs find --internal on $mdt1 failed"
 	sort $find_fids.out > $find_fids.int
 
@@ -15408,7 +15408,7 @@ test_300b() {
 			error "$tfile-$i is not on OST0000"
 	done
 	# what the scan of ost1 has to give back for each of them
-	$LFS find $DIR/$tdir -type f -printf "%LO\n" | sort > $want
+	$LFS find $DIR/$tdir -type f -printf "%LF %LO\n" | sort > $want
 	[[ -s $want ]] || error "no OST object FIDs from the client"
 	# a client sync does not commit the OST
 	sync
@@ -15423,9 +15423,10 @@ test_300b() {
 	do_facet ost1 "$scanner -d $(ostdevname 1)" ||
 		error "llapi_scan_device_test on $(ostdevname 1) failed"
 
-	# lfs find over the same OST: %LO is each object's own FID
+	# lfs find over the same OST: %LF is each object's file, read from
+	# its trusted.fid, and %LO the object itself
 	do_facet ost1 "$LFS find --device $(ostdevname 1) \
-			-printf '%LO\n'" > $want.raw 2> $scan_err || {
+			-printf '%LF %LO\n'" > $want.raw 2> $scan_err || {
 		cat $scan_err
 		error "lfs find --device $(ostdevname 1) failed"
 	}
@@ -15464,7 +15465,10 @@ test_300c() {
 	local mdtsvc=$(facet_svc mds1)
 
 	# a --local sweep of mounted targets, each on its own node
-	do_facet ost1 "$LFS find --local --ost $ostsvc --type f" \
+	# by the objects' own FIDs: these files were never written, so no
+	# file owns their objects yet and --print-fid would print none
+	do_facet ost1 \
+		"$LFS find --local --ost $ostsvc --type f -printf '%LO\n'" \
 		> $scan_out 2> $scan_err || {
 		cat $scan_err
 		error "lfs find --local --ost $ostsvc failed on ost1"
@@ -15485,7 +15489,7 @@ test_300c() {
 		return 0
 	}
 
-	do_facet --quiet mds1 "$LFS find --local --ost $ostsvc --type f" \
+	do_facet --quiet mds1 "$LFS find --local --ost $ostsvc --type f --print-fid" \
 		> /dev/null 2> $scan_err || {
 		cat $scan_err
 		error "lfs find --local --ost $ostsvc failed"
@@ -15622,8 +15626,7 @@ test_300d() {
 	[[ -z "$out" ]] || error "-name nosuchname printed '$out'"
 
 	# refused with EOPNOTSUPP and nothing printed
-	for p in "--xattr trusted.lov" "-printf %p" "-printf %+5p" \
-		 "-maxdepth 1" "--threads 2" "--ost 0"; do
+	for p in "--xattr trusted.lov" "-maxdepth 1" "--threads 2" "--ost 0"; do
 		out=$(do_facet mds1 "$LFS find --device $mdt1 $p" 2>/dev/null)
 		rc=$?
 		[[ $rc == 95 && -z "$out" ]] ||
@@ -15637,23 +15640,615 @@ test_300d() {
 	done
 
 	# an OST sweep: its own index is every object, another is none
-	local all=$(do_facet ost1 "$LFS find --device $ost1" | wc -l)
+	local all=$(do_facet ost1 "$LFS find --device $ost1 -printf '%LO\n'" |
+		wc -l)
 
 	(( all > 0 )) || error "no objects on $ost1"
-	out=$(do_facet ost1 "$LFS find --device $ost1 --ost 0" | wc -l)
+	out=$(do_facet ost1 "$LFS find --device $ost1 -printf '%LO\n' --ost 0" |
+		wc -l)
 	(( out == all )) || error "--ost 0 found $out of $all"
-	out=$(do_facet ost1 "$LFS find --device $ost1 --ost 1" | wc -l)
+	out=$(do_facet ost1 "$LFS find --device $ost1 -printf '%LO\n' --ost 1" |
+		wc -l)
 	(( out == 0 )) || error "--ost 1 found $out on OST0000"
-	out=$(do_facet ost1 "$LFS find --device $ost1 ! --ost 1" | wc -l)
+	out=$(do_facet ost1 \
+		"$LFS find --device $ost1 -printf '%LO\n' ! --ost 1" |
+		wc -l)
 	(( out == all )) || error "! --ost 1 found $out of $all"
 
 	# OST objects carry no names: nothing found, and the scan says why
-	out=$(do_facet ost1 "$LFS find --device $ost1 -name '*'" 2> $err)
+	out=$(do_facet ost1 "$LFS find --device $ost1 --print-fid -name '*'" \
+		2> $err)
 	[[ -z "$out" ]] || error "-name over an OST printed '$out'"
 	grep -q "could not be decided" $err ||
 		error "-name over an OST gave no warning: $(cat $err)"
 }
 run_test 300d "lfs find --device answers as a walk does"
+
+test_301() {
+	# the target has to be readable while it is in service, which is the
+	# ldiskfs case: a ZFS pool that is imported answers EBUSY by design
+	[[ "$mds1_FSTYPE" == ldiskfs ]] ||
+		skip "$mds1_FSTYPE cannot be scanned while in service"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+
+	(( MDS1_VERSION >= $(version_code 2.17.58) )) ||
+		skip "Need MDS >= 2.17.58 for lfs find --fid2path"
+
+	local mdt1=$(mdsdevname 1)
+	local got=$TMP/$tfile.got
+	local want=$TMP/$tfile.want
+	local missing
+
+	stack_trap "rm -f $got $want $want.all $got.raw $got.err $got.fs \
+		$got.printf"
+
+	# conf-sanity starts from a stopped filesystem: without this the paths
+	# below are an ordinary directory on the root filesystem and the test
+	# compares two answers about nothing.  Bring one up only if the
+	# previous test did not leave one, and leave it up afterwards as
+	# test_300 does -- tearing the modules down here races whatever still
+	# holds them and fails the test after every assertion has passed.
+	is_mounted $MOUNT || setup_noconfig
+	check_mount || error "check_mount failed"
+	stack_trap "rm -rf $MOUNT/$tdir"
+
+	# --fid2path resolves a FID through a client mount, and it has to be a
+	# mount on the node running the scan.  On a real cluster the MDS is not
+	# a client, so $MOUNT does not exist there; mount one for the duration.
+	# On a single-node setup this is a second mount of the same filesystem,
+	# as $MOUNT2 is elsewhere.
+	local mdshost=$(facet_active_host mds1)
+	local fidmnt=$MOUNT-fid2path
+
+	# a configuration that cannot put a client on the MDS cannot exercise
+	# --fid2path at all, which is a reason to skip and not to fail
+	zconf_mount $mdshost $fidmnt ||
+		skip "cannot mount a client at $fidmnt on $mdshost"
+	stack_trap "zconf_umount $mdshost $fidmnt"
+
+	# $MOUNT and not $DIR throughout: --fid2path answers <mount>/<relative>
+	# for the mount it was given, so a $DIR-rooted comparison would only
+	# hold while DIR == MOUNT.  On MDT0000 because that is the target
+	# scanned below: under DNE a plain mkdir can land on any MDT.
+	mkdir_on_mdt0 $MOUNT/$tdir || error "mkdir $tdir failed"
+	createmany -o $MOUNT/$tdir/f 20 || error "createmany failed"
+	# a hardlink: one object, two names.  Only the first is printed, so
+	# the count must not double.
+	ln $MOUNT/$tdir/f0 $MOUNT/$tdir/hardlink || error "ln failed"
+	# on the MDS too: lustre_super_operations has no .sync_fs, so a client
+	# sync writes back page-cache data and leaves the MDT's ldiskfs to
+	# commit on its own schedule -- and the scan below reads that ldiskfs
+	# directly, so an object still only in memory is one it cannot see.
+	sync; sync
+	do_facet mds1 "sync; sync"
+
+	# What the client says is there.  21 names but 20 objects: f0 and
+	# hardlink are one inode, and a scan of a target enumerates objects.
+	# The scan names each object once, so exactly one of that pair comes
+	# back -- they are compared separately below and left out of $want.
+	$LFS find $MOUNT/$tdir -type f | sort > $want.all
+	(( $(wc -l < $want.all) == 21 )) ||
+		error "client sees $(wc -l < $want.all) names, want 21"
+	grep -vE "/(f0|hardlink)$" $want.all | sort > $want
+	(( $(wc -l < $want) == 19 )) ||
+		error "expected 19 unambiguous names, got $(wc -l < $want)"
+	echo "client sees $(wc -l < $want.all) names over 20 objects"
+
+	# and the same objects named by the device scan, resolved through the
+	# client mount.  Without --fid2path they would start with "./".
+	do_facet mds1 "$LFS find --device $mdt1 --fid2path $fidmnt --type f" \
+		> $got.raw 2> $got.err ||
+		error "lfs find --fid2path on $mdt1 failed: $(cat $got.err)"
+	# the scan names objects under the mount it was given, which is the
+	# MDS's own.  Compare the names, not the mount point they hang from.
+	sed "s|^$fidmnt/|$MOUNT/|" $got.raw | grep "^$MOUNT/$tdir/" |
+		sort > $got
+
+	# every unambiguously-named object must come back
+	missing=$(comm -23 $want $got)
+	[[ -z "$missing" ]] || {
+		echo "$missing" | head -20
+		error "--fid2path lost $(echo "$missing" | wc -l) paths"
+	}
+
+	# and one path per object, not one per name
+	(( $(wc -l < $got) == 20 )) ||
+		error "--fid2path printed $(wc -l < $got) paths for 20 objects"
+
+	# and they must be paths, not FIDs.  Against $got.raw: $got was built
+	# by grepping for the mount prefix, so no line in it can start "[0x".
+	grep -q "^\[\?0x" $got.raw &&
+		error "--fid2path printed a FID where a path was asked for"
+
+	# the hardlinked object is printed once, under one of its names
+	local links=$(grep -c "/f0$\|/hardlink$" $got)
+
+	(( links == 1 )) ||
+		error "hardlinked object printed $links times, want 1"
+
+	# -printf %p prints the same names
+	do_facet mds1 "$LFS find --device $mdt1 --fid2path $fidmnt --type f \
+		-printf '%p\n'" > $got.printf 2> $got.err ||
+		error "-printf %p with --fid2path failed: $(cat $got.err)"
+	diff $got.raw $got.printf ||
+		error "-printf %p and --fid2path printed different names"
+
+	# a fileset mount sees its own subtree and nothing else, as its own
+	# fid2path does: the 20 objects of $tdir, under the mount point
+	local fsmnt=$MOUNT-fileset
+
+	FILESET=/$tdir zconf_mount $mdshost $fsmnt ||
+		error "fileset mount of /$tdir failed"
+	stack_trap "zconf_umount $mdshost $fsmnt"
+	do_facet mds1 "$LFS find --device $mdt1 --fid2path $fsmnt --type f" \
+		> $got.fs 2> $got.err ||
+		error "--fid2path on a fileset mount failed: $(cat $got.err)"
+	(( $(wc -l < $got.fs) == 20 )) ||
+		error "fileset: $(wc -l < $got.fs) paths for 20 objects"
+	grep -v "^$fsmnt/[^/]*$" $got.fs &&
+		error "fileset: a path outside $fsmnt"
+
+	# under DNE, a file on MDT0000 below a directory on another MDT: the
+	# scan never meets that directory, and looks it up through the mount
+	if (( MDSCOUNT >= 2 )); then
+		stack_trap "rm -rf $MOUNT/$tdir.r1"
+		$LFS mkdir -i 1 $MOUNT/$tdir.r1 || error "lfs mkdir -i 1 failed"
+		$LFS mkdir -i 0 $MOUNT/$tdir.r1/back ||
+			error "lfs mkdir -i 0 failed"
+		createmany -o $MOUNT/$tdir.r1/back/b 10 ||
+			error "createmany under the remote dir failed"
+		sync; sync
+		do_facet mds1 "sync; sync"
+		do_facet mds1 "$LFS find --device $mdt1 --fid2path $fidmnt \
+			--type f" > $got.raw 2> $got.err ||
+			error "--fid2path under DNE failed: $(cat $got.err)"
+		local named=$(grep -c "^$fidmnt/$tdir.r1/back/b[0-9]*$" \
+			      $got.raw)
+
+		(( named == 10 )) ||
+			error "remote ancestor not looked up: $(cat $got.err)"
+
+		# with no --fid2path, the client mount on the MDS is found
+		# for those lookups, and the paths still start with "./"
+		do_facet mds1 "$LFS find --device $mdt1 --type f" \
+			> $got.raw 2> $got.err ||
+			error "no --fid2path under DNE failed: $(cat $got.err)"
+		named=$(grep -c "^\./$tdir.r1/back/b[0-9]*$" $got.raw)
+		(( named == 10 )) ||
+			error "no mount found for the lookups: $(cat $got.err)"
+	fi
+
+	echo "--fid2path resolved 20 objects from 21 names, hardlink once"
+}
+run_test 301 "lfs find --fid2path names a device scan's objects"
+
+test_302() {
+	# The point of this test is a target that is OUT of service.
+	[[ "$ost1_FSTYPE" == ldiskfs ]] || skip "ldiskfs only test"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+	remote_ost_nodsh && skip "remote OST with nodsh"
+
+	(( OST1_VERSION >= $(version_code 2.17.58) )) ||
+		skip "Need OST >= 2.17.58 for lfs find --fid2path"
+
+	local ost1dev=$(ostdevname 1)
+	local got=$TMP/$tfile.got
+	local want=$TMP/$tfile.want
+
+	stack_trap "rm -f $got $got.raw $got.err $want"
+
+	is_mounted $MOUNT || setup_noconfig
+	check_mount || error "check_mount failed"
+	stack_trap "rm -rf $MOUNT/$tdir"
+
+	local osthost=$(facet_active_host ost1)
+	local fidmnt=$MOUNT-fid2path
+
+	zconf_mount $osthost $fidmnt ||
+		skip "cannot mount a client at $fidmnt on $osthost"
+	stack_trap "zconf_umount $osthost $fidmnt"
+
+	# -i 0 falls back to another OST until MDT0000 can create on OST0000
+	local mdtosc=$(get_mdtosc_proc_path mds1 $(ostname_from_index 0))
+
+	wait_osc_import_state mds1 ost1 FULL
+	wait_update_facet mds1 \
+		"$LCTL get_param -n osp.$mdtosc.prealloc_status" 0 ||
+		error "MDT0000 cannot create objects on OST0000"
+	mkdir_on_mdt0 $MOUNT/$tdir || error "mkdir $tdir failed"
+	# every object on OST0000, so stopping it below takes the whole set
+	# out of service at once
+	$LFS setstripe -i 0 -c 1 $MOUNT/$tdir || error "setstripe failed"
+	createmany -o $MOUNT/$tdir/f 20 || error "createmany failed"
+	# with content: a precreated object carries no trusted.fid and is
+	# rightly nameless, so an empty file would not exercise the owner
+	for i in $(seq 0 19); do
+		echo "payload $i" > $MOUNT/$tdir/f$i || error "write f$i failed"
+		(( $($LFS getstripe -i $MOUNT/$tdir/f$i) == 0 )) ||
+			error "f$i is not on OST0000"
+	done
+	# and on the OSS: a client sync does not commit the OST's ldiskfs, and
+	# stop below tears the flakey device down, so a trusted.fid still only
+	# in memory never reaches the device the scan reads -- see test_301
+	sync; sync
+	do_facet ost1 "sync; sync"
+
+	$LFS find $MOUNT/$tdir -type f | sort > $want
+	(( $(wc -l < $want) == 20 )) ||
+		error "client sees $(wc -l < $want) files, want 20"
+
+	# out of service.  An OST object's own FID resolves through the OSC to
+	# the OST holding it, so this is exactly the state in which that route
+	# cannot answer -- the scan must name the objects from their own
+	# trusted.fid instead, which asks the MDT.
+	stop ost1 || error "stop ost1 failed"
+	stack_trap "start ost1 $ost1dev $OST_MOUNT_OPTS || true"
+
+	# stderr apart from stdout, and quoted in the failure as test_301 and
+	# test_303 do: with both in one file the stack_trap above deletes the
+	# only account of what went wrong, and a CI failure says nothing but
+	# that it failed.
+	do_facet ost1 "$LFS find --device $ost1dev \
+		      --fid2path $fidmnt --type f" > $got.raw 2> $got.err || {
+		error "lfs find --fid2path on stopped $ost1dev: $(cat $got.err)"
+	}
+	sed "s|^$fidmnt/|$MOUNT/|" $got.raw | grep "^$MOUNT/$tdir/" |
+		sort > $got
+
+	# the names, not merely some output: a scan that resolved nothing and
+	# one that resolved everything both exit 0
+	cmp $want $got || {
+		diff $want $got | head -5
+		error "offline --fid2path gave a different set of names"
+	}
+
+	grep -q "^\[\?0x" $got.raw &&
+		error "--fid2path printed a FID where a path was asked for"
+
+	echo "offline --fid2path named $(wc -l < $got) objects by their owner"
+}
+run_test 302 "lfs find --fid2path names objects on a stopped OST"
+
+test_303() {
+	# in service, so ldiskfs: an imported ZFS pool answers EBUSY by
+	# design.  test_304 covers a stopped target; this one is for the
+	# composition of an MDT's pathnames, with no mount given.
+	[[ "$mds1_FSTYPE" == ldiskfs ]] ||
+		skip "$mds1_FSTYPE cannot be scanned while in service"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+
+	(( MDS1_VERSION >= $(version_code 2.17.58) )) ||
+		skip "Need MDS >= 2.17.58 for lfs find --device pathnames"
+
+	local mdt1=$(mdsdevname 1)
+	local got=$TMP/$tfile.got
+	local want=$TMP/$tfile.want
+	local missing
+	local links
+
+	stack_trap "rm -f $got $got.raw $got.err $got.printf $got.fid \
+		$got.fid.raw $got.walk $got.all $got.all.s $want $want.all \
+		$want.fid $want.walk"
+
+	# conf-sanity starts from a stopped filesystem: see test_301 for why
+	# this is brought up here and left up afterwards.
+	is_mounted $MOUNT || setup_noconfig
+	check_mount || error "check_mount failed"
+	stack_trap "rm -rf $MOUNT/$tdir"
+
+	# on MDT0000 because that is the target scanned below, and because
+	# the directory map covers only the target scanned: under DNE a plain
+	# mkdir can land anywhere and its objects' ancestors would be on
+	# another MDT, which is nameless by construction rather than a bug.
+	mkdir_on_mdt0 $MOUNT/$tdir || error "mkdir $tdir failed"
+	createmany -o $MOUNT/$tdir/f 20 || error "createmany failed"
+	# a hardlink: one object, two names.  Only the first is printed, so
+	# the count must not double.
+	ln $MOUNT/$tdir/f0 $MOUNT/$tdir/hardlink || error "ln failed"
+	# a striped directory beside it, so the counts below do not change.
+	# Its shard is a step in the path, not a name.
+	if (( MDSCOUNT >= 2 )); then
+		stack_trap "rm -rf $MOUNT/$tdir.striped"
+		$LFS mkdir -i 0 -c 2 $MOUNT/$tdir.striped ||
+			error "lfs mkdir -c 2 failed"
+		createmany -o $MOUNT/$tdir.striped/s 20 ||
+			error "createmany in the striped dir failed"
+	fi
+	# and on the MDS: the scan below reads the MDT's ldiskfs directly, and
+	# a client sync does not commit it -- see test_301.
+	sync; sync
+	do_facet mds1 "sync; sync"
+
+	# What the client says is there, with the mount point as ".": with no
+	# mount given, the scan composes from the target's own linkea and
+	# answers relative to the filesystem root.
+	$LFS find $MOUNT/$tdir -type f | sed "s|^$MOUNT|.|" | sort > $want.all
+	(( $(wc -l < $want.all) == 21 )) ||
+		error "client sees $(wc -l < $want.all) names, want 21"
+	grep -vE "/(f0|hardlink)$" $want.all | sort > $want
+	(( $(wc -l < $want) == 19 )) ||
+		error "expected 19 unambiguous names, got $(wc -l < $want)"
+
+	# No mount given, and none needed: a filesystem whose only MDT is the
+	# target being scanned has no client mount to offer --fid2path.
+	do_facet mds1 "$LFS find --device $mdt1 --type f" \
+		> $got.raw 2> $got.err ||
+		error "lfs find on $mdt1 failed: $(cat $got.err)"
+	grep "^\./$tdir/" $got.raw | sort > $got
+
+	missing=$(comm -23 $want $got)
+	[[ -z "$missing" ]] || {
+		echo "$missing" | head -20
+		error "the scan lost $(echo "$missing" | wc -l) paths"
+	}
+
+	# one path per object, not one per name
+	(( $(wc -l < $got) == 20 )) ||
+		error "the scan printed $(wc -l < $got) paths for 20 objects"
+
+	# the files in the striped directory's shard on this MDT, named
+	# through the master and not through the shard
+	if (( MDSCOUNT >= 2 )); then
+		local striped=$(grep -c "^\./$tdir.striped/" $got.raw)
+
+		(( striped > 0 )) ||
+			error "no file of the striped directory was printed"
+		grep "^\./$tdir.striped/" $got.raw |
+			grep -vE "^\./$tdir.striped/s[0-9]+$" &&
+			error "a striped dir file has a shard in its path"
+	fi
+
+	# they must be paths, not FIDs.  Against $got.raw: $got was built by
+	# grepping for the prefix, so no line in it can start "[0x".
+	grep -q "^\[\?0x" $got.raw &&
+		error "the scan printed a FID where a path was asked for"
+
+	# and relative: a mount point in the answer means the wrong composer
+	# ran, and the paths would be wrong on any node mounting elsewhere.
+	grep -q "^$MOUNT/" $got.raw &&
+		error "the scan printed a mounted pathname"
+
+	# the hardlinked object is printed once, under one of its names
+	links=$(grep -c "/f0$\|/hardlink$" $got)
+	(( links == 1 )) ||
+		error "hardlinked object printed $links times, want 1"
+
+	# and with --all-links under both of its names, the rest unchanged
+	do_facet mds1 "$LFS find --device $mdt1 --type f --all-links" \
+		> $got.all 2> $got.err ||
+		error "--all-links failed: $(cat $got.err)"
+	grep "^\./$tdir/" $got.all | sort > $got.all.s
+	diff -u $want.all $got.all.s ||
+		error "--all-links did not print every name once"
+
+	# -printf %p prints the same names
+	do_facet mds1 "$LFS find --device $mdt1 --type f -printf '%p\n'" \
+		> $got.printf 2> $got.err ||
+		error "-printf %p failed: $(cat $got.err)"
+	diff $got.raw $got.printf ||
+		error "-printf %p and the default printed different names"
+
+	# and beside the FID: one line per object with both, as the client
+	# prints them, except the hardlinked pair whose name is either one
+	$LFS find $MOUNT/$tdir -type f -printf "%p %LF\n" |
+		sed "s|^$MOUNT|.|" | grep -vE "/(f0|hardlink) " |
+		sort > $want.fid
+	do_facet mds1 "$LFS find --device $mdt1 --type f -printf '%p %LF\n'" \
+		> $got.fid.raw 2> $got.err ||
+		error "-printf '%p %LF' failed: $(cat $got.err)"
+	grep "^\./$tdir/" $got.fid.raw | grep -vE "/(f0|hardlink) " |
+		sort > $got.fid
+	diff -u $want.fid $got.fid ||
+		error "-printf '%p %LF' differs from the client's"
+
+	# --print-fid prints FIDs, and names nothing
+	do_facet mds1 "$LFS find --device $mdt1 --type f --print-fid" \
+		> $got.raw 2> $got.err ||
+		error "--print-fid failed: $(cat $got.err)"
+	(( $(grep -c "^0x" $got.raw) >= 20 )) ||
+		error "--print-fid printed $(grep -c "^0x" $got.raw) FIDs"
+	grep -qv "^0x[0-9a-f]*:0x[0-9a-f]*:0x[0-9a-f]*$" $got.raw &&
+		error "--print-fid printed a name: $(grep -v "^0x" $got.raw)"
+
+	# and on a walk, what -printf %LF prints, without brackets
+	$LFS find $MOUNT/$tdir -type f --print-fid | sort > $got.walk ||
+		error "--print-fid on a walk failed"
+	$LFS find $MOUNT/$tdir -type f -printf "%LF\n" | sort > $want.walk
+	(( $(wc -l < $got.walk) == 21 )) ||
+		error "--print-fid on a walk printed $(wc -l < $got.walk) of 21"
+	diff -u $want.walk $got.walk ||
+		error "--print-fid differs from -printf '%LF' on a walk"
+
+	# An OST object is named by the file that owns it, and that name
+	# lives on an MDT, so without a mount an OST prints each object's file
+	# FID, as --print-fid does, and -printf %p is refused.
+	#
+	# ldiskfs only, and the refusal itself is matched: a non-zero exit
+	# is not evidence of one.  A ZFS OST in service answers EBUSY, and a
+	# remote OSS with nodsh cannot be asked at all -- each of those made
+	# this check pass without the refusal ever having happened.
+	local ost1dev=$(ostdevname 1)
+	local ostout
+	local ostfid
+	local ostasserted=""
+
+	if [[ "$ost1_FSTYPE" == ldiskfs ]] && ! remote_ost_nodsh; then
+		# test_302 restarts ost1: until MDT0000 can create on OST0000
+		# again, -i 0 falls back to another OST
+		local ost0=$(ostname_from_index 0)
+		local mdtosc=$(get_mdtosc_proc_path mds1 $ost0)
+
+		wait_osc_import_state mds1 ost1 FULL
+		wait_update_facet mds1 \
+			"$LCTL get_param -n osp.$mdtosc.prealloc_status" 0 ||
+			error "MDT0000 cannot create objects on OST0000"
+		# an object is owned once written: give one file data on OST0
+		$LFS setstripe -i 0 -c 1 $MOUNT/$tdir/owned ||
+			error "setstripe owned failed"
+		echo data > $MOUNT/$tdir/owned || error "write owned failed"
+		(( $($LFS getstripe -i $MOUNT/$tdir/owned) == 0 )) ||
+			error "owned is not on OST0000"
+		ostfid=$($LFS path2fid $MOUNT/$tdir/owned | tr -d '[]')
+		sync; sync
+		do_facet ost1 "sync; sync"
+
+		ostout=$(do_facet ost1 \
+			"$LFS find --device $ost1dev --type f" 2>/dev/null) ||
+			error "an OST with no mount should print FIDs"
+		echo "$ostout" | grep -qx "$ostfid" ||
+			error "the OST did not print $ostfid: $ostout"
+		echo "$ostout" | grep -q "^\." &&
+			error "the OST printed a path with no mount: $ostout"
+		# the OST is in service: objects come and go between two scans
+		ostout=$(do_facet ost1 \
+			"$LFS find --device $ost1dev --type f --print-fid" \
+			2>/dev/null) || error "--print-fid on the OST failed"
+		echo "$ostout" | grep -qx "$ostfid" ||
+			error "--print-fid on the OST missed $ostfid: $ostout"
+		ostout=$(do_facet ost1 \
+			"$LFS find --device $ost1dev --type f -printf '%p\n'" \
+			2>&1) &&
+			error "-printf %p on an OST with no mount should fail"
+		echo "$ostout" | grep -q "has no directories" ||
+			error "-printf %p on an OST failed otherwise: $ostout"
+		ostasserted=", an OST by FID"
+	fi
+
+	# a mount that would name nothing is refused, not ignored
+	do_facet mds1 \
+		"$LFS find --device $mdt1 --fid2path $MOUNT --print-fid" \
+		> /dev/null 2>&1 &&
+		error "--fid2path with --print-fid should be refused"
+
+	local said="named 20 objects from 21 names, no mount, hardlink once"
+
+	echo "the scan $said$ostasserted"
+}
+run_test 303 "lfs find --device names an MDT with no mount at all"
+
+test_304() {
+	# The offline half of test_303: the same paths, with the MDT stopped.
+	[[ "$mds1_FSTYPE" == ldiskfs ]] || skip "ldiskfs only test"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+
+	(( MDS1_VERSION >= $(version_code 2.17.58) )) ||
+		skip "Need MDS >= 2.17.58 for lfs find --device pathnames"
+
+	local mdt1=$(mdsdevname 1)
+	local got=$TMP/$tfile.got
+	local want=$TMP/$tfile.want
+	local missing
+
+	stack_trap "rm -f $got $got.raw $got.err $want $want.all"
+
+	is_mounted $MOUNT || setup_noconfig
+	check_mount || error "check_mount failed"
+	stack_trap "rm -rf $MOUNT/$tdir"
+
+	# on MDT0000: with no mount, only the target scanned names anything,
+	# so under DNE an object whose ancestors live elsewhere is nameless
+	mkdir_on_mdt0 $MOUNT/$tdir || error "mkdir $tdir failed"
+	createmany -o $MOUNT/$tdir/f 20 || error "createmany failed"
+	sync; sync
+	do_facet mds1 "sync; sync"
+
+	# relative to the filesystem root, as the scan answers: see test_303
+	$LFS find $MOUNT/$tdir -type f | sed "s|^$MOUNT|.|" | sort > $want
+	(( $(wc -l < $want) == 20 )) ||
+		error "client sees $(wc -l < $want) names, want 20"
+
+	# out of service
+	stop mds1 || error "stop mds1 failed"
+	stack_trap "start mds1 $mdt1 $MDS_MOUNT_OPTS || true"
+
+	do_facet mds1 "$LFS find --device $mdt1 --type f" \
+		> $got.raw 2> $got.err || {
+		error "lfs find on stopped $mdt1: $(cat $got.err)"
+	}
+	grep "^\./$tdir/" $got.raw | sort > $got
+
+	# the names, not merely some output: a scan that composed nothing and
+	# one that composed everything both exit 0
+	missing=$(comm -23 $want $got)
+	[[ -z "$missing" ]] || {
+		echo "$missing" | head -10
+		error "the scan lost $(echo "$missing" | wc -l) paths offline"
+	}
+
+	grep -q "^\[\?0x" $got.raw &&
+		error "the scan printed a FID where a path was asked for"
+	grep -q "^$MOUNT/" $got.raw &&
+		error "the scan printed a mounted pathname"
+
+	echo "offline scan named $(wc -l < $got) objects on $mds1_FSTYPE"
+}
+run_test 304 "lfs find --device names a stopped MDT"
+
+test_305() {
+	# in service, as test_303: an imported ZFS pool answers EBUSY
+	[[ "$mds1_FSTYPE" == ldiskfs ]] ||
+		skip "$mds1_FSTYPE cannot be scanned while in service"
+	remote_mds_nodsh && skip "remote MDS with nodsh"
+	(( MDS1_VERSION >= $(version_code 2.17.58) )) ||
+		skip "Need MDS >= 2.17.58 for lfs find --device pathnames"
+	which fscrypt || skip "This test needs fscrypt userspace tool"
+
+	local mdt1=$(mdsdevname 1)
+	local want=$TMP/$tfile.want
+	local got=$TMP/$tfile.got
+	local long=$(printf "L%.0s" {1..60})
+	local dir=$MOUNT/$tdir/enc
+
+	stack_trap "rm -f $want $got $got.raw $got.err"
+	is_mounted $MOUNT || setup_noconfig
+	check_mount || error "check_mount failed"
+	$LCTL get_param mdc.*.import | grep -q client_encryption ||
+		skip "client encryption not supported"
+
+	# the no-key form printed is embedded llcrypt's, the only build with
+	# this tunable; a client on in-kernel fscrypt lists another form
+	$LCTL get_param -n llite.*.enable_filename_encryption &>/dev/null ||
+		skip "client uses in-kernel fscrypt"
+	$LCTL set_param llite.*.enable_filename_encryption=1
+	stack_trap "$LCTL set_param llite.*.enable_filename_encryption=0"
+	yes | fscrypt setup --force --verbose ||
+		error "fscrypt global setup failed"
+	sed -i 's/\(.*\)policy_version\(.*\):\(.*\)\"[0-9]*\"\(.*\)/\1policy_version\2:\3"2"\4/' \
+		/etc/fscrypt.conf
+	yes | fscrypt setup --verbose $MOUNT ||
+		error "fscrypt setup $MOUNT failed"
+	stack_trap "rm -rf $MOUNT/.fscrypt"
+
+	mkdir_on_mdt0 $MOUNT/$tdir || error "mkdir $tdir failed"
+	stack_trap "rm -rf $MOUNT/$tdir"
+	$LFS setdirstripe -D -i 0 $MOUNT/$tdir || error "setdirstripe failed"
+	mkdir $dir || error "mkdir $dir failed"
+	echo -e 'mypass\nmypass' | fscrypt encrypt --verbose \
+		--source=custom_passphrase --name=protector305 $dir ||
+		error "fscrypt encrypt failed"
+	touch $dir/short $dir/$long || error "create in $dir failed"
+	mkdir $dir/sub && touch $dir/sub/inner ||
+		error "create in $dir/sub failed"
+	sync; sync
+	do_facet mds1 "sync; sync"
+	fscrypt lock --verbose $dir || error "fscrypt lock $dir failed"
+	cancel_lru_locks
+
+	# what a client without the key lists: short names as base64url,
+	# the long one as '+' and its digest
+	(cd $MOUNT && find $tdir -type f | sed 's|^|./|' | sort) > $want
+	(( $(wc -l < $want) == 3 )) || error "client lists $(cat $want)"
+	grep -q "$long" $want && skip "names are not encrypted on $MOUNT"
+	grep -q "^\./$tdir/enc/+" $want ||
+		error "no digested name in $(cat $want)"
+
+	do_facet mds1 "$LFS find --device $mdt1 --type f" > $got.raw \
+		2> $got.err || error "lfs find on $mdt1 failed: $(cat $got.err)"
+	grep "^\./$tdir/" $got.raw | sort > $got
+	diff -u $want $got || error "encrypted names differ from the client's"
+	echo "$(wc -l < $got) encrypted names as the client lists them"
+}
+run_test 305 "lfs find --device prints encrypted names as a client does"
 
 #
 # (This was sanity/802a)

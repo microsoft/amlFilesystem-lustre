@@ -64,6 +64,10 @@ or NULL when the caller does not want it. A walk counts an object as seen
 once, then as filtered, skipped, or delivered and namespace-visible.
 Everything a walk reaches arrived through a directory entry, so the other
 classes are ones only a scan of a target meets.
+.I lfsp_fsname
+is read only by
+.BR llapi_scan_device (3),
+and is ignored here, a namespace scan being given a path rather than a target.
 .LP
 .I lfsp_want
 is the demand mask: the
@@ -112,6 +116,7 @@ is an optional pre-filter, called before any I/O on the object with a record
 carrying only
 .IR lfsr_path ,
 .I lfsr_name
+.RB ( LLAPI_SCAN_NAME )
 and, when the directory entry knew the object type,
 .BR LLAPI_SCAN_TYPE .
 It returns 0 to gather and deliver the object, 1 to skip it without

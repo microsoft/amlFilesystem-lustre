@@ -134,6 +134,7 @@ liblustreapi_la_SOURCES = libhsm_scanner.c \
 			  liblustreapi_root.c \
 			  liblustreapi_scan.c \
 			  liblustreapi_scan_device.c \
+			  liblustreapi_scan_names.c \
 			  lustreapi_scan_backend.h \
 			  liblustreapi_swap.c \
 			  liblustreapi_util.c \

@@ -1,0 +1,198 @@
+.TH LLAPI_SCAN_REC_PATH 3 2026-08-24 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_scan_rec_path \- the pathname of a scanned object
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_scan_rec_path(int " mnt_fd ", const char *" mnt_path ,
+.BI "                        const struct llapi_scan_rec *" rec ,
+.BI "                        char *" buf ", size_t " buflen ");"
+.PP
+.fi
+.SH DESCRIPTION
+.B llapi_scan_rec_path()
+writes the pathname of the object described by
+.I rec
+into
+.IR buf .
+.LP
+A scan of a mounted filesystem knows the path it walked to and puts it in the
+record; that path is used directly and
+.I mnt_fd
+is not consulted. A scan of a target holds names and parent FIDs and no paths
+(turning those into one is a walk of its own), so its records name
+objects by FID, and those are resolved here as
+.BR llapi_fid2path (3)
+does.
+.LP
+.I mnt_fd
+is an open descriptor on a client mount of the same filesystem, as
+.BR llapi_root_path_open (3)
+returns.
+.I mnt_path
+is that mount's path and is prefixed to a FID-resolved result so the answer
+is a usable pathname; pass NULL for one relative to the filesystem root,
+.BR ./dir/file ,
+and
+.B .
+for the root itself, as
+.BR lfs-find (1)
+prints them.
+A walked path is returned as it is, whatever
+.I mnt_path
+is.
+.LP
+An object with more than one link has one pathname per link. The first is
+returned;
+.BR lfs-fid2path (1)
+lists the rest.
+.SH RETURN VALUES
+.B llapi_scan_rec_path()
+returns:
+.TP
+0
+on success, with
+.I buf
+filled.
+.TP
+<0
+a negative errno on failure.
+.SH ERRORS
+.TP 15
+.B -ENODATA
+the record carries neither a path nor a FID.
+.TP 15
+.B -ENOENT
+the object has no pathname: one of the objects a target keeps for itself,
+whose FID has no FLD range, or a FID the MDT no longer resolves. An OST data
+object is in this set when it has never been written to: the OST records its
+owner FID on the first write, setattr or punch, so a precreated object, and
+one belonging to a file created and never written, carry none. Otherwise it
+is named by
+.IR lfsr_owner_fid ,
+the file that owns it, which the record carries only with
+.B LLAPI_SCAN_OWNER
+set in
+.IR lfsr_valid :
+ask for it in
+.I lfsp_want
+(or leave that 0). Without it an OST object returns this with no lookup.
+A striped directory's shard
+.RB ( LLAPI_SCAN_LMV_SHARD )
+is in this set too: the master directory has the pathname.
+Any other record whose
+.I lfsr_class
+is not
+.B LLAPI_SCAN_CLS_VISIBLE
+also returns this, with no lookup.
+.TP 15
+.B -EPERM
+the caller may not resolve FIDs.
+.BR llapi_fid2path (3)
+needs
+.B CAP_DAC_READ_SEARCH
+unless the client was mounted with
+.BR "-o user_fid2path" .
+.TP 15
+.B -ERANGE
+.I buflen
+is too small for the answer.
+.TP 15
+.B -EBADF
+the record needs resolving and
+.I mnt_fd
+is negative: the caller never opened the mount. Kept apart from
+.B -EINVAL
+on purpose, because that one has to be read as "this object has no
+name" and a caller that has not opened the mount has no answers at all,
+not a nameless object.
+.TP 15
+.B -EINVAL
+.IR rec ", " buf " or " buflen
+is unset. It is also the server's answer for a FID that
+.BR fid_is_namespace_visible ()
+excludes (an
+.IR O/<seq>/LAST_ID ,
+say), which
+.BR mdt_fid2path ()
+and
+.BR ofd_fid2path ()
+both return and this function passes out unchanged. A caller cannot tell the
+two apart, so treat \-EINVAL as "this object has no name" alongside
+.B -ENOENT
+and
+.BR -ENODATA ,
+as the in\-tree caller does.
+.SH NOTES
+Resolving a FID costs one ioctl to the MDT, which is why this is the
+consumer's to call rather than something the scanner does for every object.
+Call it on the objects a search kept, not on the objects it saw: the cost then
+falls on the answer rather than on the scan.
+.LP
+The FID of an MDT object is resolved by that MDT, so this works only while
+the MDT is in service: on a stopped MDT the lookup waits for it to come back.
+.BR llapi_find_device (3)
+names a stopped MDT's objects from the target itself.
+.LP
+.B The mount must be one of the filesystem the target belongs to, and only
+.B the caller can ensure it.
+A FID is unique within a filesystem and not between them, so a mount of
+another filesystem resolves it perfectly happily and answers with its own
+pathname: the failure is a wrong name and a zero exit, not an error. Nothing
+here can detect it: this call is handed a descriptor and a record, and
+never sees the target the record came from.
+.BR llapi_find_device (3),
+which
+.BR lfs-find (1)
+calls, makes the comparison itself: it reads the mount's filesystem name with
+.BR llapi_search_fsname (3)
+and passes it to the scan as
+.IR lfsp_fsname .
+A consumer pairing
+this call with
+.BR llapi_scan_device (3)
+can have the scan make the same comparison instead, by setting
+.I lfsp_fsname
+to the filesystem the mount belongs to: a target of any other is then refused
+with
+.B -EXDEV
+before a record is delivered.
+.SH EXAMPLES
+To print the pathname of every object a device scan delivers, counting the
+ones that have none:
+.EX
+        char path[PATH_MAX];
+        int mnt_fd;
+\&
+        rc = llapi_root_path_open("/mnt/lustre", &mnt_fd);
+        if (rc < 0)
+                return rc;
+\&
+        /* inside the scan callback; the scan was given lfsp_fsname, so a
+         * target of another filesystem was refused before any record
+         * arrived -- see NOTES
+         */
+        rc = llapi_scan_rec_path(mnt_fd, "/mnt/lustre", rec,
+                                 path, sizeof(path));
+        if (rc == 0)
+                printf("%s\\n", path);
+        else if (rc == -ENOENT || rc == -ENODATA || rc == -EINVAL)
+                nameless++;     /* one of the target's own objects */
+        else
+                return rc;      /* -EPERM and -ERANGE are not "no name" */
+.EE
+.SH AVAILABILITY
+.B llapi_scan_rec_path()
+is part of the
+.BR lustre (7)
+user application interface library since release 2.18.0.
+.\" Added in commit v2_17_57-xxx-gxxxxxxxxx
+.SH SEE ALSO
+.BR lfs-fid2path (1),
+.BR lfs-find (1),
+.BR llapi_fid2path (3),
+.BR llapi_root_path_open (3),
+.BR llapi_scan_device (3),
+.BR llapi_scan_namespace (3),
+.BR lustreapi (7)

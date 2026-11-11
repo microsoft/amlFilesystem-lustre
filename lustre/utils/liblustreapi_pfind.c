@@ -13,10 +13,12 @@
 #include <fnmatch.h>
 #include <grp.h>
 #include <libgen.h> /* for dirname() */
+#include <mntent.h>
 #include <pthread.h>
 #include <pwd.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
@@ -1820,17 +1822,24 @@ static int printf_format_lustre(char *seq, char *buffer, size_t size,
 		if (!path) {
 			/*
 			 * A target scan walked no path to ask an MDT through.
-			 * The FID is in the record, which is where the
-			 * default output of such a scan reads it from too,
+			 * The FID is in the record, which is where
+			 * --print-fid reads it from too,
 			 * and an object carrying no trusted.lma has none.
-			 * An OST data object prints nothing: the FID a user
-			 * knows is its file's, which is not read here.
+			 * An OST data object prints its file's FID, from its
+			 * trusted.fid, and nothing if no file owns it yet.
 			 */
-			if (!rec || find_rec_is_ost_obj(rec) ||
-			    !(rec->lfsr_valid & LLAPI_SCAN_FID))
+			if (!rec)
+				goto format_done;
+			if (!find_rec_is_ost_obj(rec) &&
+			    (rec->lfsr_valid & LLAPI_SCAN_FID))
+				fid = rec->lfsr_fid;
+			else if (find_rec_is_ost_obj(rec) &&
+				 (rec->lfsr_valid & LLAPI_SCAN_OWNER))
+				fid = rec->lfsr_owner_fid;
+			else
 				goto format_done;
 			*wrote = snprintf(buffer, size, DFID_NOBRACE,
-					  PFID(&rec->lfsr_fid));
+					  PFID(&fid));
 			goto format_done;
 		}
 		err = llapi_path2fid(path, &fid);
@@ -2291,7 +2300,8 @@ static bool printf_scan_striped_dir(const struct find_param *param,
 static int printf_format_directive(char *seq, char *buffer, size_t size,
 				   int *wrote, struct find_param *param,
 				   const struct llapi_scan_rec *rec,
-				   char *path, __u32 projid, int d)
+				   char *path, const char *name, __u32 projid,
+				   int d)
 {
 	unsigned long long blocks = param->fp_lmd->lmd_stx.stx_blocks;
 	__u16 mode = param->fp_lmd->lmd_stx.stx_mode;
@@ -2357,7 +2367,7 @@ static int printf_format_directive(char *seq, char *buffer, size_t size,
 		/*
 		 * A target scan fills no stx_ino: the object's id on the
 		 * target is a field of the record, which is where that scan's
-		 * own default output reads it from as well.
+		 * --print-fid reads it from as well.
 		 */
 		if (!path && rec &&
 		    (rec->lfsr_valid & LLAPI_SCAN_INO))
@@ -2390,6 +2400,9 @@ static int printf_format_directive(char *seq, char *buffer, size_t size,
 				  param->fp_lmd->lmd_stx.stx_nlink);
 		break;
 	case 'p':	/* Path name of file */
+		/* a target scan's name is composed, not walked */
+		if (path == NULL)
+			path = (char *)name;
 		/* the two format parsers can disagree: never print NULL */
 		if (!path)
 			break;
@@ -2490,8 +2503,8 @@ static int printf_format_directive(char *seq, char *buffer, size_t size,
 /*
  * What a -printf format asks for, and whether it asks for the path.
  *
- * Every directive but %p is answered from the record a scan delivers, so a
- * target scan refuses only a format that names the path.  The mask collects
+ * Every directive but %p is answered from the record a scan delivers; on a
+ * target scan %p is the pathname it prints by default.  The mask collects
  * what those directives read beyond the fields every record carries; a walk
  * gathers all of it whatever the format says and has no use for the mask.
  */
@@ -2517,7 +2530,7 @@ static __u64 printf_format_want(const char *fmt, bool *needs_path)
 		switch (*c) {
 		case '\0':
 			return want;
-		case 'p':	/* the path as walked */
+		case 'p':	/* the path, walked or composed */
 			if (needs_path)
 				*needs_path = true;
 			break;
@@ -2543,6 +2556,9 @@ static __u64 printf_format_want(const char *fmt, bool *needs_path)
 			 */
 			if (c[1] != '\0' && strchr("chiOopS", c[1]))
 				want |= LLAPI_SCAN_LAYOUT | LLAPI_SCAN_LMV;
+			/* an OST data object's %LF is its owner's */
+			if (c[1] == 'F')
+				want |= LLAPI_SCAN_OWNER;
 			break;
 		}
 
@@ -2592,13 +2608,14 @@ static bool printf_buf_grow(char **output, size_t *len, const char *stack,
  *			the lfs find search criteria
  * @param[in]	rec	The record the object was delivered in
  * @param[in]	path	Path name for current file/dir, NULL for a target scan
+ * @param[in]	name	What %p prints for a target scan, or NULL
  * @param[in]	projid	Project ID associated with current file/dir
  * @param[in]	d	File descriptor for current directory (or -1 for a
  *			non-directory file)
  */
 static void printf_format_string(struct find_param *param,
 				 const struct llapi_scan_rec *rec, char *path,
-				 __u32 projid, int d)
+				 const char *name, __u32 projid, int d)
 {
 	char stack_buf[FORMATTED_BUF_LEN];
 	char *output = stack_buf;
@@ -2625,7 +2642,7 @@ static void printf_format_string(struct find_param *param,
 		if (*fmt_char == '%') {
 			rc = printf_format_directive(fmt_char + 1, buff,
 						  buff_size, &written, param,
-						  rec, path, projid, d);
+						  rec, path, name, projid, d);
 			/* the directive filled what was left: grow, redo */
 			if (rc > 0 && (size_t)written + 1 >= buff_size &&
 			    printf_buf_grow(&output, &output_len, stack_buf,
@@ -2660,6 +2677,151 @@ static void printf_format_string(struct find_param *param,
 out:
 	if (output != stack_buf)
 		free(output);
+}
+
+/*
+ * A target scan's output waits for its path, so it is kept as pieces: the
+ * text, rendered now, and the %p directives, rendered once the path is
+ * known.  Each piece is a kind byte, a length and the bytes.
+ */
+#define FIND_SEG_TEXT	'T'
+#define FIND_SEG_PATH	'P'	/* a %p directive, without its '%' */
+#define FIND_SEG_NUL	'Z'	/* -print0's separator */
+
+struct find_blob {
+	char	fb_buf[FORMATTED_BUF_LEN * 2];
+	size_t	fb_len;
+};
+
+static void find_blob_add(struct find_blob *b, char kind, const char *s,
+			  size_t len)
+{
+	__u32 n = len;
+
+	if (b->fb_len + 1 + sizeof(n) + len > sizeof(b->fb_buf))
+		return;		/* as printf_format_string() truncates */
+	b->fb_buf[b->fb_len++] = kind;
+	memcpy(b->fb_buf + b->fb_len, &n, sizeof(n));
+	b->fb_len += sizeof(n);
+	memcpy(b->fb_buf + b->fb_len, s, len);
+	b->fb_len += len;
+}
+
+/* the length of a %p directive at @seq, past its '%', or 0 for another */
+static size_t printf_directive_path_len(const char *seq)
+{
+	const char *c = seq;
+	char *end;
+
+	/* what parse_format_width() skips */
+	while (*c == '-')
+		c++;
+	(void)strtol(c, &end, 10);
+
+	return *end == 'p' ? end - seq + 1 : 0;
+}
+
+/* printf_format_string(), with each %p left as a piece to fill in later */
+static void printf_format_pieces(struct find_param *param,
+				 const struct llapi_scan_rec *rec,
+				 __u32 projid, int d, struct find_blob *b)
+{
+	char output[FORMATTED_BUF_LEN];
+	char *fmt_char = param->fp_format_printf_str;
+	char *buff = output;
+	size_t buff_size = FORMATTED_BUF_LEN;
+	int rc, written;
+	size_t plen;
+
+	while (*fmt_char && (buff_size > 1)) {
+		rc = 0;
+		written = 0;
+		plen = *fmt_char == '%' ?
+		       printf_directive_path_len(fmt_char + 1) : 0;
+		if (plen != 0) {
+			find_blob_add(b, FIND_SEG_TEXT, output, buff - output);
+			find_blob_add(b, FIND_SEG_PATH, fmt_char + 1, plen);
+			buff = output;
+			buff_size = FORMATTED_BUF_LEN;
+			fmt_char += plen + 1;
+			continue;
+		}
+		if (*fmt_char == '%')
+			rc = printf_format_directive(fmt_char + 1, buff,
+						     buff_size, &written,
+						     param, rec, NULL, NULL,
+						     projid, d);
+		else if (*fmt_char == '\\')
+			rc = printf_format_escape(fmt_char + 1, buff,
+						  buff_size, &written);
+
+		if (rc < 0)
+			return;
+		if (rc > 0) {
+			fmt_char += (rc + 1);
+			buff += written;
+			buff_size -= written;
+		} else {
+			*buff++ = *fmt_char++;
+			buff_size--;
+		}
+	}
+	find_blob_add(b, FIND_SEG_TEXT, output, buff - output);
+}
+
+/* the pieces, with @path where each %p was */
+static void find_blob_print(struct find_param *param, const void *blob,
+			    size_t len, const char *path)
+{
+	char out[FORMATTED_BUF_LEN + PATH_MAX];
+	const char *p = blob;
+	const char *end = p + len;
+	size_t used = 0;
+
+	while (p + 1 + sizeof(__u32) <= end) {
+		char kind = *p++;
+		char seq[64];
+		int wrote = 0;
+		__u32 n;
+
+		memcpy(&n, p, sizeof(n));
+		p += sizeof(n);
+		if (p + n > end)
+			break;
+		switch (kind) {
+		case FIND_SEG_TEXT: {
+			/* cut what does not fit, step over the whole piece */
+			size_t copy = n < sizeof(out) - 1 - used ?
+				      n : sizeof(out) - 1 - used;
+
+			memcpy(out + used, p, copy);
+			used += copy;
+			break;
+		}
+		case FIND_SEG_PATH:
+			if (n >= sizeof(seq))
+				break;
+			memcpy(seq, p, n);
+			seq[n] = '\0';
+			printf_format_directive(seq, out + used,
+						sizeof(out) - used, &wrote,
+						param, NULL, NULL, path, 0, -1);
+			if (wrote > 0)
+				used += wrote;
+			if (used > sizeof(out) - 1)
+				used = sizeof(out) - 1;
+			break;
+		case FIND_SEG_NUL:
+			out[used] = '\0';
+			llapi_printf(LLAPI_MSG_NORMAL, "%s%c", out, '\0');
+			used = 0;
+			break;
+		}
+		p += n;
+	}
+	out[used] = '\0';
+	if (used > 0)
+		llapi_printf(LLAPI_MSG_NORMAL, "%s", out);
 }
 
 /*
@@ -3138,6 +3300,14 @@ struct find_ctx {
 	int			 fc_checked_type;
 	bool			 fc_gather_all;
 	bool			 fc_undecided;	/* out: nothing settled it */
+	/* a target scan's pathnames; NULL when it prints none */
+	struct scan_names	*fc_names;
+	const struct scan_name_cand *fc_cands;	/* the names to try */
+	unsigned int		 fc_ncand;
+	bool			 fc_all_links;	/* once under each name */
+	bool			 fc_printf_path; /* -printf names the path */
+	__u64			*fc_unresolved;	/* out: FIDs with no pathname */
+	int			*fc_path_rc;	/* out: first resolve failure */
 };
 
 /*
@@ -3158,6 +3328,96 @@ static int find_get_projid(struct find_ctx *fc, mode_t mode, __u32 *projid)
 		return -ENOTSUP;
 
 	return get_projid(fc->fc_path, fc->fc_fdp, mode, projid);
+}
+
+/*
+ * Whether an object of this class has a pathname anywhere, which is what
+ * makes a fid2path lookup worth an ioctl.  An object a target keeps for
+ * itself, a DNE agent inode and an orphan in PENDING have none; a record
+ * whose source sets no class, such as a namespace walk, is not judged
+ * here.
+ */
+static bool find_rec_may_have_name(const struct llapi_scan_rec *rec)
+{
+	if (!(rec->lfsr_valid & LLAPI_SCAN_CLASS))
+		return true;
+
+	return rec->lfsr_class == LLAPI_SCAN_CLS_VISIBLE ||
+	       rec->lfsr_class == LLAPI_SCAN_CLS_OST_OBJ;
+}
+
+/* a lookup failure every later lookup would share: the scan stops */
+static bool find_name_rc_fatal(int rc)
+{
+	return rc == -EPERM || rc == -ENOSPC || rc == -EDQUOT || rc == -EIO ||
+	       rc == -ENOMEM || rc == -ETIMEDOUT || rc == -ESHUTDOWN ||
+	       rc == -ENOTCONN;
+}
+
+/* Count an object with no name, or keep and report a real failure */
+static void find_rec_name_failed(struct find_ctx *fc, int prc)
+{
+	/*
+	 * -EINVAL is the third answer that means "no name", not a
+	 * broken search: mdt_fid2path() and ofd_fid2path() give it
+	 * for a FID fid_is_namespace_visible() excludes, which an
+	 * O/<seq>/LAST_ID is, and every OST has one.
+	 */
+	if (prc == -ESRCH) {
+		/* outside a fileset mount's view: not printed, not missing */
+	} else if (prc == -ENOENT || prc == -ENODATA || prc == -EINVAL) {
+		if (fc->fc_unresolved != NULL)
+			(*fc->fc_unresolved)++;
+	} else if (fc->fc_path_rc != NULL &&
+		   (*fc->fc_path_rc == 0 ||
+		    (find_name_rc_fatal(prc) &&
+		     !find_name_rc_fatal(*fc->fc_path_rc)))) {
+		/*
+		 * -EPERM and -ERANGE are not "this object has no name":
+		 * counting them as such would report a broken search as a
+		 * complete one.  Keep the first, or a later one that stops
+		 * the scan, and say so.  For an OST object the FID is its
+		 * owner's, whose link was read.
+		 */
+		const struct llapi_scan_rec *r = fc->fc_rec;
+
+		*fc->fc_path_rc = prc;
+		llapi_error(LLAPI_MSG_ERROR, prc, "cannot name "DFID,
+			    PFID(r->lfsr_valid & LLAPI_SCAN_OWNER ?
+				 &r->lfsr_owner_fid : &r->lfsr_fid));
+	}
+}
+
+/*
+ * A target scan's match, with its output: printed under its pathname now,
+ * or once the directories its path needs are known.
+ */
+static void find_rec_emit(struct find_ctx *fc, const void *blob, size_t len)
+{
+	const struct llapi_scan_rec *r = fc->fc_rec;
+	int prc = -ENOENT;
+
+	/* the root has a name but no trusted.link */
+	if ((r->lfsr_valid & LLAPI_SCAN_FID) &&
+	    lu_fid_eq(&r->lfsr_fid, &LU_ROOT_FID)) {
+		scan_names_print_root(fc->fc_names, blob, len);
+		return;
+	}
+	/* a shard is not in the namespace, nor is an orphan or an agent */
+	if (fc->fc_ncand != 0 && !(r->lfsr_valid & LLAPI_SCAN_LMV_SHARD) &&
+	    find_rec_may_have_name(r)) {
+		unsigned int flags = fc->fc_all_links ? SCAN_NAMES_ALL : 0;
+
+		/* an encrypted file's names are the client's to render */
+		if ((r->lfsr_stx.stx_attributes_mask & STATX_ATTR_ENCRYPTED) &&
+		    (r->lfsr_stx.stx_attributes & STATX_ATTR_ENCRYPTED))
+			flags |= SCAN_NAMES_ENC;
+		prc = scan_names_emit(fc->fc_names, &r->lfsr_fid,
+				      fc->fc_cands, fc->fc_ncand, flags, blob,
+				      len);
+	}
+	if (prc != 0)
+		find_rec_name_failed(fc, prc);
 }
 
 /*
@@ -3660,14 +3920,66 @@ btime_done:
 	if (param->fp_skip_percent && find_skip_file(param))
 		return 0;
 
-	if (param->fp_format_printf_str)
-		printf_format_string(param, fc->fc_rec, path, projid, d);
-	else if (path)
+	if (param->fp_format_printf_str) {
+		/* %p over a target: the path is filled in when it is known */
+		if (!path && fc->fc_printf_path) {
+			struct find_blob b;
+
+			b.fb_len = 0;
+
+			printf_format_pieces(param, fc->fc_rec, projid, d, &b);
+			find_rec_emit(fc, b.fb_buf, b.fb_len);
+			return 0;
+		}
+		printf_format_string(param, fc->fc_rec, path, NULL, projid, d);
+	} else if (path && param->fp_print_fid) {
+		struct lu_fid fid;
+		int rc = llapi_path2fid(path, &fid);
+
+		/* off Lustre, as for %LF: no FID and nothing to say */
+		if (rc == 0)
+			llapi_printf(LLAPI_MSG_NORMAL, DFID_NOBRACE"%c",
+				     PFID(&fid),
+				     param->fp_zero_end ? '\0' : '\n');
+		else if (rc != -ENOTTY && rc != -ENODATA && rc != -ENOTSUP)
+			llapi_error(LLAPI_MSG_ERROR, rc,
+				    "cannot get the FID of '%s'", path);
+	} else if (path) {
 		llapi_printf(LLAPI_MSG_NORMAL, "%s%c", path,
 			     param->fp_zero_end ? '\0' : '\n');
-	else if (fc->fc_rec->lfsr_valid & LLAPI_SCAN_FID)
-		/* no path was walked to it: its FID is the name it has */
-		llapi_printf(LLAPI_MSG_NORMAL, DFID"%c",
+	} else if (!param->fp_print_fid) {
+		/*
+		 * A target scan has no path, so one is composed here rather
+		 * than during the scan: for the objects a search kept, and
+		 * none for the ones it rejected.  An object with no pathname
+		 * is counted rather than printed -- the target's own objects
+		 * have none, and half a line of output would be worse than
+		 * none.  An OST data object does have one, the owning file's,
+		 * so a scan of an OST prints it once per stripe that file has
+		 * on the target.
+		 */
+		struct find_blob b;
+
+		b.fb_len = 0;
+
+		find_blob_add(&b, FIND_SEG_PATH, "p", 1);
+		if (param->fp_zero_end)
+			find_blob_add(&b, FIND_SEG_NUL, "", 0);
+		else
+			find_blob_add(&b, FIND_SEG_TEXT, "\n", 1);
+		find_rec_emit(fc, b.fb_buf, b.fb_len);
+	} else if (find_rec_is_ost_obj(fc->fc_rec)) {
+		/* --print-fid: an OST object's file, as %LF prints it */
+		if (fc->fc_rec->lfsr_valid & LLAPI_SCAN_OWNER)
+			llapi_printf(LLAPI_MSG_NORMAL, DFID_NOBRACE"%c",
+				     PFID(&fc->fc_rec->lfsr_owner_fid),
+				     param->fp_zero_end ? '\0' : '\n');
+		else if (fc->fc_unresolved != NULL)
+			/* never written, so no file owns it yet */
+			(*fc->fc_unresolved)++;
+	} else if (fc->fc_rec->lfsr_valid & LLAPI_SCAN_FID)
+		/* --print-fid */
+		llapi_printf(LLAPI_MSG_NORMAL, DFID_NOBRACE"%c",
 			     PFID(&fc->fc_rec->lfsr_fid),
 			     param->fp_zero_end ? '\0' : '\n');
 	else if (fc->fc_rec->lfsr_valid & LLAPI_SCAN_INO)
@@ -3680,6 +3992,9 @@ btime_done:
 		llapi_printf(LLAPI_MSG_NORMAL, "obj:%llu%c",
 			     (unsigned long long)fc->fc_rec->lfsr_ino,
 			     param->fp_zero_end ? '\0' : '\n');
+	else if (fc->fc_unresolved)
+		/* neither a FID nor an id: nothing to name it by */
+		(*fc->fc_unresolved)++;
 
 	return 0;
 }
@@ -3690,7 +4005,46 @@ btime_done:
 struct find_device_state {
 	struct find_param	*fds_param;
 	__u64			 fds_undecided;
+	__u64			 fds_unresolved;
+	int			 fds_mnt_fd;
+	int			 fds_path_rc;	/* first failure that is not
+						 * "this object has no name"
+						 */
+	/* the mount point itself, not the spelling the caller passed */
+	char			 fds_mnt_path[PATH_MAX];
+	/* the pathnames, composed as the scan goes; NULL: none printed */
+	struct scan_names	*fds_names;
+	bool			 fds_printf_path; /* -printf has a %p */
+	__u64			 fds_got;	/* the scan's lfsp_got */
+	bool			 fds_by_fid;	/* an OST, with no mount */
 };
+
+#define FIND_NAMES_WAIT_MAX	(256ULL << 20)	/* then a temporary file */
+
+static void find_device_render(const void *blob, size_t len,
+			       const char *path, void *data)
+{
+	struct find_device_state *st = data;
+
+	find_blob_print(st->fds_param, blob, len, path);
+}
+
+/*
+ * Whether a target scan prints pathnames: by default, and for -printf %p.
+ * --print-fid and a format without %p print none, so they cost no naming.
+ */
+static bool find_device_names(const struct find_param *param)
+{
+	bool needs_path = false;
+
+	if (param->fp_print_fid)
+		return false;
+	if (param->fp_format_printf_str == NULL)
+		return true;
+	printf_format_want(param->fp_format_printf_str, &needs_path);
+
+	return needs_path;
+}
 
 /*
  * What only the mounted filesystem can answer: the xattrs --xattr reads
@@ -3708,22 +4062,19 @@ static int find_device_supported(const struct find_param *param)
 		return -ENOTSUP;
 	}
 
-	if (param->fp_format_printf_str) {
-		bool needs_path;
+	if (param->fp_print_fid && param->fp_format_printf_str) {
+		llapi_error(LLAPI_MSG_ERROR | LLAPI_MSG_NO_ERRNO, -EINVAL,
+			    "--print-fid and -printf are two output formats; use one");
+		return -EINVAL;
+	}
 
-		/*
-		 * Only %p needs the path.  Every other directive is answered
-		 * from the record -- the FID, the ids, the timestamps and the
-		 * layout among them -- and printing those per object is most
-		 * of what -printf is for.
-		 */
-		printf_format_want(param->fp_format_printf_str, &needs_path);
-		if (needs_path) {
-			llapi_error(LLAPI_MSG_ERROR | LLAPI_MSG_NO_ERRNO,
-				    -ENOTSUP,
-				    "-printf %%p needs a path, which a target scan has not");
-			return -ENOTSUP;
-		}
+	/* a mount, or every link, that names nothing would be a quiet no-op */
+	if ((param->fp_fid2path_mnt != NULL || param->fp_all_links) &&
+	    !find_device_names(param)) {
+		llapi_error(LLAPI_MSG_ERROR | LLAPI_MSG_NO_ERRNO, -EINVAL,
+			    "%s names objects, and --print-fid or a -printf format without %%p prints none",
+			    param->fp_all_links ? "--all-links" : "--fid2path");
+		return -EINVAL;
 	}
 
 	/*
@@ -3928,9 +4279,26 @@ static __u64 find_device_want(struct find_param *param)
 	if (find_needs_lmv(param))
 		want |= LLAPI_SCAN_LMV;
 	if (param->fp_pattern)
-		want |= LLAPI_SCAN_LINKEA;
+		want |= LLAPI_SCAN_LINKEA | LLAPI_SCAN_NAME;
 	if (param->fp_format_printf_str)
 		want |= printf_format_want(param->fp_format_printf_str, NULL);
+	/*
+	 * What naming an object needs, asked for only when a pathname is
+	 * printed.  An OST data object is named by the file
+	 * that owns it, and LLAPI_SCAN_OWNER reads that owner from the
+	 * object's trusted.fid.  An MDT object's path is composed from its
+	 * name and parent and the directories the scan meets, which need
+	 * their mode and, for an encrypted one, their attributes.  The raw
+	 * trusted.link gives every name of a hardlink, to try in turn.
+	 */
+	if (find_device_names(param))
+		want |= LLAPI_SCAN_OWNER | LLAPI_SCAN_PARENT | LLAPI_SCAN_NAME |
+			LLAPI_SCAN_LINKEA | LLAPI_SCAN_ATTRS |
+			LLAPI_SCAN_TYPE | LLAPI_SCAN_MODE |
+			LLAPI_SCAN_NAMES_ENC;
+	/* --print-fid prints an OST object's file */
+	if (param->fp_print_fid)
+		want |= LLAPI_SCAN_OWNER;
 	/* find_device_cb() skips a shard, so it has to know one */
 	want |= LLAPI_SCAN_LMV_SHARD;
 
@@ -4284,6 +4652,17 @@ static int find_rec_layout(const struct llapi_scan_rec *rec,
 }
 
 /*
+ * Where the Lustre mount at @mnt is rooted: the filesystem root, or the
+ * directory a fileset in the mount source ("mgs:/fsname/sub") or a nodemap
+ * gives it.  The FID as it is: a directory from before 2.4, the root of an
+ * upgraded filesystem included, has an IGIF.
+ */
+static int find_mount_root(const char *mnt, struct lu_fid *root)
+{
+	return llapi_path2fid(mnt, root);
+}
+
+/*
  * --name against every name the object has: a walk meets a hardlinked file
  * once per link, a scan meets it once with its names in the linkea.
  *
@@ -4291,10 +4670,12 @@ static int find_rec_layout(const struct llapi_scan_rec *rec,
  * senses agree where they overlap, 1 being a rejection in both.
  *
  * Return: 1 to reject the object, 0 to go on and gather, or 2 for an object
- * --name cannot be answered against at all.
+ * --name cannot be answered against at all.  On 0, *entry is the linkea
+ * entry that matched.
  */
 static int find_device_prefilter(const struct llapi_scan_rec *rec,
-				 struct find_param *param, int *checked_type)
+				 struct find_param *param, int *checked_type,
+				 unsigned int *entry)
 {
 	struct llapi_scan_rec named = *rec;
 	char name[NAME_MAX + 1] = "";
@@ -4374,8 +4755,10 @@ static int find_device_prefilter(const struct llapi_scan_rec *rec,
 			return find_prefilter(&named, param,
 					      checked_type) ? 1 : 2;
 		}
-		if (!find_prefilter(&named, param, checked_type))
+		if (!find_prefilter(&named, param, checked_type)) {
+			*entry = i;
 			return 0;
+		}
 	}
 
 no_match:
@@ -4390,23 +4773,130 @@ no_match:
 	return 1;
 }
 
+/*
+ * The names an object can be printed under, in the order to try them: each
+ * link --name matches, or every link.  An OST data object has one, its
+ * owner, whose own link names it.
+ *
+ * Return: the number of candidates in @c, filled from @names.
+ */
+static unsigned int find_device_cands(const struct llapi_scan_rec *rec,
+				      struct find_param *param,
+				      struct scan_name_cand *c,
+				      unsigned int max, char *names,
+				      size_t namesize)
+{
+	struct llapi_scan_rec named = *rec;
+	int checked_type = 0;
+	unsigned int nc = 0;
+	unsigned int nr;
+	size_t used = 0;
+	size_t off = 0;
+	unsigned int i;
+
+	if (rec->lfsr_valid & LLAPI_SCAN_OWNER) {
+		c[0].snc_parent = rec->lfsr_owner_fid;
+		c[0].snc_name = NULL;
+		return 1;
+	}
+	if (!(rec->lfsr_valid & LLAPI_SCAN_LINKEA)) {
+		if (rec->lfsr_name == NULL ||
+		    !(rec->lfsr_valid & LLAPI_SCAN_PARENT))
+			return 0;
+		c[0].snc_parent = rec->lfsr_parent_fid;
+		c[0].snc_name = rec->lfsr_name;
+		return 1;
+	}
+
+	nr = scan_linkea_entry(rec->lfsr_linkea, rec->lfsr_linkeasize, 0,
+			       NULL, 0, NULL);
+	for (i = 0; i < nr && nc < max; i++) {
+		char *name = names + used;
+
+		if (used + NAME_MAX + 1 > namesize)
+			break;
+		if (scan_linkea_next(rec->lfsr_linkea, rec->lfsr_linkeasize,
+				     &off, name, NAME_MAX + 1,
+				     &c[nc].snc_parent) == 0)
+			break;
+		/* an empty name is damage, not a name to place */
+		if (name[0] == '\0')
+			continue;
+		named.lfsr_name = name;
+		if (nr > 1 && param->fp_pattern != NULL &&
+		    find_prefilter(&named, param, &checked_type))
+			continue;
+		c[nc++].snc_name = name;
+		used += strlen(name) + 1;
+	}
+
+	return nc;
+}
+
 static int find_device_cb(const struct llapi_scan_rec *rec, void *data)
 {
 	struct find_device_state *st = data;
 	struct find_param *param = st->fds_param;
+	struct scan_name_cand small_cands[16];
+	char small_names[16 * (NAME_MAX + 1)];
+	struct scan_name_cand *cands = small_cands;
+	char *names = small_names;
+	unsigned int maxc = ARRAY_SIZE(small_cands);
 	struct find_ctx fc = { 0 };
+	struct llapi_scan_rec one;
+	char name[NAME_MAX + 1];
+	unsigned int entry = 0;
 	int checked_type = 0;
 	int rc;
+
+	/*
+	 * An OST with no mount to name its objects through prints their files'
+	 * FIDs, as --print-fid does.  lfsp_got says OST before any record.
+	 */
+	if (st->fds_names != NULL && !st->fds_by_fid &&
+	    param->fp_fid2path_mnt == NULL &&
+	    (st->fds_got & LLAPI_SCAN_OWNER)) {
+		st->fds_by_fid = true;
+		param->fp_print_fid = 1;
+	}
+
+	/*
+	 * Every directory goes into the names, matched or not: a later match
+	 * may sit below it.  A shard is a step in a path, not a component.
+	 */
+	if (st->fds_names != NULL && (rec->lfsr_stx.stx_mask & STATX_MODE) &&
+	    S_ISDIR(rec->lfsr_stx.stx_mode) && rec->lfsr_name != NULL &&
+	    (rec->lfsr_valid & (LLAPI_SCAN_FID | LLAPI_SCAN_PARENT)) ==
+	    (LLAPI_SCAN_FID | LLAPI_SCAN_PARENT)) {
+		rc = scan_names_dir(st->fds_names, &rec->lfsr_fid,
+				    &rec->lfsr_parent_fid,
+				    rec->lfsr_valid & LLAPI_SCAN_LMV_SHARD ?
+				    "" : rec->lfsr_name,
+				    rec->lfsr_valid & LLAPI_SCAN_NAMES_ENC);
+		if (rc < 0)
+			return rc;
+	}
 
 	/* a shard is part of its striped directory: the master answers */
 	if (rec->lfsr_valid & LLAPI_SCAN_LMV_SHARD)
 		return 0;
 
-	rc = find_device_prefilter(rec, param, &checked_type);
+	rc = find_device_prefilter(rec, param, &checked_type, &entry);
 	if (rc == 2)
 		st->fds_undecided++;
 	if (rc != 0)
 		return 0;
+
+	/* the record carries the first link --name matched */
+	if (entry != 0) {
+		one = *rec;
+		if (scan_linkea_entry(rec->lfsr_linkea, rec->lfsr_linkeasize,
+				      entry, name, sizeof(name),
+				      &one.lfsr_parent_fid) != 0) {
+			one.lfsr_name = name;
+			rec = &one;
+		}
+	}
 
 	if (find_rec_layout(rec, param)) {
 		st->fds_undecided++;
@@ -4442,8 +4932,48 @@ static int find_device_cb(const struct llapi_scan_rec *rec, void *data)
 	fc.fc_lustre_fs = 0;
 	fc.fc_checked_type = checked_type;
 	fc.fc_stripe_count = find_get_stripe_count(param);
+	fc.fc_names = st->fds_names;
+	if (fc.fc_names != NULL && (rec->lfsr_valid & LLAPI_SCAN_LINKEA)) {
+		unsigned int nr = scan_linkea_entry(rec->lfsr_linkea,
+						    rec->lfsr_linkeasize, 0,
+						    NULL, 0, NULL);
+
+		/* a file with more links than fit here: every one still */
+		if (nr > maxc) {
+			cands = calloc(nr, sizeof(*cands));
+			names = malloc((size_t)nr * (NAME_MAX + 1));
+			if (cands == NULL || names == NULL) {
+				free(cands);
+				free(names);
+				return -ENOMEM;
+			}
+			maxc = nr;
+		}
+	}
+	if (fc.fc_names != NULL)
+		fc.fc_ncand = find_device_cands(rec, param, cands, maxc,
+						names,
+						(size_t)maxc * (NAME_MAX + 1));
+	fc.fc_cands = cands;
+	fc.fc_all_links = param->fp_all_links;
+	fc.fc_printf_path = st->fds_printf_path;
+	fc.fc_unresolved = &st->fds_unresolved;
+	fc.fc_path_rc = &st->fds_path_rc;
 
 	rc = find_decide(&fc, param);
+	if (cands != small_cands) {
+		free(cands);
+		free(names);
+	}
+	if (rc < 0)
+		return rc;
+	/*
+	 * Every later lookup would fail the same way, and a match that could
+	 * not be kept would go missing: stop now.
+	 */
+	if (find_name_rc_fatal(st->fds_path_rc))
+		return st->fds_path_rc;
+	rc = scan_names_lost(st->fds_names);
 	if (rc < 0)
 		return rc;
 
@@ -4453,6 +4983,84 @@ static int find_device_cb(const struct llapi_scan_rec *rec, void *data)
 	return 0;
 }
 
+/*
+ * Whether @target is a block device mounted as a Lustre target on this node,
+ * so its filesystem is in service and a lookup through a client will answer.
+ */
+static bool find_device_in_service(const char *target)
+{
+	struct stat ts, ms;
+	struct mntent *m;
+	bool up = false;
+	FILE *f;
+
+	if (stat(target, &ts) < 0 || !S_ISBLK(ts.st_mode))
+		return false;
+	f = setmntent("/proc/mounts", "r");
+	if (f == NULL)
+		return false;
+	while (!up && (m = getmntent(f)) != NULL)
+		up = (strcmp(m->mnt_type, "lustre_tgt") == 0 ||
+		      strcmp(m->mnt_type, "lustre") == 0) &&
+		     stat(m->mnt_fsname, &ms) == 0 && S_ISBLK(ms.st_mode) &&
+		     ms.st_rdev == ts.st_rdev;
+	endmntent(f);
+
+	return up;
+}
+
+/*
+ * A client mount of @label's filesystem on this node, found without being
+ * named, for the directories an MDT scan never met.  Only for a target in
+ * service, so a scan of a stopped filesystem never waits on its client; only
+ * a mount of the whole filesystem, since a fileset mount answers below its
+ * own root; and only for root, which fid2path needs.
+ *
+ * Return: 0 with st->fds_mnt_fd and fds_mnt_path set, or -ENOENT.
+ */
+static int find_device_auto_mount(const char *target, const char *label,
+				  struct find_device_state *st)
+{
+	const char *dash = strrchr(label, '-');
+	struct mntent *m;
+	int rc = -ENOENT;
+	size_t len;
+	FILE *f;
+
+	if (dash == NULL || dash == label || geteuid() != 0 ||
+	    !find_device_in_service(target))
+		return -ENOENT;
+	len = dash - label;
+
+	f = setmntent("/proc/mounts", "r");
+	if (f == NULL)
+		return -ENOENT;
+	/*
+	 * A client mount is "nids:/fsname", a fileset one "nids:/fsname/dir";
+	 * a nodemap can still give the first a fileset, so the root is asked.
+	 */
+	while (rc < 0 && (m = getmntent(f)) != NULL) {
+		const char *fs = strstr(m->mnt_fsname, ":/");
+		struct lu_fid root;
+		int fd;
+
+		if (strcmp(m->mnt_type, "lustre") != 0 || fs == NULL ||
+		    strlen(fs + 2) != len || strncmp(fs + 2, label, len) != 0 ||
+		    find_mount_root(m->mnt_dir, &root) < 0 || !fid_is_root(&root))
+			continue;
+		fd = open(m->mnt_dir, O_RDONLY | O_DIRECTORY);
+		if (fd < 0)
+			continue;
+		snprintf(st->fds_mnt_path, sizeof(st->fds_mnt_path), "%s",
+			 m->mnt_dir);
+		st->fds_mnt_fd = fd;
+		rc = 0;
+	}
+	endmntent(f);
+
+	return rc;
+}
+
 /**
  * llapi_find_device() - lfs find's predicates, over a scan of a target
  * @target:	block device, image or snapshot holding an MDT or OST
@@ -4460,12 +5068,20 @@ static int find_device_cb(const struct llapi_scan_rec *rec, void *data)
  * @sp:		scan parameters, or NULL for the defaults
  *
  * The objects come from llapi_scan_device() instead of a namespace walk,
- * so this reads a target directly and does not need it mounted, or its
- * server running, or a client anywhere.  A target holds names and parent
- * FIDs, not paths, so what it prints is a FID -- [0x200000401:0x1:0x0] --
- * or, for an object carrying no trusted.lma to hold one, obj: and the
- * target's own id for it.  The second form is reachable only under
- * LLAPI_SCAN_F_INTERNAL.  fp_zero_end chooses the separator, as for a walk.
+ * so this reads a target directly and does not need it mounted or its
+ * server running.  It prints pathnames, as a walk does.  An MDT object is
+ * named from the directories the scan meets, as it goes, and its path starts
+ * with "./" -- or with the fp_fid2path_mnt mount point, when one is given.
+ * An OST object is named by the file that owns it, read through
+ * fp_fid2path_mnt, so an OST without one prints FIDs, and -printf %p is
+ * refused with -ENOTDIR.  A target of another filesystem than the mount's is
+ * refused with -EXDEV.
+ *
+ * fp_print_fid prints FIDs instead, as %LF does -- 0x200000401:0x1:0x0 -- or,
+ * for an object carrying no trusted.lma to hold one, obj: and the target's
+ * own id for it, reachable only under LLAPI_SCAN_F_INTERNAL.  So does a -printf
+ * format without %p: neither waits for a directory or looks one up.
+ * fp_zero_end chooses the separator, as for a walk.
  *
  * A predicate whose answer is only in the mounted filesystem is refused
  * before the scan starts rather than silently matching nothing.
@@ -4491,14 +5107,24 @@ int llapi_find_device(const char *target, struct find_param *param,
 	struct llapi_scan_param spl = { .lfsp_size = sizeof(spl) };
 	struct llapi_scan_stats stats = { .ss_size = sizeof(stats) };
 	struct llapi_scan_stats *ustats = NULL;	/* the caller's, if any */
-	struct find_device_state st = { 0 };
+	/* fds_mnt_fd first: every early exit closes it */
+	struct find_device_state st = { .fds_mnt_fd = -1 };
 	struct obd_uuid *obd_uuid;
 	struct llapi_scan_tgt tgt = { 0 };
+	struct scan_tgt_check chk = { 0 };
+	char label[sizeof(tgt.tt_label)] = "";
+	struct lu_fid mroot = LU_ROOT_FID;
+	__u64 outside = 0;
+	bool refused = false;
+	bool by_fid;
+	/* the filesystem the --fid2path mount belongs to, empty if none */
+	char mfs[PATH_MAX] = { 0 };
 	int lazy;
 	int rc;
 
 	if (!target || !param)
 		return -EINVAL;
+	by_fid = param->fp_print_fid;
 
 	if (sp) {
 		rc = scan_param_copyin(&spl, sp, LLAPI_SCAN_F_KNOWN_DEV);
@@ -4569,11 +5195,117 @@ int llapi_find_device(const char *target, struct find_param *param,
 	}
 
 	st.fds_param = param;
-	spl.lfsp_want = find_device_want(param);
-	/* find's own demand mask, not the caller's, so the caller's lfsp_got
-	 * would answer for a question it did not ask
+	if (param->fp_format_printf_str != NULL)
+		printf_format_want(param->fp_format_printf_str,
+				   &st.fds_printf_path);
+	/*
+	 * One open for the scan, not one per object: the names look up what
+	 * the target cannot answer through a client mount of the same
+	 * filesystem, and a target scan does not otherwise have one.
 	 */
-	spl.lfsp_got = NULL;
+	if (param->fp_fid2path_mnt != NULL) {
+		/* the copies below are bounded: longer would be cut short */
+		if (strlen(param->fp_fid2path_mnt) >=
+		    sizeof(st.fds_mnt_path)) {
+			rc = -ENAMETOOLONG;
+			llapi_error(LLAPI_MSG_ERROR, rc,
+				    "'%.64s...' is too long",
+				    param->fp_fid2path_mnt);
+			goto out;
+		}
+		rc = llapi_root_path_open(param->fp_fid2path_mnt,
+					  &st.fds_mnt_fd);
+		if (rc < 0) {
+			llapi_error(LLAPI_MSG_ERROR, rc,
+				    "cannot open '%s' to resolve FIDs; it has to be a client mount of the same filesystem",
+				    param->fp_fid2path_mnt);
+			goto out;
+		}
+		/*
+		 * fid2path answers relative to the filesystem root, so the
+		 * mount point is prefixed to make a pathname.  It has to be
+		 * the real one: a bare fsname, a subdirectory of the mount
+		 * and a trailing slash all open the same root and none of
+		 * them names a file when prefixed.  Same branch on '/' that
+		 * llapi_root_path_open() takes.
+		 */
+		if (param->fp_fid2path_mnt[0] == '/')
+			rc = llapi_search_mounts(param->fp_fid2path_mnt, 0,
+						 st.fds_mnt_path, NULL);
+		else
+			rc = llapi_search_rootpath(st.fds_mnt_path,
+						   param->fp_fid2path_mnt);
+		if (rc < 0) {
+			llapi_error(LLAPI_MSG_ERROR, rc,
+				    "cannot find the mount point of '%s'",
+				    param->fp_fid2path_mnt);
+			goto out;
+		}
+		/*
+		 * The mount's own filesystem, which the scan compares with
+		 * the target's label before it delivers anything: a mount of
+		 * another filesystem resolves FIDs perfectly happily and
+		 * prints its own paths.  The comparison belongs to the scan
+		 * because only the scan opens the target, and opening it
+		 * twice is not free on every backend.
+		 *
+		 * A mount whose fsname cannot be read leaves nothing to
+		 * compare with, and --fid2path was asked for explicitly:
+		 * running unguarded would print another filesystem's
+		 * pathnames and exit 0, which is the failure this
+		 * comparison exists to prevent.
+		 */
+		rc = llapi_search_fsname(st.fds_mnt_path, mfs);
+		if (rc < 0) {
+			llapi_error(LLAPI_MSG_ERROR, rc,
+				    "cannot find the filesystem of '%s', so it cannot be matched with the target being scanned",
+				    st.fds_mnt_path);
+			goto out;
+		}
+		/*
+		 * Paths start where the mount does: a fileset mount sees only
+		 * its subtree, as its own fid2path does, so the rest is left
+		 * out rather than printed under a root it cannot reach.
+		 */
+		rc = find_mount_root(st.fds_mnt_path, &mroot);
+		if (rc < 0) {
+			llapi_error(LLAPI_MSG_ERROR, rc,
+				    "cannot read the root FID of '%s'",
+				    st.fds_mnt_path);
+			goto out;
+		}
+	}
+	/*
+	 * The names, composed during the search: every directory the scan
+	 * meets is kept, and a match is printed once its path reaches the
+	 * root.  With a mount, a directory the scan never meets -- under DNE,
+	 * one on another MDT -- is looked up after the scan, so a target
+	 * scanned out of service is never asked.
+	 *
+	 * On an OST only the mount can name an object, so without one it
+	 * prints FIDs (see find_device_cb()), and -printf %p is refused.
+	 */
+	if (find_device_names(param)) {
+		rc = scan_names_init(&st.fds_names, st.fds_mnt_fd,
+				     st.fds_mnt_path[0] != '\0' ?
+				     st.fds_mnt_path : NULL, &mroot,
+				     FIND_NAMES_WAIT_MAX, find_device_render,
+				     &st);
+		if (rc < 0)
+			goto out;
+		if (param->fp_fid2path_mnt == NULL && st.fds_printf_path) {
+			chk.tc_tgt_flags = LLAPI_SCAN_TGT_MDT;
+			chk.tc_rc = -ENOTDIR;
+			chk.tc_refused = &refused;
+		}
+	}
+	chk.tc_label = label;
+
+	spl.lfsp_want = find_device_want(param);
+	/* find's own: what the target answers, for find_device_cb() to see an
+	 * OST by.  The caller's would answer a question it did not ask.
+	 */
+	spl.lfsp_got = &st.fds_got;
 	spl.lfsp_stats = &stats;
 	/* see the note above: there is no caller data to pair it with */
 	spl.lfsp_filter = NULL;
@@ -4583,12 +5315,72 @@ int llapi_find_device(const char *target, struct find_param *param,
 	 */
 	spl.lfsp_thread_count = 1;
 
-	rc = llapi_scan_device(target, &spl, find_device_cb, &st);
+	/*
+	 * mfs is --fid2path's mount; otherwise lfsp_fsname is the caller's
+	 * own answer, and the only one a run without a mount has.
+	 */
+	if (mfs[0] != '\0')
+		spl.lfsp_fsname = mfs;
+	rc = scan_device_run_checked(target, &spl, find_device_cb, &st, &chk);
+	if (st.fds_by_fid) {
+		param->fp_print_fid = 0;
+		by_fid = true;
+	}
+	/*
+	 * With no --fid2path, a directory the scan never met (under DNE, one
+	 * on another MDT) is looked up through a client mount of the same
+	 * filesystem on this node, if there is one.  Paths still start at ".".
+	 */
+	if (st.fds_names != NULL && rc == 0 && param->fp_fid2path_mnt == NULL &&
+	    scan_names_waiting(st.fds_names) &&
+	    find_device_auto_mount(target, label, &st) == 0)
+		scan_names_lookup_mount(st.fds_names, st.fds_mnt_fd,
+					st.fds_mnt_path);
+	/* what still waits for a directory, now that every one is known */
+	if (st.fds_names != NULL && rc == 0) {
+		int rc2 = scan_names_finish(st.fds_names, &st.fds_unresolved,
+					    &outside);
+
+		if (rc2 != 0 && st.fds_path_rc == 0) {
+			st.fds_path_rc = rc2;
+			llapi_error(LLAPI_MSG_ERROR, rc2,
+				    "%s: cannot name every match", target);
+		}
+	}
+	/*
+	 * The answer for a target with no directories, an error only without
+	 * a mount: said here, where what was asked for is known.  Not on the
+	 * errno alone: stat() of a path such as "/dev/vdb/" gives the same.
+	 */
+	if (refused)
+		llapi_error(LLAPI_MSG_ERROR | LLAPI_MSG_NO_ERRNO, rc,
+			    "'%s' has no directories: -printf %%p names its objects by their files, through --fid2path MOUNT",
+			    target);
 
 	if (rc == 0 && st.fds_undecided != 0)
 		llapi_error(LLAPI_MSG_WARN | LLAPI_MSG_NO_ERRNO, 0,
 			    "%s: %llu objects could not be decided: the target has no answer for a field the search asked for",
 			    target, (unsigned long long)st.fds_undecided);
+
+	/*
+	 * A match whose FID has no pathname is not printed, so say how many:
+	 * silence would read as "that is all of them".  The target's own
+	 * objects have none, so --internal is expected to report this; an OST
+	 * data object resolves to the owning file and is printed like any
+	 * other.
+	 */
+	if (rc == 0 && outside != 0)
+		llapi_error(LLAPI_MSG_WARN | LLAPI_MSG_NO_ERRNO, 0,
+			    "%s: %llu matching objects are outside the subtree of '%s' and were not printed",
+			    target, (unsigned long long)outside,
+			    st.fds_mnt_path);
+
+	if (rc == 0 && st.fds_unresolved != 0)
+		llapi_error(LLAPI_MSG_WARN | LLAPI_MSG_NO_ERRNO, 0,
+			    by_fid && strstr(label, "-OST") != NULL ?
+			    "%s: %llu matching objects belong to no file yet and were not printed" :
+			    "%s: %llu matching objects have no pathname and were not printed",
+			    target, (unsigned long long)st.fds_unresolved);
 
 	/*
 	 * A scan that could not read part of the target has not searched it,
@@ -4599,6 +5391,9 @@ int llapi_find_device(const char *target, struct find_param *param,
 			    "%s: %llu of %llu objects were skipped: unreadable or inconsistent on the target",
 			    target, (unsigned long long)stats.ss_skipped,
 			    (unsigned long long)stats.ss_seen);
+
+	if (rc == 0 && st.fds_path_rc != 0)
+		rc = st.fds_path_rc;
 
 out:
 	/*
@@ -4617,6 +5412,9 @@ out:
 		stats.ss_size = size;
 		memcpy(ustats, &stats, size);
 	}
+	scan_names_free(st.fds_names);
+	if (st.fds_mnt_fd >= 0)
+		close(st.fds_mnt_fd);
 	param->fp_lazy = lazy;
 	param->fp_obd_uuid = obd_uuid;
 	find_param_fini(param);

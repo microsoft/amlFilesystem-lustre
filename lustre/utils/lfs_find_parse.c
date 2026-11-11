@@ -889,6 +889,8 @@ int lfs_find_parse(int argc, char **argv, struct find_param *param,
 	int ret = 0;
 	time_t t;
 	struct option long_opts[] = {
+	{ .val = LFS_ALL_LINKS_OPT,
+			.name = "all-links",	.has_arg = no_argument },
 	{ .val = 'A',	.name = "atime",	.has_arg = required_argument },
 	{ .val = LFS_ATTRS_OPT,
 			.name = "attrs",	.has_arg = required_argument },
@@ -977,6 +979,8 @@ int lfs_find_parse(int argc, char **argv, struct find_param *param,
 	{ .val = 'E',	.name = "component-end",
 						.has_arg = required_argument },
 /* find	{ .val = 'F',	.name = "fid",		.has_arg = no_argument }, */
+	{ .val = LFS_FID2PATH_OPT,
+			.name = "fid2path",	.has_arg = required_argument },
 	{ .val = LFS_LAYOUT_FOREIGN_OPT,
 			.name = "foreign",	.has_arg = optional_argument},
 	{ .val = LFS_FSNAME_OPT,
@@ -1017,6 +1021,8 @@ int lfs_find_parse(int argc, char **argv, struct find_param *param,
 	{ .val = LFS_THREAD_OPT,
 			.name = "threads",	.has_arg = required_argument },
 	{ .val = 'P',	.name = "print",	.has_arg = no_argument },
+	{ .val = LFS_PRINT_FID_OPT,
+			.name = "print-fid",	.has_arg = no_argument },
 	{ .val = LFS_PRINTF_OPT,
 			.name = "printf",       .has_arg = required_argument },
 	{ .val = LFS_PROJID_OPT,
@@ -1808,6 +1814,22 @@ int lfs_find_parse(int argc, char **argv, struct find_param *param,
 			*store = optarg;
 			break;
 		}
+		case LFS_FID2PATH_OPT:
+			if (param->fp_fid2path_mnt != NULL) {
+				fprintf(stderr,
+					"error: %s: --fid2path given twice\n",
+					argv[0]);
+				ret = CMD_HELP;
+				goto out;
+			}
+			param->fp_fid2path_mnt = optarg;
+			break;
+		case LFS_PRINT_FID_OPT:
+			param->fp_print_fid = 1;
+			break;
+		case LFS_ALL_LINKS_OPT:
+			param->fp_all_links = 1;
+			break;
 		case LFS_LOCAL_OPT:
 			param->fp_local_targets = 1;
 			break;

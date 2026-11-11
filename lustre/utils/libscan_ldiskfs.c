@@ -43,8 +43,8 @@
  */
 #define SCAN_CHUNK_INODES	65536
 
-/* Values libext2fs hands back are ours to free: LMA plus the five the
- * demand mask can ask for -- LOV, LMV, SOM, LINK and HSM.
+/* Values libext2fs hands back are ours to free: LMA plus the seven the
+ * demand mask can ask for -- LOV, LMV, SOM, LINK, HSM, PFID and ENC.
  */
 #define SCAN_EA_BUFS		LLAPI_SCAN_XA_MAX
 
@@ -70,6 +70,11 @@ static const char *const scan_xattr_name[LLAPI_SCAN_XA_MAX] = {
 	[LLAPI_SCAN_XA_SOM]	= XATTR_NAME_SOM,
 	[LLAPI_SCAN_XA_LINK]	= XATTR_NAME_LINK,
 	[LLAPI_SCAN_XA_HSM]	= XATTR_NAME_HSM,
+	[LLAPI_SCAN_XA_PFID]	= XATTR_NAME_FID,
+	/* ldiskfs keeps it in the encryption index, which libext2fs names
+	 * with no prefix
+	 */
+	[LLAPI_SCAN_XA_ENC]	= "c",
 };
 
 /*

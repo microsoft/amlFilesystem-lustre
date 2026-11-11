@@ -126,6 +126,7 @@ lfs-find \- Lustre utility to list files with specific attributes
 .RB [ --print | -P ]
 .br
 .RB [ --print0 | -0 ]
+.RB [ --print-fid ]
 .RB [ --printf
 .IR FORMAT ]
 .RB [[ ! ]
@@ -175,6 +176,9 @@ lfs-find \- Lustre utility to list files with specific attributes
 .IR DEVICE |\c
 .BR --local }
 .RB [ --internal ]
+.RB [ --fid2path
+.IR MOUNT ]
+.RB [ --all-links ]
 .RI [ OPTION ]...
 .YS
 .SH DESCRIPTION
@@ -570,6 +574,17 @@ with the
 .B -0
 option to handle filenames with embedded spaces or other special characters.
 .TP
+.B --print-fid
+Print the FID of each match instead of its name, as
+.B -printf %LF
+prints it: seq:oid:ver, without brackets.
+On a target, no pathname is composed or looked up,
+so this costs nothing beyond the scan.
+It may not be combined with
+.B --printf
+or
+.BR --ls .
+.TP
 .BI --printf " FORMAT"
 Print
 .I FORMAT
@@ -887,7 +902,10 @@ without the option is a path, as it always is.
 .TP
 .B --local
 Read every MDT and OST mounted on this node, one after another.
-The MGS is skipped.
+The MGS is skipped, and so are the OSTs when pathnames are printed
+without
+.BR --fid2path ,
+since nothing else can name an OST's objects.
 Where the sweep finds more than one target,
 a line naming each one it reads goes to standard error ahead of its objects,
 so standard output stays a plain list.
@@ -915,7 +933,152 @@ each OST fails as one that cannot answer them.
 Also report the objects a target keeps for itself,
 such as its OI and quota files,
 which are otherwise left out.
+They have no pathname, so they are printed only with
+.BR --print-fid ,
+and otherwise counted as nameless.
 One with no FID is printed as obj:ID, its object number on the target.
+.TP
+.B --all-links
+Print a hardlinked file once under each of its names that can be placed
+(each that
+.B --name
+matches, with
+.BR --name ),
+rather than once under the first.
+On an OST, each name of the file that owns the object.
+A walk reaches every name anyway.
+.TP
+.BI --fid2path " MOUNT"
+Name the matches through
+.IR MOUNT ,
+a client mount of the same filesystem on this node:
+an absolute path, or the filesystem name, as for
+.BR lfs-fid2path (1).
+On an MDT, the pathnames start with
+.I MOUNT
+instead of
+.BR ./ ,
+and are still composed from the target's own directories, with no lookup.
+On an OST it is the only way to name an object:
+each kept object costs one lookup,
+which asks the MDT that owns the object and not the OST being scanned.
+.I MOUNT
+itself has to answer: its root is checked first, which may wait for MDT0000.
+To name the objects of a stopped MDT0000, give no
+.IR MOUNT .
+A
+.I MOUNT
+of another filesystem is refused,
+its name being compared with the target's label,
+since FIDs are not unique between filesystems.
+With
+.BR --local ,
+only the targets of
+.IR MOUNT 's
+filesystem are read.
+A sweep that reads an MDT skips the OSTs of its filesystem:
+an OST object would be printed under its file's path,
+though judged by the object's own attributes.
+With a subdirectory (fileset)
+.IR MOUNT ,
+the paths start at its root and a match outside it is not printed,
+as
+.BR lfs-fid2path (1)
+through that mount answers.
+On an OST, each object costs one read of its file's
+.B trusted.link
+through
+.IR MOUNT ,
+and each directory not yet known one
+.BR lfs-fid2path (1)
+lookup.
+On an MDT, the scan names what it can itself,
+and after the scan looks up through
+.I MOUNT
+only the directories it never met, such as, under DNE, ones on another MDT,
+so a stopped target is never asked.
+A lookup needs root, and one that fails for any other reason than the file
+being gone, such as
+.BR EPERM ,
+is an error, not a missing name.
+.I MOUNT
+is refused with
+.B --print-fid
+or a
+.B -printf
+format without
+.BR %p ,
+which print no name.
+.PP
+A target holds names and parent FIDs, not paths,
+so a pathname is composed for each match, as for a walk:
+the default output,
+.BR --print ,
+.B --print0
+and
+.B -printf %p
+all print it.
+On an MDT it is composed from each object's trusted.link,
+its name and parent, with no mount at all, so it works on a filesystem that is entirely down,
+and it starts with
+.B ./
+for the filesystem root unless
+.B --fid2path
+is given.
+The scan keeps every directory it meets, about 50 bytes and its name each,
+and prints a match as soon as the directories of its path are known.
+A match met before one of its directories waits for it in memory,
+up to 256 MiB, and beyond that in a temporary file;
+those are printed when their directory arrives or at the end of the scan,
+so the output is not in the scan's order.
+An OST object is named by the file that owns it, which lives on an MDT,
+so without
+.B --fid2path
+an OST scan prints FIDs, as with
+.BR --print-fid ,
+and
+.B -printf %p
+is refused.
+.B --print-fid
+and a
+.B -printf
+format without
+.B %p
+name nothing, and cost neither the waiting nor the lookups.
+.PP
+An object with no pathname is counted and reported at the end
+rather than printed:
+the objects a target keeps for itself have none,
+nor does an OST object that has never been written to, even one
+belonging to an empty file,
+nor, under DNE, an object whose ancestors are on another MDT when no
+client mount of the filesystem can be found to look them up.
+Without
+.BR --fid2path ,
+and when the target is itself mounted on this node, root uses a client mount
+of the whole filesystem there, if there is one, for those lookups alone; the
+paths still start with
+.BR ./ .
+On an MDT, a name in a directory whose names are encrypted is printed
+as a client without the key lists it,
+in the form of a client built with Lustre's own llcrypt;
+a client built on the kernel's fscrypt,
+or one with
+.BR filename_enc_use_old_base64 ,
+lists another.
+Without
+.BR --all-links ,
+a hardlinked file is printed once: under the first of its names that
+.B --name
+matches and whose directory this target can place; if there is none, it is
+counted as having no pathname. Without
+.BR --name ,
+it is printed under the first name that can be placed.
+On an OST, a file is printed once for each of its objects there,
+so a composite or overstriped file may be printed more than once;
+use
+.B sort -u
+to list each file once.
 .PP
 Only one of
 .BR --device ,
@@ -928,12 +1091,15 @@ may be given, and only one target named;
 and
 .B --local
 may read several.
-A target holds no pathnames, so each match is printed as its FID.
-On an OST that is the data object's own FID, which
-.B -printf %LO
-prints too;
+With
+.BR --print-fid ,
+each match is printed as its FID.
+On an OST that is the FID of the file the object belongs to, as
 .B %LF
-prints nothing for a data object.
+prints it, and an object that no file owns yet is counted rather than
+printed;
+.B -printf %LO
+prints the object's own FID.
 .SH NOTES
 Specifying
 .B !
@@ -992,13 +1158,10 @@ which is taken the same way;
 .B --mdt
 applies to an MDT.
 .TP
-.BR --xattr ", " --maxdepth ", " --mindepth ", " --threads ", " "-printf %p"
+.BR --xattr ", " --maxdepth ", " --mindepth ", " --threads
 These are refused.
 A target has no mount to read an extended attribute through,
-no directory tree to limit, and no pathnames to print.
-.B --ls
-is refused too, because its format ends in
-.BR %p .
+and no directory tree to limit.
 .PP
 .BR llapi_find_device (3)
 describes each difference in full.
@@ -1051,10 +1214,43 @@ number:
 .RE
 .EE
 .PP
-Lists the regular files over a gigabyte on an unmounted MDT, by FID:
+Lists the regular files over a gigabyte on an unmounted MDT,
+named from the target itself:
 .EX
 .RS
 .B # lfs find --device /dev/vdb --type f --size +1G
+.RE
+.EE
+.PP
+The same, under a client mount of the same filesystem:
+.EX
+.RS
+.B # lfs find --device /dev/vdb --fid2path /mnt/testfs --type f --size +1G
+.RE
+.EE
+.PP
+And by FID, with no pass to name them:
+.EX
+.RS
+.B # lfs find --device /dev/vdb --print-fid --type f --size +1G
+.RE
+.EE
+.PP
+Prints the FID, size and pathname of each log file on an unmounted MDT:
+.EX
+.RS
+.B "# lfs find --device /dev/vdb --name '*.log' --printf '%LF %s %p\en'"
+0x200000bd1:0x7:0x0 20480 ./proj/logs/run1.log
+.RE
+.EE
+.PP
+Lists the files not modified for a year, with pathnames under a client
+mount, through
+.BR xargs (1):
+.EX
+.RS
+.B # lfs find --device /dev/vdb --fid2path /mnt/testfs --mtime +365 \e
+.B \ \ \ \ \ \ \ --type f --print0 | xargs -0 ls -l
 .RE
 .EE
 .PP
@@ -1157,6 +1353,7 @@ filesystem package since release 0.10.0
 .\" Added in commit 0.9.1
 .SH SEE ALSO
 .BR lfs (1),
+.BR lfs-fid2path (1),
 .BR lfs-getdirstripe (1),
 .BR lfs-getstripe (1),
 .BR lfs-migrate (1),

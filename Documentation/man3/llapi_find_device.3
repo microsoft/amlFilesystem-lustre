@@ -24,11 +24,15 @@ and it is what
 .B lfs find --device
 runs.
 .SS What it prints
-A target holds names and parent FIDs, not paths, so a match is named by its
-FID:
+A match is printed by pathname, as a walk prints it, composed from the
+target's names and parent FIDs (see NOTES), or counted as nameless and not
+printed.
+.I fp_print_fid
+prints its FID instead, as %LF prints it; for an OST object that is the FID
+of the file that owns it:
 .IP
 .EX
-[0x200000401:0x1:0x0]
+0x200000401:0x1:0x0
 .EE
 .LP
 An object carrying no
@@ -47,7 +51,12 @@ obj:1442
 .LP
 Only
 .B LLAPI_SCAN_F_INTERNAL
-reaches those, so a default search prints the first form and nothing else.
+reaches those, so an
+.I fp_print_fid
+search without it prints the first form and nothing else. Those objects have
+no pathname, so without
+.I fp_print_fid
+they are counted as nameless and not printed.
 Every record carries one or the other: the scan sets the object id on all
 of them, so the second form always applies where the first does not.
 .I fp_zero_end
@@ -149,7 +158,16 @@ is NULL, or
 .I lfsp_size
 is outside the range this library accepts: shorter than its minimum,
 longer than 4096 bytes, or longer than its own definition with a byte past the
-end of it set.
+end of it set. Also when
+.I fp_print_fid
+is set together with
+.IR fp_format_printf_str ,
+when
+.I fp_fid2path_mnt
+is set and nothing is printed by name
+.RI ( fp_print_fid ,
+or a format without
+.BR %p ).
 .TP 15
 .B -ENOTSUP
 this build has no scanning backend, or the search needs something a target
@@ -158,8 +176,7 @@ work where a build cannot scan at all must not also skip it on a node that
 can. See
 .BR llapi_scan_device (3),
 whose return value this function passes back unchanged, and which separates
-the two. What a target scan does not have is a path
-.RB ( -printf " " %p ),
+the two. What a target scan does not have is
 a mounted filesystem
 .RB ( --xattr ),
 or a walk to describe
@@ -186,6 +203,34 @@ is one buffer for the whole of it, which is why
 .I lfsp_thread_count
 is among the fields above rather than a knob.
 .TP 15
+.B -ENAMETOOLONG
+.I fp_fid2path_mnt
+is longer than the buffer the mount path is held in.
+.TP 15
+.B -ENOTDIR
+a format with
+.B %p
+asks for a pathname,
+.I fp_fid2path_mnt
+is not set, and
+.I target
+holds no directories to compose one from (an OST). Its objects are
+named through a mount with
+.IR fp_fid2path_mnt ,
+or printed by FID with
+.IR fp_print_fid .
+Also returned when a component of
+.I target
+is not a directory.
+.TP 15
+.B -EXDEV
+.I target
+belongs to another filesystem than the one it is compared with: that of
+.I fp_fid2path_mnt
+where the search has one, and
+.I lfsp_fsname
+otherwise.
+.TP 15
 .B -ENOENT
 .I target
 does not exist.
@@ -202,6 +247,69 @@ returns is passed back as well;
 .BR -EACCES ,
 a device the caller cannot read, is the one a non-root caller meets first.
 .SH NOTES
+On an MDT, the search keeps every directory the scan meets (FID to parent and
+name), and composes a match's pathname by walking those to the root, with no
+lookup. A match met before a directory of its path waits for it, in memory up
+to 256 MiB and then in a temporary file, and is printed when that directory
+arrives, so the output is not in the scan's order. Only when a pathname is
+printed: not for
+.I fp_print_fid
+or a format without
+.BR %p .
+After the scan, a directory it never met is looked up once through
+.IR fp_fid2path_mnt ,
+or without it, for root and a target mounted on this node, through a client
+mount of the whole filesystem found there: under DNE, one on another MDT. A target being scanned is
+never asked. An object that still cannot be placed has no pathname:
+.B .lustre
+and, with no mount to ask, under DNE, anything whose ancestors live on
+another MDT. Such an object
+is counted and reported rather than printed. A name in a directory whose
+names are encrypted (its fscrypt context, read with
+.BR LLAPI_SCAN_NAMES_ENC )
+is printed as a client built with Lustre's own llcrypt lists it without the
+key: base64url, or for a name longer than two blocks '+' and a digest of the
+FID and the name. The pathnames are relative to
+the filesystem root, which is printed as
+.B .
+(or as the mount with
+.IR fp_fid2path_mnt ),
+so a file is
+.BR ./dir/file .
+.LP
+.I fp_fid2path_mnt
+is a client mount
+.B of the filesystem the target belongs to.
+A subdirectory (fileset) mount is the root the paths start at, and a match
+outside it is left out, as fid2path through that mount answers.
+It is the one part of this call that needs a client. On an MDT it supplies
+the prefix the composed paths hang from, the filesystem to compare the
+target's label with, and the lookups above. On an OST there are no
+directories, and an object is named by its owner's
+.B trusted.link
+read through the mount, with the owner's directories looked up once each and
+kept. The filesystem of the mount is compared with the target's label, and a
+target of any other filesystem is refused with
+.BR -EXDEV .
+A search without the mount and a plain
+.BR llapi_scan_device ()
+caller have no mount, and set
+.I lfsp_fsname
+on
+.I sp
+for the same check.
+.LP
+Without
+.IR fp_fid2path_mnt ,
+an MDT's pathnames come from the target alone, which is what names the objects
+of a filesystem that is entirely down. An OST object is named by the file that
+owns it, and that name lives on an MDT, so an OST prints FIDs as for
+.IR fp_print_fid ,
+and a format with
+.B %p
+is refused with
+.BR -ENOTDIR .
+.LP
 .I param
 is modified: the search runs with
 .I fp_lazy
@@ -232,10 +340,15 @@ the ones that cannot hold a match. An empty result returns 0.
 is answered from the record and not from a path, so every directive but
 .B %p
 works here.
+.B %p
+prints the same pathname as the default output.
 .B %LF
 prints the FID the record carries, and nothing for an object the scan has no
-FID for, or for an OST data object: the FID a user knows for one is its
-file's, which this scan does not read.
+FID for.
+For an OST data object it prints the FID of the file the object belongs to,
+from its
+.BR trusted.fid ,
+and nothing for one no file owns yet.
 .B %LO
 prints an OST data object's own FID, in brackets, and the FIDs of a file's OST
 objects from its layout;
@@ -308,4 +421,5 @@ user application interface library since release 2.18.0.
 .BR lfs-find (1),
 .BR llapi_scan_device (3),
 .BR llapi_scan_namespace (3),
+.BR llapi_scan_rec_path (3),
 .BR lustreapi (7)

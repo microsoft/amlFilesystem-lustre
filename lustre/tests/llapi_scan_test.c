@@ -131,7 +131,8 @@ struct scan_result {
 	unsigned int	 res_dirs;
 	unsigned int	 res_files;
 	unsigned int	 res_no_fid;	/* records without LLAPI_SCAN_FID */
-	unsigned int	 res_gathered;	/* records with anything but TYPE */
+	unsigned int	 res_gathered;	/* records with more than a dirent */
+	unsigned int	 res_name_bit;	/* name bit and lfsr_name disagree */
 	unsigned int	 res_stop_after;	/* 0: never stop */
 	/* union of every lfsr_valid seen */
 	__u64		 res_seen_valid;
@@ -171,8 +172,10 @@ static int count_cb(const struct llapi_scan_rec *rec, void *data)
 		res->res_bad_size++;
 	if (!(rec->lfsr_valid & LLAPI_SCAN_FID))
 		res->res_no_fid++;
-	if (scan_rec_valid(rec) & ~LLAPI_SCAN_TYPE)
+	if (scan_rec_valid(rec) & ~LLAPI_SCAN_DIRENT_MASK)
 		res->res_gathered++;
+	if (!(rec->lfsr_valid & LLAPI_SCAN_NAME) != (rec->lfsr_name == NULL))
+		res->res_name_bit++;
 	if (rec->lfsr_stx.stx_mask & STATX_MODE) {
 		if (S_ISDIR(rec->lfsr_stx.stx_mode))
 			res->res_dirs++;
@@ -334,9 +337,16 @@ static void test4(void)
 	ASSERTF(res.res_no_fid == res.res_count,
 		"%u of %u records carried a FID the consumer never asked for",
 		res.res_count - res.res_no_fid, res.res_count);
-	ASSERTF((res.res_seen_valid & ~LLAPI_SCAN_TYPE) == 0,
-		"a TYPE-only scan reported fields 0x%llx",
-		(unsigned long long)(res.res_seen_valid & ~LLAPI_SCAN_TYPE));
+	ASSERTF((res.res_seen_valid & ~LLAPI_SCAN_DIRENT_MASK) == 0,
+		"a TYPE-only scan reported more than a dirent: 0x%llx",
+		(unsigned long long)(res.res_seen_valid &
+				     ~LLAPI_SCAN_DIRENT_MASK));
+	/* a walk names every record, and says so */
+	ASSERTF(res.res_seen_valid & LLAPI_SCAN_NAME,
+		"no record reported LLAPI_SCAN_NAME");
+	ASSERTF(res.res_name_bit == 0,
+		"%u records: LLAPI_SCAN_NAME and lfsr_name disagree",
+		res.res_name_bit);
 
 	/*
 	 * LLAPI_SCAN_LMV_FOREIGN describes lfsr_lmv: asked for alone it has
@@ -367,7 +377,7 @@ static int name_filter_cb(const struct llapi_scan_rec *rec, void *data)
 {
 	struct scan_result *res = data;
 
-	if (scan_rec_valid(rec) & ~LLAPI_SCAN_TYPE) {
+	if (scan_rec_valid(rec) & ~LLAPI_SCAN_DIRENT_MASK) {
 		pthread_mutex_lock(&res->res_lock);
 		res->res_gathered++;
 		pthread_mutex_unlock(&res->res_lock);

@@ -100,6 +100,7 @@ void scan_rec_dirent(struct llapi_scan_rec *rec, const char *path,
 	 */
 	name = strrchr(path, '/');
 	rec->lfsr_name = (name != NULL && name[1] != '\0') ? name + 1 : path;
+	rec->lfsr_valid |= LLAPI_SCAN_NAME;
 	rec->lfsr_parent_fd = p;
 	rec->lfsr_fd = d;
 
@@ -677,4 +678,161 @@ int llapi_scan_namespace(const char *path, const struct llapi_scan_param *sp,
 
 	/* a consumer that stopped the scan hears its own value back */
 	return st.ss_stop_rc != 0 ? st.ss_stop_rc : rc;
+}
+
+/**
+ * llapi_scan_rec_path() - the pathname of a scanned object
+ * @mnt_fd: an open descriptor on a client mount of the same filesystem, as
+ *	    llapi_root_path_open() returns; unused when the record carries a
+ *	    path already
+ * @mnt_path: that mount's path, prefixed to a FID-resolved result so it is
+ *	      usable as a pathname; NULL for one relative to the filesystem
+ *	      root, "./dir/file".
+ *	      A walked path is returned as it is
+ * @rec: the record to name
+ * @buf: where to write the pathname
+ * @buflen: bytes at @buf
+ *
+ * A namespace walk knows the path it took and puts it in the record.  A scan
+ * of a target holds names and parent FIDs and no paths -- turning those into
+ * one is a walk of its own -- so its records name objects by FID, and this is
+ * where they become pathnames, at the cost of one ioctl each.  That cost is
+ * why this is the consumer's to ask for and not the scanner's to pay: it
+ * belongs on the objects a search kept, not on every object it saw.
+ *
+ * A hardlinked object has one pathname per link; the first is returned, and
+ * lfs fid2path lists the rest.
+ *
+ * An OST data object that belongs to a file has a pathname: that file's.  The
+ * owner comes from the object's own trusted.fid (LLAPI_SCAN_OWNER), so a scan
+ * of an OST names each such object after its file, once per stripe the file
+ * has on the target.  An object never written to -- precreated, or part of
+ * a file created and never written -- has no owner and no name, and is
+ * reported -ENOENT like the objects a target keeps for itself.  Resolving
+ * the owner asks the MDT and never the scanned OST, which matters because a
+ * scan reads a target that is out of service: the object's own FID would
+ * have to go through the OSC to that OST, and would wait for it.
+ *
+ * An MDT object is resolved by that MDT, so only while it is in service: on
+ * a stopped MDT the lookup waits for it.
+ *
+ * Any other record whose class is not LLAPI_SCAN_CLS_VISIBLE has no
+ * pathname: an object a target keeps for itself, an agent inode, an orphan
+ * in PENDING.
+ * Otherwise the MDT decides, and -ENOENT or -EINVAL from it means the same.
+ *
+ * Return:
+ * * %0 on success, with @buf filled
+ * * %-ENODATA if the record carries no FID and no path
+ * * %-ENOENT if the object has no pathname -- one of the objects a target
+ *   keeps for itself, or a FID the MDT no longer resolves.  A FID belonging
+ *   to another filesystem does NOT answer this: sequences are not unique
+ *   across filesystems, so @mnt_fd being a mount of the wrong one resolves
+ *   the FID and returns that filesystem's pathname.  The caller has to
+ *   establish that the mount and the target match; llapi_find_device() does
+ * * %-EINVAL for a FID fid_is_namespace_visible() excludes, an O/<seq>/LAST_ID
+ *   among them: mdt_fid2path() and ofd_fid2path() both answer it, so it means
+ *   "this object has no name" as well as a bad argument
+ * * %-EPERM if the caller may not resolve FIDs: llapi_fid2path_at() needs
+ *   CAP_DAC_READ_SEARCH unless the client was mounted with -o user_fid2path
+ * * %-ERANGE if @buflen is too small for the answer
+ * * a negative errno otherwise
+ */
+int llapi_scan_rec_path(int mnt_fd, const char *mnt_path,
+			const struct llapi_scan_rec *rec,
+			char *buf, size_t buflen)
+{
+	long long recno = -1;
+	char rel[PATH_MAX];
+	const struct lu_fid *fid;
+	const char *rp;
+	int linkno = 0;
+	int rc;
+
+	if (rec == NULL || buf == NULL || buflen == 0)
+		return -EINVAL;
+
+	/* the scanner already walked to it */
+	if (rec->lfsr_path != NULL) {
+		rc = snprintf(buf, buflen, "%s", rec->lfsr_path);
+		if (rc < 0 || (size_t)rc >= buflen)
+			return -ERANGE;
+		return 0;
+	}
+
+	/*
+	 * A striped directory's shard is not in the namespace.  fid2path
+	 * would answer with the master directory's name, and a consumer
+	 * naming every record would print that directory once per shard.
+	 */
+	if (rec->lfsr_valid & LLAPI_SCAN_LMV_SHARD)
+		return -ENOENT;
+
+	/*
+	 * An OST data object is named by the file that owns it, and that
+	 * file's FID is the one to look up: the object's own FID is an
+	 * OST-sequence one, which __ll_fid2path() can only answer by asking
+	 * the OST holding it -- through the OSC, which blocks while that
+	 * target is out of service.  A scan of a target reads it precisely
+	 * then, and for a ZFS target the pool must be exported, so there is
+	 * no arrangement in which the OST is there to ask.  The owner comes
+	 * off the object's own trusted.fid and resolves against the MDT.
+	 */
+	if (rec->lfsr_valid & LLAPI_SCAN_OWNER)
+		fid = &rec->lfsr_owner_fid;
+	/*
+	 * An OST object with no owner has no pathname, and asking for one
+	 * is worse than useless.  A precreated object -- one the MDT has
+	 * been given but no file has been written to -- carries no
+	 * trusted.fid, and a target holds many: they are the first objects
+	 * a scan meets.  Falling back to the object's own FID would send
+	 * every one of them through the OSC to the target being scanned,
+	 * which is out of service, so the scan would stop on the first.
+	 * The same for every class but CLS_VISIBLE: an O/<seq>/LAST_ID is
+	 * CLS_INTERNAL and would go to the OST too.
+	 */
+	else if ((rec->lfsr_valid & LLAPI_SCAN_CLASS) &&
+		 rec->lfsr_class != LLAPI_SCAN_CLS_VISIBLE)
+		return -ENOENT;
+	else if (rec->lfsr_valid & LLAPI_SCAN_FID)
+		fid = &rec->lfsr_fid;
+	else
+		return -ENODATA;
+	/*
+	 * -EBADF and not -EINVAL: this is a caller that never opened the
+	 * mount, and llapi_scan_rec_path.3 tells callers to read -EINVAL as
+	 * "this object has no name" -- it is what the server answers for a
+	 * FID fid_is_namespace_visible() excludes.  Sharing one errno with
+	 * that would have a consumer count every record nameless and exit 0.
+	 */
+	if (mnt_fd < 0)
+		return -EBADF;
+
+	rc = llapi_fid2path_at(mnt_fd, fid, rel, sizeof(rel),
+			       &recno, &linkno);
+	if (rc < 0)
+		return rc;
+
+	/*
+	 * fid2path answers relative to the filesystem root, and "/" for the
+	 * root itself -- copy_strip_dne_path() substitutes it for the empty
+	 * path the ioctl returns.  Composing that with the mount would name
+	 * it "<mnt>//", so the separator is added rather than assumed.
+	 */
+	rp = rel;
+	while (*rp == '/')
+		rp++;
+	/* root-relative is "./dir/file", and "." for the root, as lfs prints */
+	if ((mnt_path == NULL || *mnt_path == '\0') && *rp == '\0')
+		rc = snprintf(buf, buflen, ".");
+	else if (mnt_path == NULL || *mnt_path == '\0')
+		rc = snprintf(buf, buflen, "./%s", rp);
+	else if (*rp == '\0')
+		rc = snprintf(buf, buflen, "%s", mnt_path);
+	else
+		rc = snprintf(buf, buflen, "%s/%s", mnt_path, rp);
+	if (rc < 0 || (size_t)rc >= buflen)
+		return -ERANGE;
+
+	return 0;
 }

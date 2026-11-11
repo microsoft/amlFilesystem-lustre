@@ -515,7 +515,7 @@ command_t cmdlist[] = {
 	 "usage: find <directory|filename> ...\n"
 	 "       find {--device DEVICE|--target NAME|--fsname NAME|--local|\n"
 	 "             BLOCKDEV}\n"
-	 "            [--internal] ...\n"
+	 "            [--internal] [--fid2path MOUNT] [--all-links] ...\n"
 	 "     [[!] --atime|-A [+-]N[smhdwy]] [[!] --btime|-B [+-]N[smhdwy]]\n"
 	 "     [[!] --ctime|-C [+-]N[smhdwy]] [[!] --mtime|-M [+-]N[smhdwy]]\n"
 	 "     [[!] --attrs=[^]ATTR[,...]]\n"
@@ -536,7 +536,8 @@ command_t cmdlist[] = {
 	 "     [[!] --mirror-state <[^]state>]\n"
 	 "     [[!] --name|-n <pattern>] [[!] --newer[XY] <reference>]\n"
 	 "     [[!] --ost|-O <uuid|index,...>] [[!] --perm [/-]mode]\n"
-	 "     [[!] --pool <pool>] [--print|-P] [--print0|-0] [--printf <format>]\n"
+	 "     [[!] --pool <pool>] [--print|-P] [--print0|-0] [--print-fid]\n"
+	 "     [--printf <format>]\n"
 	 "     [[!] --projid <projid>] [[!] --size|-s [+-]N[bkMGTPE]]\n"
 	 "     [--skip|-k PERCENT] [[!] --stripe-count|-c [+-]<stripes>]\n"
 	 "     [[!] --stripe-index|-i <index,...>]\n"
@@ -7942,6 +7943,36 @@ static bool lfs_find_asks_layout(const struct find_param *param)
 }
 
 /*
+ * Whether a target scan prints pathnames, as llapi_find_device() decides it:
+ * by default and for %p, not for --print-fid or a format without %p.
+ */
+static bool lfs_find_prints_names(const struct find_param *param)
+{
+	const char *c = param->fp_format_printf_str;
+	char *end;
+
+	if (param->fp_print_fid)
+		return false;
+	if (c == NULL)
+		return true;
+	while (*c != '\0') {
+		if (*c++ != '%')
+			continue;
+		/* as printf_format_want() skips a width */
+		while (*c == '-')
+			c++;
+		(void)strtol(c, &end, 10);
+		c = end;
+		if (*c == 'p')
+			return true;
+		if (*c != '\0')
+			c++;
+	}
+
+	return false;
+}
+
+/*
  * lfs find over a target's own objects, read off its device by
  * llapi_find_device(3).  One target per invocation, except for the sweeps
  * --local and --fsname make of this node, which go on past a target that
@@ -7959,7 +7990,11 @@ static int lfs_find_device(char **argv, struct find_param *param,
 	struct llapi_scan_param sp = { .lfsp_size = sizeof(sp) };
 	struct lfs_find_target *tgts = NULL;
 	struct lfs_find_target one = { 0 };
+	char mnt_fs[MAX_OBD_NAME + 1] = "";
 	const char *device = param->fp_device;
+	/* names are printed, and with no mount only an MDT can give them */
+	bool mdt_names = lfs_find_prints_names(param) &&
+			 param->fp_fid2path_mnt == NULL;
 	bool skip_ost = false;
 	int scanned = 0;
 	int ret = 0;
@@ -7985,11 +8020,28 @@ static int lfs_find_device(char **argv, struct find_param *param,
 		return CMD_HELP;
 	}
 
+	/* refused once here, not once per target of a sweep */
+	if ((param->fp_fid2path_mnt != NULL || param->fp_all_links) &&
+	    !lfs_find_prints_names(param)) {
+		fprintf(stderr,
+			"error: %s: %s names objects, and --print-fid or a -printf format without %%p prints none\n",
+			argv[0],
+			param->fp_all_links ? "--all-links" : "--fid2path");
+		return CMD_HELP;
+	}
+
 	/* a sweep keeps only targets of the kind named: both leaves none */
 	if (!device && !param->fp_target &&
 	    param->fp_obd_uuid && param->fp_mdt_uuid) {
 		fprintf(stderr,
 			"%s: --ost and --mdt together match no target of a sweep\n",
+			argv[0]);
+		return -EINVAL;
+	}
+	if (device == NULL && param->fp_target == NULL &&
+	    param->fp_obd_uuid != NULL && mdt_names) {
+		fprintf(stderr,
+			"%s: an OST's objects are named through --fid2path MOUNT, so --ost matches no target of a sweep without it; --print-fid prints FIDs\n",
 			argv[0]);
 		return -EINVAL;
 	}
@@ -8028,8 +8080,21 @@ static int lfs_find_device(char **argv, struct find_param *param,
 		tgts = &one;
 		nr = 1;
 	} else {
-		ret = lfs_find_local_targets(param->fp_target,
-					     param->fp_fsname, &tgts, &nr);
+		const char *fsname = param->fp_fsname;
+
+		/* --local --fid2path: only the mount's filesystem can match */
+		if (fsname == NULL && param->fp_local_targets &&
+		    param->fp_fid2path_mnt != NULL) {
+			/* no '/': an fsname, as in llapi_find_device() */
+			if (param->fp_fid2path_mnt[0] != '/')
+				fsname = param->fp_fid2path_mnt;
+			else if (llapi_search_fsname(param->fp_fid2path_mnt,
+						     mnt_fs) == 0)
+				fsname = mnt_fs;
+		}
+
+		ret = lfs_find_local_targets(param->fp_target, fsname,
+					     &tgts, &nr);
 		if (ret < 0 && nr == 0) {
 			fprintf(stderr,
 				"%s: cannot read the local targets: %s\n",
@@ -8041,10 +8106,10 @@ static int lfs_find_device(char **argv, struct find_param *param,
 				fprintf(stderr,
 					"%s: no target '%s' mounted here\n",
 					progname, param->fp_target);
-			else if (param->fp_fsname)
+			else if (fsname)
 				fprintf(stderr,
 					"%s: no local targets of '%s'\n",
-					progname, param->fp_fsname);
+					progname, fsname);
 			else
 				fprintf(stderr,
 					"%s: no local Lustre targets -- this is a client, or none are mounted\n",
@@ -8054,18 +8119,26 @@ static int lfs_find_device(char **argv, struct find_param *param,
 		}
 	}
 
-	/* with no MDT, or with --ost, each OST says why it cannot answer */
+	/*
+	 * The MDT answers layout options, and with --fid2path names each file
+	 * once.  With no MDT, or with --ost, each OST answers for itself.
+	 */
 	skip_ost = tgts != &one && !param->fp_target &&
-		   !param->fp_obd_uuid && lfs_find_asks_layout(param);
+		   !param->fp_obd_uuid &&
+		   (lfs_find_asks_layout(param) ||
+		    param->fp_fid2path_mnt);
 
 	for (i = 0; i < nr; i++) {
 		int rc;
 
-		/* a sweep reads only the targets --ost or --mdt can name */
+		/*
+		 * a sweep reads only the targets --ost or --mdt can name, and
+		 * when only the MDTs can name objects, only the MDTs
+		 */
 		if (tgts != &one && !param->fp_target &&
 		    ((param->fp_obd_uuid &&
 		      !lfs_find_label_is(tgts[i].lt_name, "OST")) ||
-		     (param->fp_mdt_uuid &&
+		     ((param->fp_mdt_uuid || mdt_names) &&
 		      !lfs_find_label_is(tgts[i].lt_name, "MDT"))))
 			continue;
 		/* an OST is skipped only if an MDT of its filesystem answers */
@@ -8095,8 +8168,11 @@ static int lfs_find_device(char **argv, struct find_param *param,
 		}
 	}
 	if (scanned == 0 && ret == 0) {
-		fprintf(stderr, "%s: no local %s to search\n", progname,
-			param->fp_obd_uuid ? "OST" : "MDT");
+		fprintf(stderr, "%s: no local %s to search%s\n", progname,
+			param->fp_obd_uuid ? "OST" : "MDT",
+			mdt_names && !param->fp_mdt_uuid ?
+			"; an OST's objects are named through --fid2path MOUNT, or printed by --print-fid" :
+			"");
 		ret = -ENODEV;
 	}
 
@@ -8135,6 +8211,14 @@ static int lfs_find(int argc, char **argv)
 	if (pathstart != -1 && pathend == -1)
 		pathend = argc;
 
+	if (param->fp_print_fid && param->fp_format_printf_str != NULL) {
+		fprintf(stderr,
+			"error: %s: --print-fid and -printf or --ls are two output formats; give one\n",
+			argv[0]);
+		ret = CMD_HELP;
+		goto err;
+	}
+
 	/*
 	 * Before the walk's own checks and defaults: a target scan picks its
 	 * own threads, and llapi_find_device() refuses a thread count it was
@@ -8144,10 +8228,11 @@ static int lfs_find(int argc, char **argv)
 		ret = lfs_find_device(argv, param, pathstart, pathend);
 		goto err;
 	}
-	if (param->fp_scan_internal) {
+	if (param->fp_scan_internal || param->fp_fid2path_mnt != NULL) {
 		fprintf(stderr,
-			"error: %s: --internal needs a target: --device, --target, --fsname, --local or a block device\n",
-			argv[0]);
+			"error: %s: --%s needs a target: --device, --target, --fsname, --local or a block device\n",
+			argv[0],
+			param->fp_scan_internal ? "internal" : "fid2path");
 		ret = CMD_HELP;
 		goto err;
 	}

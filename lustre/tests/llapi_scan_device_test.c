@@ -54,6 +54,8 @@ struct scan_result {
 	unsigned int	 res_no_class;
 	unsigned int	 res_bad_size;
 	unsigned int	 res_mdt_index;	/* records with LLAPI_SCAN_MDT_INDEX */
+	unsigned int	 res_named;	/* records with an lfsr_name */
+	unsigned int	 res_name_bit;	/* name bit and lfsr_name disagree */
 	unsigned int	 res_stop_after;	/* 0: never stop */
 	/* union of every lfsr_valid seen */
 	__u64		 res_seen_valid;
@@ -90,6 +92,10 @@ static int count_cb(const struct llapi_scan_rec *rec, void *data)
 		res->res_no_class++;
 	if (rec->lfsr_valid & LLAPI_SCAN_MDT_INDEX)
 		res->res_mdt_index++;
+	if (rec->lfsr_name != NULL)
+		res->res_named++;
+	if (!(rec->lfsr_valid & LLAPI_SCAN_NAME) != (rec->lfsr_name == NULL))
+		res->res_name_bit++;
 	pthread_mutex_unlock(&res->res_lock);
 
 	if (res->res_stop_after != 0 && n >= res->res_stop_after)
@@ -198,7 +204,7 @@ static void test2(void)
 		.lfsp_want = LLAPI_SCAN_FID | LLAPI_SCAN_MODE,
 	};
 	__u64 mdt_only = LLAPI_SCAN_MDT_INDEX | LLAPI_SCAN_LINKEA |
-			 LLAPI_SCAN_PARENT;
+			 LLAPI_SCAN_PARENT | LLAPI_SCAN_NAME;
 	struct scan_result res;
 	__u64 got = 0;
 	int rc;
@@ -207,11 +213,13 @@ static void test2(void)
 	rc = llapi_scan_device(device, &sp, count_cb, &res);
 	ASSERTF(rc == 0, "restricted scan failed: %s", strerror(-rc));
 
-	/* the xattrs nothing asked for must not have been read */
+	/* nothing that was not asked for: not the xattrs, not a name */
 	ASSERTF(!(res.res_seen_valid & (LLAPI_SCAN_LAYOUT | LLAPI_SCAN_LMV |
 				       LLAPI_SCAN_LINKEA | LLAPI_SCAN_PARENT)),
 		"a scan that asked for none of them reported 0x%llx",
 		(unsigned long long)res.res_seen_valid);
+	ASSERTF(res.res_named == 0, "%u records named, no name asked for",
+		res.res_named);
 	/*
 	 * And no size: on an MDT, whether an object's own size is the file's
 	 * rests on a layout this scan did not read.
@@ -235,6 +243,15 @@ static void test2(void)
 		ASSERTF(!(got & mdt_only),
 			"an OST scan promised MDT fields 0x%llx",
 			(unsigned long long)(got & mdt_only));
+	/* an MDT names its files when asked; an OST has no names to give */
+	if (got & LLAPI_SCAN_NAME)
+		ASSERTF(res.res_named > 0, "no record named, a name asked for");
+	else
+		ASSERTF(res.res_named == 0, "%u OST records named",
+			res.res_named);
+	ASSERTF(res.res_name_bit == 0,
+		"%u records: LLAPI_SCAN_NAME and lfsr_name disagree",
+		res.res_name_bit);
 	if (got & LLAPI_SCAN_MDT_INDEX)
 		ASSERTF(res.res_mdt_index == res.res_count,
 			"lfsp_got has the MDT index, %u of %u records carry it",
@@ -456,9 +473,18 @@ static void test7(void)
 	ASSERTF(rc == -ENOTSUP, "--xattr returned %d, expected -ENOTSUP", rc);
 
 	param->fp_format_printf_str = "%p\n";
+	param->fp_print_fid = 1;
 	rc = find_device_quiet(param, &sp);
 	param->fp_format_printf_str = NULL;
-	ASSERTF(rc == -ENOTSUP, "-printf %%p returned %d, expected -ENOTSUP",
+	ASSERTF(rc == -EINVAL,
+		"--print-fid with -printf returned %d, expected -EINVAL", rc);
+
+	/* a mount that would name nothing, refused before any open */
+	param->fp_fid2path_mnt = "/nonexistent";
+	rc = find_device_quiet(param, &sp);
+	param->fp_fid2path_mnt = NULL;
+	ASSERTF(rc == -EINVAL,
+		"--fid2path with --print-fid returned %d, expected -EINVAL",
 		rc);
 
 	param->fp_max_depth = 2;
@@ -479,7 +505,9 @@ static void test7(void)
 	ASSERTF(rc == -EINVAL, "ss_size 8 returned %d, expected -EINVAL", rc);
 	llapi_msg_set_level(LLAPI_MSG_ERROR);
 
-	/* fp_max_depth 0, as allocated, means no limit; stats come back */
+	/* fp_max_depth 0, as allocated, means no limit; stats come back.
+	 * By FID, which an OST answers without a mount too.
+	 */
 	stats.ss_size = sizeof(stats);
 	sp.lfsp_got = &got;
 	rc = find_device_quiet(param, &sp);

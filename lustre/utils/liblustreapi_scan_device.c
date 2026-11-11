@@ -114,6 +114,10 @@ static __u32 scan_want_xattr(__u64 want)
 		      LLAPI_SCAN_XA_BIT(LLAPI_SCAN_XA_LMV);
 	if (want & LLAPI_SCAN_HSM)
 		xa |= LLAPI_SCAN_XA_BIT(LLAPI_SCAN_XA_HSM);
+	if (want & LLAPI_SCAN_OWNER)
+		xa |= LLAPI_SCAN_XA_BIT(LLAPI_SCAN_XA_PFID);
+	if (want & LLAPI_SCAN_NAMES_ENC)
+		xa |= LLAPI_SCAN_XA_BIT(LLAPI_SCAN_XA_ENC);
 
 	return xa;
 }
@@ -481,14 +485,16 @@ bool scan_linkea_overflowed(const void *buf, size_t len)
 	return leh->leh_overflow_time != 0;
 }
 
-/* The record's view: the raw bytes, plus the first entry's name and parent. */
-static void scan_linkea(const struct llapi_scan_obj *obj, char *name,
-			size_t namesize, struct llapi_scan_rec *rec)
+/* The record's view of trusted.link: each part only when asked for. */
+static void scan_linkea(const struct llapi_scan_obj *obj, __u64 want,
+			char *name, size_t namesize, struct llapi_scan_rec *rec)
 {
 	struct lu_fid parent = { 0 };
 	size_t len = 0;
 	const void *buf;
 
+	if (!(want & (LLAPI_SCAN_LINKEA | LLAPI_SCAN_PARENT | LLAPI_SCAN_NAME)))
+		return;
 	buf = scan_xattr(obj, LLAPI_SCAN_XA_LINK, &len);
 	if (!buf)
 		return;
@@ -496,18 +502,91 @@ static void scan_linkea(const struct llapi_scan_obj *obj, char *name,
 	if (scan_linkea_entry(buf, len, 0, name, namesize, &parent) == 0)
 		return;
 
-	rec->lfsr_linkea = buf;
-	rec->lfsr_linkeasize = len;
-	rec->lfsr_valid |= LLAPI_SCAN_LINKEA;
+	if (want & LLAPI_SCAN_LINKEA) {
+		rec->lfsr_linkea = buf;
+		rec->lfsr_linkeasize = len;
+		rec->lfsr_valid |= LLAPI_SCAN_LINKEA;
+	}
 
-	rec->lfsr_parent_fid = parent;
-	if (fid_is_sane(&rec->lfsr_parent_fid))
+	if ((want & LLAPI_SCAN_PARENT) && fid_is_sane(&parent)) {
+		rec->lfsr_parent_fid = parent;
 		rec->lfsr_valid |= LLAPI_SCAN_PARENT;
-	else
-		memset(&rec->lfsr_parent_fid, 0, sizeof(rec->lfsr_parent_fid));
+	}
 
-	if (name[0] != '\0')
+	if ((want & LLAPI_SCAN_NAME) && name[0] != '\0') {
 		rec->lfsr_name = name;
+		rec->lfsr_valid |= LLAPI_SCAN_NAME;
+	}
+}
+
+/*
+ * The file an OST data object belongs to, from trusted.fid or, where the
+ * OSD put it there instead, from the LMA.
+ *
+ * Every version of trusted.fid begins with ff_parent -- filter_fid_18_23,
+ * _24_29, _210 and filter_fid all lead with it -- so only the lu_fid at the
+ * front is read and the rest is left to whatever wrote it.  The bytes are
+ * little-endian on disk in both places, as ll_decode_filter_fid(8) reads
+ * them.
+ *
+ * f_ver is not a version here.  filter_fid documents it as the object's
+ * stripe index in the owner's layout (f_stripe_idx is #defined to f_ver),
+ * so it is dropped: what is wanted is a FID a lookup will accept, and
+ * carrying the stripe index in the version would make every object of a
+ * striped file a different FID.
+ */
+static void scan_owner(const struct llapi_scan_obj *obj,
+		       struct llapi_scan_rec *rec)
+{
+	const struct lustre_ost_attrs *loa;
+	const struct lu_fid *pfid = NULL;
+	const struct filter_fid *ff;
+	size_t len = 0;
+
+	/* an OST data object's xattr, and only meaningful on one: the field
+	 * is what a pathname lookup is pointed at, so it is not filled from
+	 * whatever else might carry that name
+	 */
+	if (rec->lfsr_class != LLAPI_SCAN_CLS_OST_OBJ)
+		return;
+
+	ff = scan_xattr(obj, LLAPI_SCAN_XA_PFID, &len);
+	if (ff != NULL && len >= sizeof(struct lu_fid)) {
+		pfid = &ff->ff_parent;
+	} else if ((rec->lfsr_valid & LLAPI_SCAN_LMA) &&
+		   (rec->lfsr_lma_compat & LMAC_STRIPE_INFO)) {
+		/*
+		 * An OST whose inodes are 256 bytes or smaller has no
+		 * trusted.fid at all: osd_xattr_set_pfid() packs the parent
+		 * into the LMA as a struct lustre_ost_attrs and removes the
+		 * separate xattr, which is what LMAC_STRIPE_INFO says it did.
+		 * mkfs.lustre defaults to -I 512 now, but -I 256 is still
+		 * accepted and older OSTs were built that way, and without
+		 * this every object on one has no owner and so no pathname.
+		 * ll_decode_filter_fid(8) reads the same two places.
+		 *
+		 * The LMA buffer is already in hand -- scan_decode_lma() read
+		 * it -- so this costs no second xattr.  Length is checked
+		 * against the end of loa_parent_fid rather than the whole
+		 * structure: loa_comp_* follow it under LMAC_COMP_INFO and
+		 * are not wanted here.
+		 */
+		loa = scan_xattr(obj, LLAPI_SCAN_XA_LMA, &len);
+		if (loa != NULL &&
+		    len >= offsetof(struct lustre_ost_attrs, loa_stripe_size))
+			pfid = &loa->loa_parent_fid;
+	}
+	if (pfid == NULL)
+		return;
+
+	rec->lfsr_owner_fid.f_seq = __le64_to_cpu(pfid->f_seq);
+	rec->lfsr_owner_fid.f_oid = __le32_to_cpu(pfid->f_oid);
+	rec->lfsr_owner_fid.f_ver = 0;
+
+	if (fid_is_sane(&rec->lfsr_owner_fid))
+		rec->lfsr_valid |= LLAPI_SCAN_OWNER;
+	else
+		memset(&rec->lfsr_owner_fid, 0, sizeof(rec->lfsr_owner_fid));
 }
 
 /*
@@ -528,6 +607,26 @@ static void scan_hsm(const struct llapi_scan_obj *obj,
 	rec->lfsr_hsm_states = __le32_to_cpu(hsm->hsm_flags);
 	rec->lfsr_hsm_archive_id = __le64_to_cpu(hsm->hsm_arch_id);
 	rec->lfsr_valid |= LLAPI_SCAN_HSM;
+}
+
+/*
+ * Whether a directory's entries have encrypted names: byte 2 of an fscrypt
+ * context, v1 or v2, is the filenames mode, and Lustre writes
+ * LLCRYPT_MODE_NULL (0) there when only the contents are encrypted.
+ */
+static void scan_names_enc(const struct llapi_scan_obj *obj, __u64 want,
+			   struct llapi_scan_rec *rec)
+{
+	const __u8 *ctx;
+	size_t len = 0;
+
+	if (!(want & LLAPI_SCAN_NAMES_ENC))
+		return;
+	ctx = scan_xattr(obj, LLAPI_SCAN_XA_ENC, &len);
+	if (ctx == NULL || len < 4 || (ctx[0] != 1 && ctx[0] != 2))
+		return;
+	if (ctx[2] != 0)
+		rec->lfsr_valid |= LLAPI_SCAN_NAMES_ENC;
 }
 
 /*
@@ -938,9 +1037,11 @@ static int scan_sink_object(void *ctx, const struct llapi_scan_obj *obj)
 		}
 	}
 
-	if (dev->sd_want & (LLAPI_SCAN_LINKEA | LLAPI_SCAN_PARENT))
-		scan_linkea(obj, w->sw_name, sizeof(w->sw_name), &rec);
+	scan_linkea(obj, dev->sd_want, w->sw_name, sizeof(w->sw_name), &rec);
 	scan_hsm(obj, &rec);
+	if (dev->sd_want & LLAPI_SCAN_OWNER)
+		scan_owner(obj, &rec);
+	scan_names_enc(obj, dev->sd_want, &rec);
 	scan_size(obj, dev->sd_want,
 		  dev->sd_tgt_info.tt_flags & LLAPI_SCAN_TGT_OST, &rec);
 
@@ -1220,12 +1321,72 @@ int scan_device_target(const char *device, struct llapi_scan_tgt *tgt)
 int llapi_scan_device(const char *device, const struct llapi_scan_param *sp,
 		      llapi_scan_cb_t cb, void *data)
 {
+	return scan_device_run_checked(device, sp, cb, data, NULL);
+}
+
+/*
+ * One sweep of the target: every chunk once, delivered to whatever @dev
+ * names as the consumer.
+ */
+static int scan_device_sweep(struct scan_dev *dev, struct scan_worker *workers,
+			     unsigned int nworkers,
+			     struct llapi_scan_stats *stats)
+{
+	unsigned int started;
+	unsigned int i;
+	int rc = 0;
+
+	/* the caller's thread is one of the workers */
+	for (started = 1; started < nworkers; started++) {
+		rc = pthread_create(&workers[started].sw_thread, NULL,
+				    scan_worker_run, &workers[started]);
+		if (rc != 0) {
+			/*
+			 * Degraded, not failed: the cursor feeds whatever
+			 * workers exist and the scan still covers everything,
+			 * so this must not turn a complete result into an
+			 * error a caller would retry.
+			 */
+			llapi_error(LLAPI_MSG_WARN | LLAPI_MSG_NO_ERRNO, -rc,
+				    "scanning with %u of %u threads",
+				    started, nworkers);
+			rc = 0;
+			break;
+		}
+	}
+
+	scan_worker_run(&workers[0]);
+
+	for (i = 1; i < started; i++)
+		pthread_join(workers[i].sw_thread, NULL);
+
+	for (i = 0; i < nworkers; i++)
+		scan_stats_merge(stats, &workers[i].sw_stats);
+	if (rc == 0)
+		rc = dev->sd_error;
+
+	/* a consumer that stopped the sweep hears its own value back */
+	return dev->sd_stop_rc != 0 ? dev->sd_stop_rc : rc;
+}
+
+/*
+ * The scan proper, plus the one thing a caller cannot check for itself.
+ *
+ * lfsp_fsname, when not NULL, is the filesystem the caller is resolving
+ * FIDs against; the scan refuses a target belonging to any other.  It is
+ * tested here rather than by opening the target a second time beforehand:
+ * one open answers both questions.
+ */
+int scan_device_run_checked(const char *device,
+			    const struct llapi_scan_param *sp,
+			    llapi_scan_cb_t cb, void *data,
+			    const struct scan_tgt_check *chk)
+{
 	struct llapi_scan_param spl = { 0 };
 	struct llapi_scan_stats stats = { 0 };
 	struct scan_worker *workers;
 	struct scan_dev dev = { 0 };
 	unsigned int nworkers;
-	unsigned int started;
 	unsigned int i;
 	__u64 known;
 	int rc;
@@ -1286,17 +1447,62 @@ int llapi_scan_device(const char *device, const struct llapi_scan_param *sp,
 	}
 
 	/*
+	 * The fsname is everything before the label's last eight characters,
+	 * which are the target and the separator mkfs.lustre writes to say
+	 * how it was last registered: "testfs-MDT0000" once registered,
+	 * "testfs:MDT0000" never mounted, "testfs=MDT0000" after writeconf,
+	 * "testfs+MDT0000" after --nolocallogs.  scan_ldiskfs_label() cuts
+	 * the same eight, and the flag tested above says the label parsed.
+	 *
+	 * A mount of another filesystem cannot be caught any later: FID
+	 * sequences are not unique across filesystems -- FID_SEQ_ROOT is a
+	 * constant and every controller starts from FID_SEQ_NORMAL -- so
+	 * fld_client_lookup() would find a range and answer with a pathname
+	 * from the wrong filesystem.
+	 */
+	if (spl.lfsp_fsname != NULL) {
+		const char *want_fsname = spl.lfsp_fsname;
+		size_t flen = strlen(dev.sd_tgt_info.tt_label);
+
+		if (flen <= 8 || strlen(want_fsname) != flen - 8 ||
+		    strncmp(dev.sd_tgt_info.tt_label, want_fsname, flen - 8)) {
+			llapi_error(LLAPI_MSG_ERROR | LLAPI_MSG_NO_ERRNO,
+				    -EXDEV,
+				    "%s is a target of '%.*s', not of '%s': FIDs from one filesystem resolve on another and would print its paths",
+				    device,
+				    flen > 8 ? (int)(flen - 8) : 0,
+				    dev.sd_tgt_info.tt_label, want_fsname);
+			rc = -EXDEV;
+			goto out_close;
+		}
+	}
+
+	/*
 	 * The target is known now, so the demand mask can be answered for
 	 * this scan rather than for the entry point: what a scan of a device
 	 * fills, less the fields only the other kind of target has, less the
 	 * MDT index where the label did not carry one.
 	 */
 	known = LLAPI_SCAN_WANT_KNOWN_DEV;
-	if (!(dev.sd_tgt_info.tt_flags & LLAPI_SCAN_TGT_MDT))
+	if (dev.sd_tgt_info.tt_flags & LLAPI_SCAN_TGT_MDT)
+		known &= ~(__u64)LLAPI_SCAN_WANT_OST_ONLY;
+	else
 		known &= ~(__u64)LLAPI_SCAN_WANT_MDT_ONLY;
 	if (!(dev.sd_tgt_info.tt_flags & LLAPI_SCAN_TGT_INDEX))
 		known &= ~(__u64)LLAPI_SCAN_MDT_INDEX;
 	scan_param_report_got(sp, dev.sd_want, known);
+
+	/* what the caller needs the target to be, from the label just read */
+	if (chk != NULL && chk->tc_label != NULL)
+		snprintf(chk->tc_label, sizeof(dev.sd_tgt_info.tt_label), "%s",
+			 dev.sd_tgt_info.tt_label);
+	if (chk != NULL && chk->tc_tgt_flags != 0 &&
+	    !(dev.sd_tgt_info.tt_flags & chk->tc_tgt_flags)) {
+		if (chk->tc_refused != NULL)
+			*chk->tc_refused = true;
+		rc = chk->tc_rc;
+		goto out_close;
+	}
 
 	dev.sd_end = dev.sd_tgt_info.tt_chunks;
 	dev.sd_visible = dev.sd_tgt_info.tt_flags & LLAPI_SCAN_TGT_OST ?
@@ -1333,34 +1539,7 @@ int llapi_scan_device(const char *device, const struct llapi_scan_param *sp,
 		}
 	}
 
-	/* the caller's thread is one of the workers */
-	for (started = 1; started < nworkers; started++) {
-		rc = pthread_create(&workers[started].sw_thread, NULL,
-				    scan_worker_run, &workers[started]);
-		if (rc != 0) {
-			/*
-			 * Degraded, not failed: the cursor feeds whatever
-			 * workers exist and the scan still covers everything,
-			 * so this must not turn a complete result into an
-			 * error a caller would retry.
-			 */
-			llapi_error(LLAPI_MSG_WARN | LLAPI_MSG_NO_ERRNO, -rc,
-				    "scanning with %u of %u threads",
-				    started, nworkers);
-			rc = 0;
-			break;
-		}
-	}
-
-	scan_worker_run(&workers[0]);
-
-	for (i = 1; i < started; i++)
-		pthread_join(workers[i].sw_thread, NULL);
-
-	for (i = 0; i < nworkers; i++)
-		scan_stats_merge(&stats, &workers[i].sw_stats);
-	if (rc == 0)
-		rc = dev.sd_error;
+	rc = scan_device_sweep(&dev, workers, nworkers, &stats);
 
 	if (sp != NULL && sp->lfsp_stats != NULL) {
 		struct llapi_scan_stats *out = sp->lfsp_stats;
@@ -1384,6 +1563,5 @@ out_workers:
 out_close:
 	dev.sd_be->sb_close(dev.sd_tgt);
 
-	/* a consumer that stopped the scan hears its own value back */
-	return dev.sd_stop_rc != 0 ? dev.sd_stop_rc : rc;
+	return rc;
 }

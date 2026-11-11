@@ -383,9 +383,9 @@ static inline __u32 scan_param_whole(__u32 size)
 		SCAN_PF_END(lfsp_want), SCAN_PF_END(lfsp_filter),
 		SCAN_PF_END(lfsp_thread_count), SCAN_PF_END(lfsp_padding),
 		SCAN_PF_END(lfsp_got),
-		SCAN_PF_END(lfsp_stats),
+		SCAN_PF_END(lfsp_stats), SCAN_PF_END(lfsp_fsname),
 	};
-	static_assert(SCAN_PF_END(lfsp_stats) ==
+	static_assert(SCAN_PF_END(lfsp_fsname) ==
 		      sizeof(struct llapi_scan_param),
 		      "a field was added without a row in ends[]");
 #undef SCAN_PF_END
@@ -548,8 +548,8 @@ static inline void scan_param_report_got(const struct llapi_scan_param *sp,
  * a scan of a target reads the object itself, so it answers for fields a
  * walk pays an ioctl or an open for, and for the class and linkea a
  * namespace has no need of.  Narrowed again by what the target turns out
- * to be -- only an MDT has a layout or a directory stripe -- so lfsp_got is
- * answered for the scan actually being run.
+ * to be -- only an MDT has a layout or a directory stripe, only an OST an
+ * owner -- so lfsp_got is answered for the scan actually being run.
  */
 #define LLAPI_SCAN_WANT_KNOWN_DEV					\
 	(LLAPI_SCAN_TYPE | LLAPI_SCAN_MODE | LLAPI_SCAN_NLINK |		\
@@ -561,17 +561,20 @@ static inline void scan_param_report_got(const struct llapi_scan_param *sp,
 	 LLAPI_SCAN_LMV_FOREIGN | LLAPI_SCAN_LMV_SHARD |		\
 	 LLAPI_SCAN_MDT_INDEX | LLAPI_SCAN_PROJID | LLAPI_SCAN_HSM |	\
 	 LLAPI_SCAN_INO | LLAPI_SCAN_PARENT | LLAPI_SCAN_LINKEA |	\
-	 LLAPI_SCAN_LMA | LLAPI_SCAN_CLASS)
+	 LLAPI_SCAN_LMA | LLAPI_SCAN_CLASS |				\
+	 LLAPI_SCAN_OWNER | LLAPI_SCAN_NAME | LLAPI_SCAN_NAMES_ENC)
 /* and what only one kind of target has, so a scan of the other never
  * answers for it: the layout, the directory stripe, the HSM state, the lazy
- * SOM size, the MDT index and the linkea with the parent it names are the
- * MDT's.
+ * SOM size, the MDT index and the linkea with the name and parent it holds
+ * are the MDT's, and an OST data object's owner is the OST's.
  */
 #define LLAPI_SCAN_WANT_MDT_ONLY					\
 	(LLAPI_SCAN_LAYOUT | LLAPI_SCAN_LMV | LLAPI_SCAN_LMV_FOREIGN |	\
 	 LLAPI_SCAN_LMV_SHARD | LLAPI_SCAN_HSM |			\
 	 LLAPI_SCAN_LAZY_SIZE | LLAPI_SCAN_LAZY_BLOCKS |		\
-	 LLAPI_SCAN_MDT_INDEX | LLAPI_SCAN_LINKEA | LLAPI_SCAN_PARENT)
+	 LLAPI_SCAN_MDT_INDEX | LLAPI_SCAN_LINKEA | LLAPI_SCAN_PARENT |	\
+	 LLAPI_SCAN_NAME | LLAPI_SCAN_NAMES_ENC)
+#define LLAPI_SCAN_WANT_OST_ONLY	(LLAPI_SCAN_OWNER)
 
 void scan_rec_dirent(struct llapi_scan_rec *rec, const char *path,
 		     int p, int d, const struct dirent64 *de);
@@ -588,6 +591,53 @@ void layout_swab_lov_user_md(struct lov_user_md *lum, int lum_size);
 int layout_ost_fid_get(const struct llapi_layout *layout,
 		       uint64_t stripe_number, struct lu_fid *fid);
 
+/*
+ * struct scan_tgt_check - what a target has to be, for a caller that cannot
+ * use the other kind: answered from the label the scan's own open reads.
+ */
+struct scan_tgt_check {
+	__u32	 tc_tgt_flags;	/* LLAPI_SCAN_TGT_* it has to carry; 0: any */
+	int	 tc_rc;		/* what the call fails with otherwise */
+	bool	*tc_refused;	/* out or NULL: set when tc_rc was returned */
+	char	*tc_label;	/* out or NULL: the target's label, 64 bytes */
+};
+
+/* liblustreapi_scan_names.c: a target scan's pathnames, as it goes */
+struct scan_names;
+struct scan_name_cand {
+	struct lu_fid	 snc_parent;	/* NULL name: the OST object's owner */
+	const char	*snc_name;
+};
+/* print @blob, the output of one match, with @path where it goes */
+typedef void (*scan_names_render_t)(const void *blob, size_t len,
+				    const char *path, void *data);
+
+int scan_names_init(struct scan_names **snp, int mnt_fd, const char *mnt_path,
+		    const struct lu_fid *root, size_t wait_max,
+		    scan_names_render_t render, void *data);
+int scan_names_print_root(struct scan_names *sn, const void *blob,
+			  size_t len);
+int scan_names_dir(struct scan_names *sn, const struct lu_fid *fid,
+		   const struct lu_fid *parent, const char *name,
+		   bool names_enc);
+#define SCAN_NAMES_ALL	0x1	/* once under each name */
+#define SCAN_NAMES_ENC	0x2	/* an encrypted OST object: look it up */
+int scan_names_emit(struct scan_names *sn, const struct lu_fid *fid,
+		    const struct scan_name_cand *c, unsigned int nc,
+		    unsigned int flags, const void *blob, size_t bloblen);
+int scan_names_finish(struct scan_names *sn, __u64 *nameless,
+		      __u64 *outside);
+void scan_names_free(struct scan_names *sn);
+bool scan_names_waiting(const struct scan_names *sn);
+int scan_names_lost(const struct scan_names *sn);
+void scan_names_lookup_mount(struct scan_names *sn, int mnt_fd,
+			     const char *mnt_path);
+
+/* the scan, refused unless the target passes @chk (if not NULL) */
+int scan_device_run_checked(const char *device,
+			    const struct llapi_scan_param *sp,
+			    llapi_scan_cb_t cb, void *data,
+			    const struct scan_tgt_check *chk);
 /* liblustreapi_scan_device.c: one entry of a raw trusted.link */
 int scan_linkea_entry(const void *buf, size_t len, unsigned int idx,
 		      char *name, size_t namesize, struct lu_fid *parent);

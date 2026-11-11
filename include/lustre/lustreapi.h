@@ -476,11 +476,20 @@ struct find_param {
 				 fp_exclude_compr_lvl:1,
 				 fp_check_compr_chunk:1,
 				 fp_exclude_compr_chunk:1,
-				 fp_unused_bit1:1,  /* Fields available to use*/
-				 fp_unused_bit2:1,  /* once used, we must add */
-				 fp_unused_bit3:1,  /* a separate flag field  */
-				 fp_unused_bit4:1,  /* at                     */
-				 fp_unused_bits2:22; /* the end of this struct */
+				 /*
+				  * lfs find --print-fid: print each match's
+				  * FID, not its pathname.
+				  */
+				 fp_print_fid:1,
+				 /*
+				  * lfs find --all-links: a target scan prints
+				  * every name of a hardlinked file, not the
+				  * first.  A walk reaches each name anyway.
+				  */
+				 fp_all_links:1,
+				 fp_unused_bit3:1,  /* once used, we must add */
+				 fp_unused_bit4:1,  /* a separate flag field  */
+				 fp_unused_bits2:22; /* at the end of struct  */
 
 	long long		 fp_compr_lvl_sign:2,
 				 fp_compr_chunk_sign:2,
@@ -502,6 +511,12 @@ struct find_param {
 	char			*fp_device;
 	char			*fp_target;
 	char			*fp_fsname;
+	/*
+	 * lfs find --fid2path: a client mount of the same filesystem, the
+	 * prefix of a target scan's pathnames and what names an OST's
+	 * objects.  NULL: an MDT's paths start with "./".
+	 */
+	const char		*fp_fid2path_mnt;
 };
 
 /* Work unit for parallel directory processing */
@@ -682,9 +697,16 @@ void llapi_find_param_free(struct find_param *param);
 #define LLAPI_SCAN_LINKEA	0x0000100000000000ULL	/* lfsr_linkea */
 #define LLAPI_SCAN_LMA		0x0000200000000000ULL	/* lfsr_lma_* */
 #define LLAPI_SCAN_CLASS	0x0000400000000000ULL	/* lfsr_class */
+#define LLAPI_SCAN_OWNER	0x0001000000000000ULL	/* lfsr_owner_fid */
+#define LLAPI_SCAN_NAME		0x0020000000000000ULL	/* lfsr_name */
+/*
+ * A directory whose entries' names are encrypted, from its fscrypt context:
+ * the bit is the whole answer, as LLAPI_SCAN_LMV_SHARD's is.
+ */
+#define LLAPI_SCAN_NAMES_ENC	0x0040000000000000ULL
 
 /* Fields the scanner can answer without touching the MDT. */
-#define LLAPI_SCAN_DIRENT_MASK	LLAPI_SCAN_TYPE
+#define LLAPI_SCAN_DIRENT_MASK	(LLAPI_SCAN_TYPE | LLAPI_SCAN_NAME)
 
 /**
  * enum llapi_scan_class - what an object is, for a scanner that sees them all
@@ -727,7 +749,8 @@ enum llapi_scan_class {
  * be copied by a consumer that keeps them.
  *
  * The pointer fields carry their own answer: lfsr_path is NULL where no
- * namespace was walked, and lfsr_name is NULL where no name was recovered.
+ * namespace was walked, and lfsr_name is NULL where no name was recovered
+ * or, on a device scan, LLAPI_SCAN_NAME was not asked for.
  * A path is not a scan's to invent.
  *
  * This is an in-process record and not a serialization.  It holds pointers
@@ -817,6 +840,21 @@ struct llapi_scan_rec {
 	__u32			 lfsr_class;	/* enum llapi_scan_class */
 	__u32			 lfsr_lma_compat;	/* LMAC_* */
 	__u32			 lfsr_lma_incompat; /* LMAI_* */
+	/*
+	 * The MDT FID of the file an OST data object belongs to, from the
+	 * object's own trusted.fid, or from trusted.lma where there is none
+	 * (an OST with 256-byte inodes).  It is what names such an object: its
+	 * own FID is an OST-sequence one, which resolves only by asking the
+	 * OST that holds it -- and a scan of a target reads it precisely
+	 * when that target is out of service.  The owner resolves against
+	 * the MDT instead, which is up.
+	 *
+	 * The stripe index is not carried: filter_fid keeps it in
+	 * ff_parent's f_ver, which this field zeroes so it is a FID a
+	 * lookup accepts.
+	 */
+	/* with LLAPI_SCAN_OWNER */
+	struct lu_fid		 lfsr_owner_fid;
 };
 
 /**
@@ -923,17 +961,37 @@ struct llapi_scan_param {
 	__u8			 lfsp_thread_count;
 	__u8			 lfsp_padding[7];	/* must be zero */
 	/*
-	 * Where the scan reports what lfsp_want actually came to, or NULL
-	 * when the caller does not want to know.  A bit this library does
-	 * not define, or defines but this scan cannot answer for, is
-	 * dropped rather than refused, so a caller built against a newer
-	 * header may ask for more than it gets.  Where lfsp_want is 0,
-	 * meaning the scanner's own default, this reports what that
-	 * default came to.
+	 * Filled before the first record with the subset of lfsp_want this
+	 * scan will answer for, or NULL if the caller does not want to know.
+	 * An out-parameter reached through a pointer, as lfsp_stats is,
+	 * because the parameter block itself is const to the scan.
+	 *
+	 * Per scan and not a property of the library: what a scan can answer
+	 * depends on which entry point it is and on the target it opened --
+	 * an OST answers LLAPI_SCAN_OWNER where an MDT answers
+	 * LLAPI_SCAN_LMV -- so this is the answer for the scan actually
+	 * being run.  A bit the library does not define, or this scan cannot
+	 * answer for, is dropped rather than refused, so a caller built
+	 * against a newer header may ask for more than it gets.  Where
+	 * lfsp_want is 0, meaning the scanner's own default, lfsp_got reports
+	 * what that default came to.
 	 */
 	__u64			*lfsp_got;
 	/* filled in when the scan ends.  NULL: not wanted */
 	struct llapi_scan_stats	*lfsp_stats;
+	/*
+	 * The filesystem the caller means to resolve this target's FIDs
+	 * against, as llapi_search_fsname(3) answers for its mount.  The scan
+	 * refuses a target whose label names another one; NULL leaves it
+	 * unchecked, which is the old behaviour.
+	 *
+	 * There is no way to make this test afterwards.  FID sequences are
+	 * not unique across filesystems -- FID_SEQ_ROOT is a constant and
+	 * every controller starts from FID_SEQ_NORMAL -- so a lookup on the
+	 * wrong mount succeeds and answers with that filesystem's pathname.
+	 * Only the scan sees the target's label, so only the scan can say no.
+	 */
+	const char		*lfsp_fsname;
 };
 
 int llapi_scan_namespace(const char *path, const struct llapi_scan_param *sp,
@@ -942,6 +1000,10 @@ int llapi_scan_device(const char *device, const struct llapi_scan_param *sp,
 		      llapi_scan_cb_t cb, void *data);
 int llapi_find_device(const char *target, struct find_param *param,
 		      const struct llapi_scan_param *sp);
+
+int llapi_scan_rec_path(int mnt_fd, const char *mnt_path,
+			const struct llapi_scan_rec *rec,
+			char *buf, size_t buflen);
 
 int llapi_file_fget_mdtidx(int fd, int *mdtidx);
 int llapi_dir_set_default_lmv(const char *name,
