@@ -10037,6 +10037,7 @@ wait_clients_import_state () {
 	local expected="$3"
 	local maxtime=${4:-$(max_recovery_time)}
 	local facets="$facet"
+	local ping_path
 
 	if [ "$FAILURE_MODE" = HARD ]; then
 		facets=$(for f in ${facet//,/ }; do
@@ -10049,15 +10050,22 @@ wait_clients_import_state () {
 		local proc_path
 
 		case $facet in
-		ost* ) proc_path="osc.$(get_clientosc_proc_path \
-					$label).ost_server_uuid" ;;
-		mds* ) proc_path="mdc.$label-mdc-*.mds_server_uuid" ;;
+		ost* ) label=$(get_clientosc_proc_path $label)
+			proc_path="osc.$label.ost_server_uuid"
+			ping_path+=" osc.$label.ping"
+			;;
+		mds* ) proc_path="mdc.$label-mdc-*.mds_server_uuid"
+			ping_path+=" mdc.$label-mdc-*.ping"
+			;;
 		mgs* ) proc_path="mgc.*.mgs_server_uuid" ;;
 		*) error "unknown facet!" ;;
 		esac
 
 		local params=$(expand_list $params $proc_path)
 	done
+
+	[[ $expected == *FULL* && -n $ping_path ]] &&
+		do_rpc_nodes "$list" $LCTL get_param $ping_path || true
 
 	if ! do_rpc_nodes "$list" wait_import_state_mount "$expected" $params $maxtime 0;
 	then
