@@ -2200,6 +2200,8 @@ struct lnet {
 	lnet_handler_t			ln_ping_target_handler;
 	struct lnet_ping_buffer		*ln_ping_target;
 	atomic_t			ln_ping_target_seqno;
+	/* ping target MDs, current and old, not yet unlinked */
+	atomic_t			ln_ping_target_mds;
 
 	/*
 	 * Push Target

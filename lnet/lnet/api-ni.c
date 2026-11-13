@@ -2036,8 +2036,11 @@ lnet_ping_target_event_handler(struct lnet_event *event)
 {
 	struct lnet_ping_buffer *pbuf = event->md_user_ptr;
 
-	if (event->unlinked)
+	if (event->unlinked) {
 		kref_put(&pbuf->pb_refcnt, lnet_ping_buffer_free);
+		if (atomic_dec_and_test(&the_lnet.ln_ping_target_mds))
+			wake_up_var(&the_lnet.ln_ping_target_mds);
+	}
 }
 
 static int
@@ -2091,6 +2094,7 @@ lnet_ping_target_setup(struct lnet_ping_buffer **ppbuf,
 		goto fail_decref_ping_buffer;
 	}
 	kref_get(&(*ppbuf)->pb_refcnt);
+	atomic_inc(&the_lnet.ln_ping_target_mds);
 
 	return 0;
 
@@ -2276,15 +2280,13 @@ __must_hold(&the_lnet.ln_api_mutex)
 	lnet_net_unlock(LNET_LOCK_EX);
 
 	if (old_pbuf) {
-		/* unlink and free the old ping info.
-		 * There may be outstanding traffic on this MD, and
-		 * ln_api_mutex may be required to finalize that
-		 * traffic. Release ln_api_mutex while we wait for
-		 * refs on this ping buffer to drop
+		/* Unlink the old ping MD and drop our ref, without
+		 * waiting for the other refs. The MD holds a ref until
+		 * its unlink event, and a Push in flight holds one until
+		 * it completes, which can take a full LND timeout when
+		 * the peer does not answer. The last ref frees it.
 		 */
-		mutex_unlock(&the_lnet.ln_api_mutex);
-		lnet_ping_md_unlink(old_pbuf, &old_ping_md);
-		mutex_lock(&the_lnet.ln_api_mutex);
+		LNetMDUnlink(old_ping_md);
 		kref_put(&old_pbuf->pb_refcnt, lnet_ping_buffer_free);
 	}
 
@@ -2296,6 +2298,11 @@ lnet_ping_target_fini(void)
 {
 	lnet_ping_md_unlink(the_lnet.ln_ping_target,
 			    &the_lnet.ln_ping_target_md);
+
+	/* an old ping MD may still be replying to a GET */
+	wait_var_event_warning(&the_lnet.ln_ping_target_mds,
+			       !atomic_read(&the_lnet.ln_ping_target_mds),
+			       "Still waiting for old ping MDs to unlink\n");
 
 	lnet_assert_handler_unused(the_lnet.ln_ping_target_handler);
 	lnet_ping_target_destroy();
