@@ -1566,13 +1566,15 @@ out:
 	/* Unlink each reconstructed page and clear cp_ec_recovery under the
 	 * folio lock, so the next reader to lock the page sees a consistent
 	 * state.  Unless the recovery succeeded and every stripe holds a
-	 * granted or EC placeholder lock, delete the cl_page, which also
-	 * drops Uptodate under lli_page_inv_lock (LU-16160).  A cl_page kept
-	 * on a non-Uptodate folio would still point at the stripe of the
-	 * mirror this EC read used, and a later read of the folio from
-	 * another mirror would submit it to the wrong sub-IO.  A lock cancel
-	 * may already have discarded a page that was not owned during the
-	 * copy to userspace.
+	 * granted or EC placeholder lock, delete the cl_page and remove the
+	 * folio from the page cache, as cl_page_discard() does.  A cl_page
+	 * kept on the folio would still point at the stripe of the mirror
+	 * this EC read used, and a later read of the folio from another
+	 * mirror would submit it to the wrong sub-IO.  A folio left in the
+	 * mapping without a cl_page is invisible to osc_page_gang_lookup()
+	 * and to the client LRU until kernel reclaim or the next layout
+	 * change drops it.  A lock cancel may already have
+	 * discarded a page that was not owned during the copy to userspace.
 	 */
 	cl_page_list_for_each_safe(cl_page, temp,
 				   &io->u.ci_ec.ec_page_list) {
@@ -1584,8 +1586,10 @@ out:
 		cl_page_list_del(env, &io->u.ci_ec.ec_page_list, cl_page,
 				 false);
 		if ((io->u.ci_ec.ec_unprotected_recovery || owned) &&
-		    cl_page->cp_state != CPS_FREEING)
+		    cl_page->cp_state != CPS_FREEING) {
 			cl_page_delete(env, cl_page);
+			generic_error_remove_folio(folio->mapping, folio);
+		}
 		cl_page->cp_ec_recovery = 0;
 		/* pairs with wait_var_event() in vvp_io_ec_rd_iter_fini() */
 		smp_mb();
