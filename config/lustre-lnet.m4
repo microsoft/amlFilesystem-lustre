@@ -846,6 +846,32 @@ AC_DEFUN([LN_HAVE_IN_DEV_FOR_EACH_IFA_RTNL], [
 ]) # LN_HAVE_IN_DEV_FOR_EACH_IFA_RTNL
 
 #
+# LN_HAVE_PROTO_SENDPAGE
+#
+# Linux commit v6.4-rc7-1884-gdc97391e6610
+#   sock: Remove ->sendpage*() in favour of sendmsg(MSG_SPLICE_PAGES)
+#
+# RHEL 9 defines MSG_SPLICE_PAGES but its TCP ignores the flag, so
+# test for ->sendpage rather than for the flag.
+#
+AC_DEFUN([LN_SRC_HAVE_PROTO_SENDPAGE], [
+	LB2_LINUX_TEST_SRC([proto_sendpage], [
+		#include <net/sock.h>
+	],[
+		struct proto prot = { .sendpage = NULL };
+
+		(void)prot;
+	],[-Werror])
+])
+AC_DEFUN([LN_HAVE_PROTO_SENDPAGE], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'struct proto' has 'sendpage'],
+	[proto_sendpage], [
+		AC_DEFINE(HAVE_PROTO_SENDPAGE, 1,
+			['struct proto' has 'sendpage'])
+	])
+]) # LN_HAVE_PROTO_SENDPAGE
+
+#
 # LN_CONFIG_SOCK_INUSE_ADD
 #
 # Linux v5.17-rc1-gd477eb900484 added helper function sock_inuse_add()
@@ -1022,6 +1048,8 @@ AC_DEFUN([LN_PROG_LINUX_SRC], [
 	LN_SRC_CONFIG_SENDPAGE_OK
 	# 5.17
 	LN_SRC_CONFIG_SOCK_INUSE_ADD
+	# 6.5
+	LN_SRC_HAVE_PROTO_SENDPAGE
 	# 6.8
 	LN_SRC_CONFIG_SOCK_NOT_OWNED_BY_ME
 	# 6.15
@@ -1041,6 +1069,8 @@ AC_DEFUN([LN_PROG_LINUX_RESULTS], [
 	LN_CONFIG_SENDPAGE_OK
 	# 5.17
 	LN_CONFIG_SOCK_INUSE_ADD
+	# 6.5
+	LN_HAVE_PROTO_SENDPAGE
 	# 6.8
 	LN_CONFIG_SOCK_NOT_OWNED_BY_ME
 	# 6.15

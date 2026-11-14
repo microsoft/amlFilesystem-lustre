@@ -78,19 +78,19 @@ static int
 ksocknal_lib_sendpage(struct socket *sock, struct bio_vec *kiov,
 		      int nkiov, int msgflg)
 {
-#ifdef MSG_SPLICE_PAGES /* added to kernel 6.4.0-rc2 */
-	struct msghdr msg = {.msg_flags = msgflg | MSG_SPLICE_PAGES};
-
-	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, kiov, 1, kiov->bv_len);
-
-	return sock_sendmsg(sock, &msg);
-#else
+#ifdef HAVE_PROTO_SENDPAGE
 	struct sock *sk = sock->sk;
 	struct page *page = kiov->bv_page;
 	int offset = kiov->bv_offset;
 	int fragsize = kiov->bv_len;
 
 	return sk->sk_prot->sendpage(sk, page, offset, fragsize, msgflg);
+#else
+	struct msghdr msg = {.msg_flags = msgflg | MSG_SPLICE_PAGES};
+
+	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, kiov, 1, kiov->bv_len);
+
+	return sock_sendmsg(sock, &msg);
 #endif
 }
 
