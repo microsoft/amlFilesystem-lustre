@@ -48,6 +48,13 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/super.c
 ===================================================================
 --- linux-5.14.0-284.30.1.el9_2.orig/fs/ext4/super.c
 +++ linux-5.14.0-284.30.1.el9_2/fs/ext4/super.c
+@@ -1206,4 +1206,6 @@ static void ext4_put_super(struct super_block *sb)
+
+ 	ext4_unregister_li_request(sb);
++	/* fstrim thread opens journal handles, stop it before destroy */
++	ext4_mb_fstrim_stop(sb);
+ 	flush_workqueue(sbi->s_misc_wq);
+ 	ext4_quota_off_umount(sb);
 @@ -1641,6 +1641,7 @@ enum {
  	Opt_max_dir_size_kb, Opt_nojournal_checksum, Opt_nombcache,
  	Opt_no_prefetch_block_bitmaps, Opt_mb_optimize_scan,
@@ -126,6 +133,18 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/super.c
  	err = ext4_mb_init(sb);
  	if (err) {
  		ext4_msg(sb, KERN_ERR, "failed to initialize mballoc (%d)",
+@@ -5592,6 +5614,7 @@
+ 			goto failed_mount6;
+ 		}
+
++	ext4_mb_fstrim_start(sb);
+ 	err = ext4_register_li_request(sb, first_not_zeroed);
+ 	if (err)
+ 		goto failed_mount6;
+@@ -5671,2 +5694,3 @@
+ failed_mount6:
++	ext4_mb_fstrim_stop(sb);
+ 	ext4_mb_release(sb);
 Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/ext4.h
 ===================================================================
 --- linux-5.14.0-284.30.1.el9_2.orig/fs/ext4/ext4.h
@@ -184,6 +203,13 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/ext4.h
  	unsigned int s_log_groups_per_flex;
  	struct flex_groups * __rcu *s_flex_groups;
  	ext4_group_t s_flex_groups_allocated;
+@@ -3153,4 +3170,6 @@
+ extern int ext4_mb_init(struct super_block *);
+ extern int ext4_mb_release(struct super_block *);
++extern void ext4_mb_fstrim_start(struct super_block *sb);
++extern void ext4_mb_fstrim_stop(struct super_block *sb);
+ extern ext4_fsblk_t ext4_mb_new_blocks(handle_t *,
+ 				struct ext4_allocation_request *, int *);
 @@ -3635,6 +3652,10 @@ struct ext4_group_info {
  	struct rw_semaphore alloc_sem;
  	struct list_head bb_avg_fragment_size_node;
@@ -277,7 +303,7 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/mballoc.c
  
  	mb_group_bb_bitmap_alloc(sb, meta_group_info[i], group);
  	return 0;
-@@ -3582,6 +3607,30 @@ int ext4_mb_init(struct super_block *sb)
+@@ -3582,6 +3607,11 @@ int ext4_mb_init(struct super_block *sb)
  	INIT_LIST_HEAD(&sbi->s_discard_list);
  	INIT_WORK(&sbi->s_discard_work, ext4_discard_work);
  	atomic_set(&sbi->s_retry_alloc_pending, 0);
@@ -286,25 +312,6 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/mballoc.c
 +	INIT_LIST_HEAD(&sbi->s_fstrim_groups_last_free);
 +	spin_lock_init(&sbi->s_fstrim_groups_lock);
 +	init_waitqueue_head(&sbi->s_fstrim_wq);
-+	if (test_opt2(sb, FSTRIM)) {
-+		if (bdev_max_discard_sectors(sb->s_bdev)) {
-+			sbi->s_fstrim_task = kthread_run(ext4_mb_fstrim_thread,
-+							 sb, "fstrim-%s",
-+							 sb->s_id);
-+			if (IS_ERR(sbi->s_fstrim_task)) {
-+				ret = PTR_ERR(sbi->s_fstrim_task);
-+				sbi->s_fstrim_task = NULL;
-+				ext4_warning(sb, "Failed to create fstrim thread: %d, "
-+						 "disabling -o fstrim", ret);
-+				clear_opt2(sb, FSTRIM);
-+			}
-+		} else {
-+			ext4_warning(sb, "mounting with \"fstrim\" option, "
-+					 "but the device does not support "
-+					 "discard, disabling -o fstrim");
-+			clear_opt2(sb, FSTRIM);
-+		}
-+	}
  
  	sbi->s_mb_max_to_scan = MB_DEFAULT_MAX_TO_SCAN;
  	sbi->s_mb_min_to_scan = MB_DEFAULT_MIN_TO_SCAN;
@@ -318,18 +325,6 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/mballoc.c
  	sbi->s_locality_groups = alloc_percpu(struct ext4_locality_group);
  	if (sbi->s_locality_groups == NULL) {
  		ret = -ENOMEM;
-@@ -3712,6 +3764,11 @@ int ext4_mb_release(struct super_block *
- 		WARN_ON_ONCE(!list_empty(&sbi->s_discard_list));
- 	}
- 
-+	if (test_opt2(sb, FSTRIM) && sbi->s_fstrim_task != NULL) {
-+		kthread_stop(sbi->s_fstrim_task);
-+		sbi->s_fstrim_task = NULL;
-+	}
-+
- 	if (sbi->s_group_info) {
- 		for (i = 0; i < ngroups; i++) {
- 			cond_resched();
 @@ -3877,6 +3934,11 @@ void ext4_process_freed_data(struct supe
  		list_for_each_entry_safe(entry, tmp, &freed_data_list, efd_list)
  			kmem_cache_free(ext4_free_data_cachep, entry);
@@ -405,7 +400,7 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/mballoc.c
  	ext4_unlock_group(sb, block_group);
  
  	if (sbi->s_log_groups_per_flex) {
-@@ -6794,6 +6894,84 @@ out_return:
+@@ -6794,6 +6894,120 @@ out_return:
  	return ret;
  }
  
@@ -485,6 +480,42 @@ Index: linux-5.14.0-284.30.1.el9_2/fs/ext4/mballoc.c
 +	}
 +
 +	return 0;
++}
++
++void ext4_mb_fstrim_start(struct super_block *sb)
++{
++	struct ext4_sb_info *sbi = EXT4_SB(sb);
++	int ret;
++
++	if (test_opt2(sb, FSTRIM)) {
++		if (bdev_max_discard_sectors(sb->s_bdev)) {
++			sbi->s_fstrim_task = kthread_run(ext4_mb_fstrim_thread,
++							 sb, "fstrim-%s",
++							 sb->s_id);
++			if (IS_ERR(sbi->s_fstrim_task)) {
++				ret = PTR_ERR(sbi->s_fstrim_task);
++				sbi->s_fstrim_task = NULL;
++				ext4_warning(sb, "Failed to create fstrim thread: %d, "
++						 "disabling -o fstrim", ret);
++				clear_opt2(sb, FSTRIM);
++			}
++		} else {
++			ext4_warning(sb, "mounting with \"fstrim\" option, "
++					 "but the device does not support "
++					 "discard, disabling -o fstrim");
++			clear_opt2(sb, FSTRIM);
++		}
++	}
++}
++
++void ext4_mb_fstrim_stop(struct super_block *sb)
++{
++	struct ext4_sb_info *sbi = EXT4_SB(sb);
++
++	if (sbi->s_fstrim_task) {
++		kthread_stop(sbi->s_fstrim_task);
++		sbi->s_fstrim_task = NULL;
++	}
 +}
 +
  /**
