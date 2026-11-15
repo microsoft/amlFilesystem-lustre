@@ -146,6 +146,35 @@ Index: linux-5.14.0-427.42.1.el9_4/fs/ext4/super.c
  failed_mount6:
 +	ext4_mb_fstrim_stop(sb);
  	ext4_mb_release(sb);
+@@ -6630,2 +6654,6 @@
+
++	/* stop fstrim before ro is set, or its journal handles fail */
++	if ((fc->sb_flags & SB_RDONLY) || !test_opt2(sb, FSTRIM))
++		ext4_mb_fstrim_stop(sb);
++
+ 	if ((bool)(fc->sb_flags & SB_RDONLY) != sb_rdonly(sb)) {
+@@ -6783,6 +6807,14 @@ static int __ext4_remount(struct fs_cont
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
+
++	if (test_opt(sb, DISCARD) && test_opt2(sb, FSTRIM)) {
++		ext4_msg(sb, KERN_WARNING,
++			 "fstrim overrides discard option");
++		clear_opt(sb, DISCARD);
++	}
++	/* start it for a rw,fstrim filesystem, unless running */
++	ext4_mb_fstrim_start(sb);
++
+ 	/*
+ 	 * Handle aborting the filesystem as the last thing during remount to
+ 	 * avoid obsure errors during remount when some option changes fail to
+@@ -6830,4 +6862,6 @@
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
++	/* restart it if the remount stopped it and then failed */
++	ext4_mb_fstrim_start(sb);
+ 	return err;
+ }
 Index: linux-6.12.0-124.40.1.el10_1/fs/ext4/ext4.h
 ===================================================================
 --- linux-6.12.0-124.40.1.el10_1.orig/fs/ext4/ext4.h
@@ -382,7 +411,7 @@ Index: linux-6.12.0-124.40.1.el10_1/fs/ext4/mballoc.c
  	ext4_unlock_group(sb, block_group);
  
  	/*
-@@ -7456,7 +7557,121 @@ ext4_trim_all_free(struct super_block *sb, ext4_group_
+@@ -7456,7 +7557,129 @@ ext4_trim_all_free(struct super_block *sb, ext4_group_
  
  	return ret;
  }
@@ -462,6 +491,11 @@ Index: linux-6.12.0-124.40.1.el10_1/fs/ext4/mballoc.c
 +		}
 +	}
 +
++	/* requeue the groups left on the batch when stopped */
++	spin_lock(&sbi->s_fstrim_groups_lock);
++	list_splice(&fstrim_groups, &sbi->s_fstrim_groups_ready);
++	spin_unlock(&sbi->s_fstrim_groups_lock);
++
 +	return 0;
 +}
 +
@@ -469,6 +503,9 @@ Index: linux-6.12.0-124.40.1.el10_1/fs/ext4/mballoc.c
 +{
 +	struct ext4_sb_info *sbi = EXT4_SB(sb);
 +	int ret;
++
++	if (sb_rdonly(sb) || sbi->s_fstrim_task)
++		return;
 +
 +	if (test_opt2(sb, FSTRIM)) {
 +		if (bdev_max_discard_sectors(sb->s_bdev)) {

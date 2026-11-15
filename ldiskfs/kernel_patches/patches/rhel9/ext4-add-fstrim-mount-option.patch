@@ -299,7 +299,7 @@ Index: linux-5.14.0-162.23.1.el9_1/fs/ext4/mballoc.c
  	ext4_unlock_group(sb, block_group);
  
  	if (sbi->s_log_groups_per_flex) {
-@@ -6788,6 +6888,120 @@ out_return:
+@@ -6788,6 +6888,128 @@ out_return:
  	return ret;
  }
  
@@ -378,6 +378,11 @@ Index: linux-5.14.0-162.23.1.el9_1/fs/ext4/mballoc.c
 +		}
 +	}
 +
++	/* requeue the groups left on the batch when stopped */
++	spin_lock(&sbi->s_fstrim_groups_lock);
++	list_splice(&fstrim_groups, &sbi->s_fstrim_groups_ready);
++	spin_unlock(&sbi->s_fstrim_groups_lock);
++
 +	return 0;
 +}
 +
@@ -385,6 +390,9 @@ Index: linux-5.14.0-162.23.1.el9_1/fs/ext4/mballoc.c
 +{
 +	struct ext4_sb_info *sbi = EXT4_SB(sb);
 +	int ret;
++
++	if (sb_rdonly(sb) || sbi->s_fstrim_task)
++		return;
 +
 +	if (test_opt2(sb, FSTRIM)) {
 +		if (bdev_max_discard_sectors(sb->s_bdev)) {
@@ -521,6 +529,35 @@ Index: linux-5.14.0-162.23.1.el9_1/fs/ext4/super.c
  failed_mount6:
 +	ext4_mb_fstrim_stop(sb);
  	ext4_mb_release(sb);
+@@ -6618,2 +6642,6 @@
+
++	/* stop fstrim before ro is set, or its journal handles fail */
++	if ((fc->sb_flags & SB_RDONLY) || !test_opt2(sb, FSTRIM))
++		ext4_mb_fstrim_stop(sb);
++
+ 	if ((bool)(fc->sb_flags & SB_RDONLY) != sb_rdonly(sb)) {
+@@ -6771,6 +6795,14 @@ static int __ext4_remount(struct fs_cont
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
+
++	if (test_opt(sb, DISCARD) && test_opt2(sb, FSTRIM)) {
++		ext4_msg(sb, KERN_WARNING,
++			 "fstrim overrides discard option");
++		clear_opt(sb, DISCARD);
++	}
++	/* start it for a rw,fstrim filesystem, unless running */
++	ext4_mb_fstrim_start(sb);
++
+ 	return 0;
+
+ restore_opts:
+@@ -6810,4 +6842,6 @@
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
++	/* restart it if the remount stopped it and then failed */
++	ext4_mb_fstrim_start(sb);
+ 	return err;
+ }
 Index: linux-5.14.0-162.23.1.el9_1/fs/ext4/sysfs.c
 ===================================================================
 --- linux-5.14.0-162.23.1.el9_1.orig/fs/ext4/sysfs.c

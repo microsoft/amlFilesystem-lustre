@@ -280,7 +280,7 @@ Index: linux-4.18.0-477.27.1.el8_8/fs/ext4/mballoc.c
  	ext4_unlock_group(sb, block_group);
  
  	if (sbi->s_log_groups_per_flex) {
-@@ -6709,6 +6810,121 @@ out_return:
+@@ -6709,6 +6810,129 @@ out_return:
  	return ret;
  }
  
@@ -359,6 +359,11 @@ Index: linux-4.18.0-477.27.1.el8_8/fs/ext4/mballoc.c
 +		}
 +	}
 +
++	/* requeue the groups left on the batch when stopped */
++	spin_lock(&sbi->s_fstrim_groups_lock);
++	list_splice(&fstrim_groups, &sbi->s_fstrim_groups_ready);
++	spin_unlock(&sbi->s_fstrim_groups_lock);
++
 +	return 0;
 +}
 +
@@ -366,6 +371,9 @@ Index: linux-4.18.0-477.27.1.el8_8/fs/ext4/mballoc.c
 +{
 +	struct ext4_sb_info *sbi = EXT4_SB(sb);
 +	int ret;
++
++	if (sb_rdonly(sb) || sbi->s_fstrim_task)
++		return;
 +
 +	if (test_opt2(sb, FSTRIM)) {
 +		struct request_queue *q = bdev_get_queue(sb->s_bdev);
@@ -489,6 +497,35 @@ Index: linux-4.18.0-477.27.1.el8_8/fs/ext4/super.c
  failed_mount6:
 +	ext4_mb_fstrim_stop(sb);
  	ext4_mb_release(sb);
+@@ -5720,2 +5744,6 @@
+
++	/* stop fstrim before ro is set, or its journal handles fail */
++	if ((*flags & SB_RDONLY) || !test_opt2(sb, FSTRIM))
++		ext4_mb_fstrim_stop(sb);
++
+ 	if ((bool)(*flags & SB_RDONLY) != sb_rdonly(sb)) {
+@@ -5862,6 +5886,14 @@ static int ext4_remount(struct super_blo
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
+
++	if (test_opt(sb, DISCARD) && test_opt2(sb, FSTRIM)) {
++		ext4_msg(sb, KERN_WARNING,
++			 "fstrim overrides discard option");
++		clear_opt(sb, DISCARD);
++	}
++	/* start it for a rw,fstrim filesystem, unless running */
++	ext4_mb_fstrim_start(sb);
++
+ 	/*
+ 	 * Some options can be enabled by ext4 and/or by VFS mount flag
+ 	 * either way we need to make sure it matches in both *flags and
+@@ -5899,4 +5931,6 @@
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
++	/* restart it if the remount stopped it and then failed */
++	ext4_mb_fstrim_start(sb);
+ 	kfree(orig_data);
+ 	return err;
 Index: linux-4.18.0-477.27.1.el8_8/fs/ext4/sysfs.c
 ===================================================================
 --- linux-4.18.0-477.27.1.el8_8.orig/fs/ext4/sysfs.c

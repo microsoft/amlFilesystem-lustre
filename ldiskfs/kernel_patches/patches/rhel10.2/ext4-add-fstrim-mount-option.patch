@@ -47,10 +47,10 @@ Reviewed-on: https://review.whamcloud.com/60235
 
 ---
  fs/ext4/ext4.h    |  26 ++++++-
- fs/ext4/mballoc.c | 191 ++++++++++++++++++++++++++++++++++++++++++++++
- fs/ext4/super.c   |  26 ++++++
+ fs/ext4/mballoc.c | 199 ++++++++++++++++++++++++++++++++++++++++++++++
+ fs/ext4/super.c   |  40 ++++++
  fs/ext4/sysfs.c   |   6 ++
- 4 files changed, 247 insertions(+), 2 deletions(-)
+ 4 files changed, 269 insertions(+), 2 deletions(-)
 
 diff --git a/fs/ext4/ext4.h b/fs/ext4/ext4.h
 --- a/fs/ext4/ext4.h
@@ -288,7 +288,7 @@ diff --git a/fs/ext4/mballoc.c b/fs/ext4/mballoc.c
  	ext4_unlock_group(sb, block_group);
  
  	/*
-@@ -7365,6 +7466,120 @@ ext4_trim_all_free(struct super_block *sb, ext4_group_t group,
+@@ -7365,6 +7466,128 @@ ext4_trim_all_free(struct super_block *sb, ext4_group_t group,
  	return ret;
  }
  
@@ -367,6 +367,11 @@ diff --git a/fs/ext4/mballoc.c b/fs/ext4/mballoc.c
 +		}
 +	}
 +
++	/* requeue the groups left on the batch when stopped */
++	spin_lock(&sbi->s_fstrim_groups_lock);
++	list_splice(&fstrim_groups, &sbi->s_fstrim_groups_ready);
++	spin_unlock(&sbi->s_fstrim_groups_lock);
++
 +	return 0;
 +}
 +
@@ -374,6 +379,9 @@ diff --git a/fs/ext4/mballoc.c b/fs/ext4/mballoc.c
 +{
 +	struct ext4_sb_info *sbi = EXT4_SB(sb);
 +	int ret;
++
++	if (sb_rdonly(sb) || sbi->s_fstrim_task)
++		return;
 +
 +	if (test_opt2(sb, FSTRIM)) {
 +		if (bdev_max_discard_sectors(sb->s_bdev)) {
@@ -509,6 +517,35 @@ diff --git a/fs/ext4/super.c b/fs/ext4/super.c
  failed_mount6:
 +	ext4_mb_fstrim_stop(sb);
  	ext4_mb_release(sb);
+@@ -6648,2 +6671,6 @@
+
++	/* stop fstrim before ro is set, or its journal handles fail */
++	if ((fc->sb_flags & SB_RDONLY) || !test_opt2(sb, FSTRIM))
++		ext4_mb_fstrim_stop(sb);
++
+ 	if ((bool)(fc->sb_flags & SB_RDONLY) != sb_rdonly(sb)) {
+@@ -6801,6 +6824,14 @@ static int __ext4_remount(struct fs_cont
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
+
++	if (test_opt(sb, DISCARD) && test_opt2(sb, FSTRIM)) {
++		ext4_msg(sb, KERN_WARNING,
++			 "fstrim overrides discard option");
++		clear_opt(sb, DISCARD);
++	}
++	/* start it for a rw,fstrim filesystem, unless running */
++	ext4_mb_fstrim_start(sb);
++
+ 	/*
+ 	 * Handle aborting the filesystem as the last thing during remount to
+ 	 * avoid obsure errors during remount when some option changes fail to
+@@ -6848,4 +6879,6 @@
+ 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
+ 		ext4_stop_mmpd(sbi);
++	/* restart it if the remount stopped it and then failed */
++	ext4_mb_fstrim_start(sb);
+ 	return err;
+ }
 diff --git a/fs/ext4/sysfs.c b/fs/ext4/sysfs.c
 --- a/fs/ext4/sysfs.c
 +++ b/fs/ext4/sysfs.c
