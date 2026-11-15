@@ -6763,15 +6763,17 @@ test_291() {
 	reinit_dlc || return $?
 	cleanup_lnet || return $?
 
-	local lnid cmd
+	local lnid cmd cpp
 
 	load_lnet "accept_port_bulk=989" || error "Failed to load LNet"
 
 	$LCTL net up $LNET_CONFIG_OPT ||
 		error "Failed to load LNet with accept_port_bulk=989"
 
-	$LNETCTL net show -v 1 | grep -q "conns_per_peer: 1" ||
-		error "failed to set conns-per-peer to 1"
+	# socklnd sets conns_per_peer from the link speed
+	cpp=$($LNETCTL net show -v 1 |
+	      awk '/conns_per_peer:/ { print $2; exit }')
+	(( cpp > 0 )) || error "bad conns_per_peer '$cpp'"
 	lnid="$(lctl list_nids | head -n 1)"
 	do_lnetctl ping "$lnid" ||
 		error "failed to ping myself"
@@ -6787,9 +6789,9 @@ test_291() {
 	# 12345-1.1.1.1@tcp C[0]host01->host01:1023 2626560/1061488 nonagle
 	cmd="printf 'network tcp\nconn_list\n' | lctl | grep -c ':989'"
 
-	# Expect one bulk connection on port 989
-	wait_update $HOSTNAME "$cmd" "1" 10 ||
-		error "expected 1 tcp connection on port 989"
+	# Expect one bulk connection on port 989 per conns_per_peer
+	wait_update $HOSTNAME "$cmd" "$cpp" 10 ||
+		error "expected $cpp tcp connections on port 989"
 
 	cleanup_lnet || return $?
 }
@@ -6812,15 +6814,21 @@ test_292() {
 
 	(( bulk_port == 7988 )) || error "accept_port_bulk=$bulk_port != 7988"
 
+	local cpp=$($LNETCTL net show -v 1 |
+		    awk '/conns_per_peer:/ { print $2; exit }')
+
+	(( cpp > 0 )) || error "bad conns_per_peer '$cpp'"
+
 	local lnid="$(lctl list_nids | head -n 1)"
 
 	do_lnetctl ping "$lnid" || error "failed to ping myself"
 
-	# one control and one bulk conn to the acceptor, as in test_291
+	# one control conn and conns_per_peer bulk conns to the
+	# acceptor, as in test_291
 	local cmd="printf 'network tcp\nconn_list\n' | lctl | grep -c ':7988'"
 
-	wait_update $HOSTNAME "$cmd" "2" 10 ||
-		error "expected 2 tcp connections on port 7988"
+	wait_update $HOSTNAME "$cmd" "$((1 + cpp))" 10 ||
+		error "expected $((1 + cpp)) tcp connections on port 7988"
 	# also listen on port 988 for 2.17 peers, until 2.19.53
 	if (( CLIENT_VERSION < $(version_code 2.19.53) )); then
 		ss -ltn | grep -q ':988 ' || error "no listener on port 988"
