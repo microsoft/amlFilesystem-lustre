@@ -25,9 +25,9 @@ liblustreapi library in C, test scripts in bash, and Rust bindings in
   documented in the Lustre Operations Manual,
   https://doc.lustre.org/lustre_manual.xhtml.
 - Supported client and server kernels are listed at the top of
-  `lustre/ChangeLog`.  The oldest is RHEL 8 (4.18 with backports);
-  differences between kernels are handled by configure checks and the
-  compat headers (see the lustre-coding-style skill).
+  `lustre/ChangeLog`.  Differences between kernels are handled by
+  configure checks and the compat headers (see the lustre-coding-style
+  skill).
 - `Documentation/versioning.txt` explains version numbers and the
   compatibility promised between them.
 

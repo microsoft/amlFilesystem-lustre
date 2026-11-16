@@ -162,8 +162,9 @@ guide is https://wiki.lustre.org/Lustre_Coding_Style_Guidelines.
 
 ## Kernel compatibility and autoconf/configure
 
-- The oldest supported kernel on master is RHEL 8 (4.18 with backports);
-  see the top of `lustre/ChangeLog` for kernels supported by the current branch.
+- The kernels and distros supported by the current branch are listed at
+  the top of `lustre/ChangeLog`; check there rather than assuming a
+  minimum kernel version.
 - Detect the *new* kernel API, not the removal of the old one, and put
   the difference in a helper named after the new API.  No `#ifdef` inside
   function bodies.
@@ -235,8 +236,16 @@ guide is https://wiki.lustre.org/Lustre_Coding_Style_Guidelines.
 - Create `.4` pages only for parameters that actually exist, named as
   they appear, e.g. `mdc.<param>.4`.  Don't add a top-level `<param>.4`
   for the `.so` links of per-device pages to point at unless there is
-  also a global parameter of that name: `at_min.4` exists only because
-  `at_min` is both a global and a per-device parameter.
+  also a global parameter of that name.  `at_min.4` exists only because
+  it is both a global and a per-device parameter, and should **not** be
+  followed as an example of where most multi-device man4 pages should
+  be stored.
+- For a parameter on both clients and servers, put the content in the
+  page that a client install keeps (e.g. `mdc.<param>.4`) and make the
+  server pages (`mdt.`, `ost.`, `osd-*`, ...) `.so` links to it.  A
+  client-only build drops the server pages listed in
+  `SERVER_MANFILES` in `Documentation/man4/Makefile.am`, which should
+  remove only the links, never the content.
 
 ## Man pages
 

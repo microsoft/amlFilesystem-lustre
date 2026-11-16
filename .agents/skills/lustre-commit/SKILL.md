@@ -59,7 +59,7 @@ ln -sf ../../contrib/git-hooks/{prepare-,}commit-msg .git/hooks/
 - First paragraph: the problem, concretely: what fails, under what
   conditions, and the error message or stack if there is one.  Write
   the behaviour the patch changes in the past tense ("held", "called",
-  "would fail"), since it is no longer true once the patch lands, so
+  "failed"), since it is no longer true once the patch lands, so
   it is not mistaken for what the patch implements.
 - Then the fix, in the imperative ("Add ...", "Fix ...", "Allow ...").
   Name the key functions or tunables, not every function touched.  Use
@@ -142,7 +142,9 @@ Change-Id: I<40 hex digits>
 ## Test-Parameters
 
 Every patch gets the default CI test sessions.  `Test-Parameters:` lines
-change or add to them; the syntax is described at
+only add sessions to them; only keywords such as `trivial`,
+`fortestonly`, `forbuildonly` or `ignore` reduce or skip the default
+set.  The syntax is described at
 https://wiki.whamcloud.com/display/PUB/Changing+Test+Parameters+with+Gerrit+Commit+Messages.
 Each session spends 20-30 minutes setting up its nodes before any test
 runs, a full patch test run costs hundreds of node-hours, and every extra
@@ -183,6 +185,14 @@ Choosing:
   `fstype=zfs`, `clientarch=aarch64`, interop with `clientversion=` or
   `serverversion=`, DNE with `mdscount=`/`mdtcount=`, or repeating a test
   the patch doesn't modify.
+- Without `trivial`, a full run already includes nearly every suite
+  (sanity*, sanityn, conf-sanity, recovery-small, replay-*, insanity,
+  ost-pools, ...) in both ldiskfs DNE and ZFS DNE groups, so a
+  `testlist=` naming one of them only duplicates sessions.  For a full
+  run, "another suite" means one that is not in it, such as racer,
+  sanity-compr, sanity-krb5 or parallel-scale, and `mdscount=`/
+  `mdtcount=` is only for a DNE layout the review-dne groups don't use,
+  not for re-running suites they already cover.
 - Use one `Test-Parameters:` line per test script so the sessions run in
   parallel.  Given the setup time, make each run at least 30 minutes:
   `ONLY_MINUTES=30` for fast subtests, or `ONLY_REPEAT=N` for slow ones,
