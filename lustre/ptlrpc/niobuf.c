@@ -888,7 +888,7 @@ static void kick_cpu_latency(void)
 	 * does not miss this send
 	 */
 	if (!delayed_work_pending(&latency_qos->delayed_work))
-		queue_delayed_work(system_highpri_wq,
+		queue_delayed_work(ptlrpc_pmqos_wq,
 				   &latency_qos->delayed_work, 0);
 }
 

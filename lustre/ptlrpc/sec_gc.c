@@ -83,7 +83,7 @@ void sptlrpc_gc_add_ctx(struct ptlrpc_cli_ctx *ctx)
 	list_add(&ctx->cc_gc_chain, &sec_gc_ctx_list);
 	spin_unlock(&sec_gc_ctx_list_lock);
 
-	mod_delayed_work(system_wq, &sec_gc_work, 0);
+	mod_delayed_work(system_dfl_wq, &sec_gc_work, 0);
 }
 EXPORT_SYMBOL(sptlrpc_gc_add_ctx);
 
@@ -163,12 +163,14 @@ again:
 
 	/* check ctx list again before sleep */
 	sec_process_ctx_list();
-	schedule_delayed_work(&sec_gc_work, cfs_time_seconds(SEC_GC_INTERVAL));
+	queue_delayed_work(system_dfl_wq, &sec_gc_work,
+			   cfs_time_seconds(SEC_GC_INTERVAL));
 }
 
 int sptlrpc_gc_init(void)
 {
-	schedule_delayed_work(&sec_gc_work, cfs_time_seconds(SEC_GC_INTERVAL));
+	queue_delayed_work(system_dfl_wq, &sec_gc_work,
+			   cfs_time_seconds(SEC_GC_INTERVAL));
 	return 0;
 }
 

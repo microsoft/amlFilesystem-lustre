@@ -93,6 +93,7 @@ static void lu_object_free(const struct lu_env *env, struct lu_object *o);
 static __u32 ls_stats_read(struct lprocfs_stats *stats, int idx);
 
 static struct delayed_work lu_site_flush;
+static struct workqueue_struct *lu_site_flush_wq;
 
 
 u32 lu_fid_hash(const void *data, u32 len, u32 seed)
@@ -2159,12 +2160,13 @@ static void lu_objects_flush(struct work_struct *work)
 	}
 	up_read(&lu_sites_guard);
 
-	queue_delayed_work(system_long_wq, &lu_site_flush, HZ);
+	queue_delayed_work(lu_site_flush_wq, &lu_site_flush,
+			   cfs_time_seconds(1));
 }
 
 void lu_objects_destroy_delayed(void)
 {
-	mod_delayed_work(system_long_wq, &lu_site_flush, 0);
+	mod_delayed_work(lu_site_flush_wq, &lu_site_flush, 0);
 	flush_delayed_work(&lu_site_flush);
 }
 EXPORT_SYMBOL(lu_objects_destroy_delayed);
@@ -2317,11 +2319,21 @@ int __init lu_global_init(void)
 	if (result)
 		goto out_shrinker;
 
+	lu_site_flush_wq = alloc_workqueue("lu_site_flush",
+					   WQ_UNBOUND | WQ_SYSFS, 0);
+	if (!lu_site_flush_wq) {
+		result = -ENOMEM;
+		goto out_rhash;
+	}
+
 	INIT_DELAYED_WORK(&lu_site_flush, lu_objects_flush);
-	queue_delayed_work(system_long_wq, &lu_site_flush, HZ);
+	queue_delayed_work(lu_site_flush_wq, &lu_site_flush,
+			   cfs_time_seconds(1));
 
 	return result;
 
+out_rhash:
+	rhashtable_destroy(&lu_env_rhash);
 out_shrinker:
 	ll_shrinker_free(lu_site_shrinker);
 out_env:
@@ -2339,6 +2351,7 @@ out:
 void lu_global_fini(void)
 {
 	cancel_delayed_work_sync(&lu_site_flush);
+	destroy_workqueue(lu_site_flush_wq);
 	ll_shrinker_free(lu_site_shrinker);
 
 	lu_context_key_degister(&lu_global_key);

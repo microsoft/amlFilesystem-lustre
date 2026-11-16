@@ -78,6 +78,8 @@ struct cpu_latency_qos {
 	atomic64_t max_send_delay;
 };
 
+extern struct workqueue_struct *ptlrpc_pmqos_wq;
+
 /* system wide PM QoS management */
 extern struct cpu_latency_qos ptlrpc_cpu_latency_qos;
 

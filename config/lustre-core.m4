@@ -4050,6 +4050,30 @@ AC_DEFUN([LC_HAVE_WQ_PERCPU], [
 ]) # LC_HAVE_WQ_PERCPU
 
 #
+# LC_HAVE_SYSTEM_DFL_WQ
+#
+# Linux commit v6.15-1-g128ea9f6ccfb
+#   workqueue: Add system_percpu_wq and system_dfl_wq
+# Linux 7.2 warns when work is queued on system_unbound_wq
+# (v7.1-rc2-379-g64d8eae3f895)
+#
+AC_DEFUN([LC_SRC_HAVE_SYSTEM_DFL_WQ], [
+	LB2_LINUX_TEST_SRC([system_dfl_wq], [
+		#include <linux/workqueue.h>
+	],[
+		struct workqueue_struct *wq = system_dfl_wq;
+
+		(void)wq;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SYSTEM_DFL_WQ], [
+	LB2_MSG_LINUX_TEST_RESULT([if system_dfl_wq is available],
+	[system_dfl_wq], [
+		AC_DEFINE(HAVE_SYSTEM_DFL_WQ, 1, [system_dfl_wq is available])
+	])
+]) # LC_HAVE_SYSTEM_DFL_WQ
+
+#
 # LC_PROG_LINUX
 #
 # Lustre linux kernel checks
@@ -4248,6 +4272,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_VFS_MMAP_PREPARE
 	LC_SRC_HAVE_CAN_MMAP_FILE
 	LC_SRC_HAVE_WQ_PERCPU
+	LC_SRC_HAVE_SYSTEM_DFL_WQ
 
 	# 6.18
 	LC_SRC_HAVE_INODE_JUST_DROP
@@ -4487,6 +4512,7 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_HAVE_VFS_MMAP_PREPARE
 	LC_HAVE_CAN_MMAP_FILE
 	LC_HAVE_WQ_PERCPU
+	LC_HAVE_SYSTEM_DFL_WQ
 
 	# 6.18
 	LC_HAVE_INODE_JUST_DROP

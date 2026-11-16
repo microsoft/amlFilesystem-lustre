@@ -188,15 +188,15 @@ static void jobid_prune(struct work_struct *work)
 	rhashtable_walk_stop(&iter);
 	rhashtable_walk_exit(&iter);
 	if (remaining)
-		schedule_delayed_work(&jobid_prune_work,
-				      cfs_time_seconds(JOBID_BACKGROUND_CLEAN));
+		queue_delayed_work(system_dfl_wq, &jobid_prune_work,
+				   cfs_time_seconds(JOBID_BACKGROUND_CLEAN));
 }
 
 static void jobid_prune_expedite(void)
 {
 	/* submit the work only once */
 	if (!cmpxchg(&jobid_prune_expedited, 0, 1))
-		mod_delayed_work(system_wq, &jobid_prune_work,
+		mod_delayed_work(system_dfl_wq, &jobid_prune_work,
 				 cfs_time_seconds(JOBID_EXPEDITED_CLEAN));
 }
 
@@ -471,8 +471,8 @@ static void jobid_pidmap_gc(struct work_struct *work)
 	if (atomic_read(&jobid_hash->hs_count) == 0)
 		jobid_pidmap_gc_started = 0;
 	else
-		schedule_delayed_work(&jobid_pidmap_gc_work,
-				      cfs_time_seconds(DELETE_INTERVAL));
+		queue_delayed_work(system_dfl_wq, &jobid_pidmap_gc_work,
+				   cfs_time_seconds(DELETE_INTERVAL));
 
 	cfs_hash_putref(hash);
 }
@@ -482,8 +482,8 @@ static inline void jobid_pidmap_gc_start(void)
 {
 	/* submit the work only once */
 	if (!cmpxchg(&jobid_pidmap_gc_started, 0, 1))
-		schedule_delayed_work(&jobid_pidmap_gc_work,
-				      cfs_time_seconds(DELETE_INTERVAL));
+		queue_delayed_work(system_dfl_wq, &jobid_pidmap_gc_work,
+				   cfs_time_seconds(DELETE_INTERVAL));
 }
 
 

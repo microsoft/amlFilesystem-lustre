@@ -35,6 +35,10 @@ int compat_apply_workqueue_attrs(struct workqueue_struct *wq,
 #define WQ_PERCPU	0
 #endif
 
+#ifndef HAVE_SYSTEM_DFL_WQ
+#define system_dfl_wq	system_unbound_wq
+#endif
+
 #ifndef HAVE_FLUSH___WORKQUEUE
 #define __flush_workqueue(wq)  flush_scheduled_work()
 #endif

@@ -3115,7 +3115,7 @@ void ptlrpc_watchdog_init(struct delayed_work *work, timeout_t timeout)
 
 	thread->t_touched = ktime_get();
 	INIT_DELAYED_WORK(work, ptlrpc_watchdog_fire);
-	schedule_delayed_work(work, cfs_time_seconds(timeout));
+	queue_delayed_work(system_dfl_wq, work, cfs_time_seconds(timeout));
 }
 
 static void ptlrpc_watchdog_update(struct delayed_work *work, const char *msg)
@@ -3147,7 +3147,7 @@ static void ptlrpc_watchdog_update(struct delayed_work *work, const char *msg)
 void ptlrpc_watchdog_touch(struct delayed_work *work, timeout_t timeout)
 {
 	ptlrpc_watchdog_update(work, "resumed");
-	mod_delayed_work(system_wq, work, cfs_time_seconds(timeout));
+	mod_delayed_work(system_dfl_wq, work, cfs_time_seconds(timeout));
 }
 
 void ptlrpc_watchdog_disable(struct delayed_work *work)

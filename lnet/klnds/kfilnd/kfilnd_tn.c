@@ -527,8 +527,11 @@ static void kfilnd_tn_timeout(struct timer_list *data)
 {
 	struct kfilnd_transaction *tn = timer_container_of(tn, data,
 							   timeout_timer);
+	unsigned int cpu =
+		cpumask_first(*cfs_cpt_cpumask(lnet_cpt_table(),
+					       tn->tn_ep->end_cpt));
 
-	queue_work(kfilnd_wq, &tn->timeout_work);
+	queue_work_on(cpu, kfilnd_wq, &tn->timeout_work);
 }
 
 static bool kfilnd_tn_timeout_cancel(struct kfilnd_transaction *tn)

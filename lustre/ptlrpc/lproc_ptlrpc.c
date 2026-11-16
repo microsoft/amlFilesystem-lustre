@@ -1503,7 +1503,7 @@ enable_pmqos_store(struct kobject *kobj, struct attribute *attr,
 	/* release the constraint now, not at the next run of the work item */
 	if (old && !val) {
 		cancel_delayed_work_sync(&ptlrpc_cpu_latency_qos.delayed_work);
-		queue_delayed_work(system_highpri_wq,
+		queue_delayed_work(ptlrpc_pmqos_wq,
 				   &ptlrpc_cpu_latency_qos.delayed_work, 0);
 	}
 

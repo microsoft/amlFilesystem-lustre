@@ -145,7 +145,7 @@ static void ctx_upcall_timeout_kr(struct timer_list *data)
 	/* imp_lock must not be taken from this softirq so fail any connect
 	 * request associated with this ctx in a worker
 	 */
-	schedule_work(&gctx_kr->gck_work);
+	queue_work(system_dfl_wq, &gctx_kr->gck_work);
 }
 
 static void ctx_start_timer_kr(struct ptlrpc_cli_ctx *ctx, time64_t timeout)

@@ -1331,7 +1331,8 @@ static void ldlm_pools_recalc_task(struct work_struct *ws)
 		delay = 1;
 	}
 
-	schedule_delayed_work(&ldlm_pools_recalc_work, cfs_time_seconds(delay));
+	queue_delayed_work(system_dfl_wq, &ldlm_pools_recalc_work,
+			   cfs_time_seconds(delay));
 }
 
 static bool ldlm_pools_init_done;
@@ -1370,7 +1371,8 @@ int ldlm_pools_init(void)
 
 	ll_shrinker_register(ldlm_pools_cli_shrinker);
 
-	schedule_delayed_work(&ldlm_pools_recalc_work, delay);
+	queue_delayed_work(system_dfl_wq, &ldlm_pools_recalc_work,
+			   cfs_time_seconds(delay));
 	ldlm_pools_init_done = true;
 	RETURN(0);
 

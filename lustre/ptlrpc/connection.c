@@ -26,6 +26,7 @@ static struct rhashtable conn_hash;
 
 /* system wide PM QoS management */
 struct cpu_latency_qos ptlrpc_cpu_latency_qos;
+struct workqueue_struct *ptlrpc_pmqos_wq;
 
 /*
  * struct lnet_process_id may contain unassigned bytes which might not
@@ -108,7 +109,7 @@ static void cpu_latency_work(struct work_struct *work)
 		       "PM QoS request now active, delay %llu, timeout %llu\n",
 		       delay, timeout);
 		/* just added, give it a whole window before looking again */
-		mod_delayed_work(system_highpri_wq,
+		mod_delayed_work(ptlrpc_pmqos_wq,
 				 &latency_qos->delayed_work, timeout);
 		return;
 	}
@@ -128,7 +129,7 @@ static void cpu_latency_work(struct work_struct *work)
 	 * look again exactly when the silence would be complete, the check
 	 * above just proved that instant is still ahead of us
 	 */
-	mod_delayed_work(system_highpri_wq, &latency_qos->delayed_work,
+	mod_delayed_work(ptlrpc_pmqos_wq, &latency_qos->delayed_work,
 			 last + timeout - now);
 	return;
 
@@ -255,9 +256,20 @@ static void ptlrpc_latency_req_init(struct cpu_latency_qos *lq)
 
 int ptlrpc_connection_init(void)
 {
+	int rc;
+
+	ptlrpc_pmqos_wq = alloc_workqueue("ptlrpc_pmqos",
+					  WQ_UNBOUND | WQ_HIGHPRI, 0);
+	if (!ptlrpc_pmqos_wq)
+		return -ENOMEM;
+
 	ptlrpc_latency_req_init(&ptlrpc_cpu_latency_qos);
 
-	return rhashtable_init(&conn_hash, &conn_hash_params);
+	rc = rhashtable_init(&conn_hash, &conn_hash_params);
+	if (rc)
+		destroy_workqueue(ptlrpc_pmqos_wq);
+
+	return rc;
 }
 
 static void ptlrpc_latency_req_fini(struct cpu_latency_qos *lq)
@@ -284,4 +296,5 @@ void ptlrpc_connection_fini(void)
 	rhashtable_free_and_destroy(&conn_hash, conn_exit, NULL);
 
 	ptlrpc_latency_req_fini(&ptlrpc_cpu_latency_qos);
+	destroy_workqueue(ptlrpc_pmqos_wq);
 }

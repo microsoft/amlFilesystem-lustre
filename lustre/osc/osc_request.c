@@ -948,16 +948,17 @@ static void osc_grant_work_handler(struct work_struct *data)
 	if (next_shrink > ktime_get_seconds()) {
 		time64_t delay = next_shrink - ktime_get_seconds();
 
-		schedule_delayed_work(&work, cfs_time_seconds(delay));
+		queue_delayed_work(system_dfl_wq, &work,
+				   cfs_time_seconds(delay));
 	} else {
-		schedule_work(&work.work);
+		queue_work(system_dfl_wq, &work.work);
 	}
 }
 
 void osc_schedule_grant_work(void)
 {
 	cancel_delayed_work_sync(&work);
-	schedule_work(&work.work);
+	queue_work(system_dfl_wq, &work.work);
 }
 EXPORT_SYMBOL(osc_schedule_grant_work);
 
@@ -971,7 +972,7 @@ static int osc_start_grant_work(void)
 	INIT_LIST_HEAD(&client_gtd.gtd_clients);
 
 	INIT_DELAYED_WORK(&work, osc_grant_work_handler);
-	schedule_work(&work.work);
+	queue_work(system_dfl_wq, &work.work);
 
 	return 0;
 }
