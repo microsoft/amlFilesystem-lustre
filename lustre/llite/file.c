@@ -56,6 +56,9 @@ struct swap_layouts_param {
 	struct inode *slp_inode;
 	__u64         slp_dv1;
 	__u64         slp_dv2;
+	/* OST objects of a single-object swap, or zero */
+	struct lu_fid slp_fid1;
+	struct lu_fid slp_fid2;
 };
 
 static int
@@ -136,8 +139,8 @@ static void ll_prepare_close(struct inode *inode, struct md_op_data *op_data,
  *
  * If \a bias is MDS_HSM_RELEASE then \a data is a pointer to the data version.
  * If \a bias is MDS_CLOSE_LAYOUT_SWAP then \a data is a pointer to a
- * struct swap_layouts_param containing the inode to swap with and the old and
- * new dataversion
+ * struct swap_layouts_param containing the inode to swap with, the old and
+ * new dataversion, and for a single-object swap the two OST objects
  */
 static int ll_close_inode_openhandle(struct inode *inode,
 				     struct obd_client_handle *och,
@@ -196,6 +199,8 @@ static int ll_close_inode_openhandle(struct inode *inode,
 		op_data->op_fid2 = *ll_inode2fid(slp->slp_inode);
 		op_data->op_data_version = slp->slp_dv1;
 		op_data->op_data_version2 = slp->slp_dv2;
+		op_data->op_fid3 = slp->slp_fid1;
+		op_data->op_fid4 = slp->slp_fid2;
 		break;
 	}
 
@@ -1652,25 +1657,18 @@ static int ll_swap_layouts_close(struct obd_client_handle *och,
 				 struct inode *inode, struct inode *inode2,
 				 struct lustre_swap_layouts_fid *lsl)
 {
-	const struct lu_fid *fid1 = ll_inode2fid(inode);
 	struct swap_layouts_param slp;
-	const struct lu_fid *fid2;
 	int  rc;
 
 	ENTRY;
 	CDEBUG(D_INODE, "%s: biased close of file "DFID"\n",
-	       ll_i2sbi(inode)->ll_fsname, PFID(fid1));
+	       ll_i2sbi(inode)->ll_fsname, PFID(ll_inode2fid(inode)));
 
-	rc = ll_check_swap_layouts_validity(inode, inode2);
-	if (rc < 0)
-		GOTO(out_free_och, rc);
-
-	/* We now know that inode2 is a lustre inode */
-	fid2 = ll_inode2fid(inode2);
-
-	rc = lu_fid_cmp(fid1, fid2);
-	if (rc == 0)
-		GOTO(out_free_och, rc = -EINVAL);
+	memset(&slp, 0, sizeof(slp));
+	if (lsl->sl_flags & SWAP_LAYOUTS_SINGLE_STRIPE) {
+		slp.slp_fid1 = lsl->sl_fid1;
+		slp.slp_fid2 = lsl->sl_fid2;
+	}
 
 	/* Close the file and {swap,merge} layouts between inode & inode2.
 	 * NB: local lease handle is released in mdc_close_intent_pack()
@@ -1680,11 +1678,6 @@ static int ll_swap_layouts_close(struct obd_client_handle *och,
 	slp.slp_dv1 = lsl->sl_dv1;
 	slp.slp_dv2 = lsl->sl_dv2;
 	rc = ll_close_inode_openhandle(inode, och, MDS_CLOSE_LAYOUT_SWAP, &slp);
-
-	och = NULL; /* freed in ll_close_inode_openhandle() */
-
-out_free_och:
-	OBD_FREE_PTR(och);
 
 	RETURN(rc);
 }
@@ -5243,23 +5236,6 @@ ll_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if ((file2->f_flags & O_ACCMODE) == O_RDONLY)
 			GOTO(out, rc = -EPERM);
 
-		/*
-		 * CLOSE swaps the full layouts via the lease-close path
-		 * (ll_swap_layouts_close() -> struct swap_layouts_param ->
-		 * MDS_CLOSE_LAYOUT_SWAP), which only carries slp_dv1/slp_dv2
-		 * and has no sl_fid1/sl_fid2 equivalent, so single-stripe
-		 * swap cannot be combined with CLOSE yet. This is a current
-		 * limitation, not a permanent restriction: supporting it
-		 * would require extending struct close_data /
-		 * mdt_close_handle_layouts() to carry the OST object FIDs.
-		 * Until then, single-stripe swap must use the normal
-		 * ll_swap_layouts() path.
-		 */
-		if ((lsl.sl_flags & (SWAP_LAYOUTS_CLOSE |
-				     SWAP_LAYOUTS_SINGLE_STRIPE)) ==
-		    (SWAP_LAYOUTS_CLOSE | SWAP_LAYOUTS_SINGLE_STRIPE))
-			GOTO(out, rc = -EINVAL);
-
 		/* Historical ioctl has no FID fields */
 		if (cmd == LL_IOC_LOV_SWAP_LAYOUTS &&
 		    (lsl.sl_flags & SWAP_LAYOUTS_SINGLE_STRIPE))
@@ -5267,8 +5243,35 @@ ll_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		if (lsl.sl_flags & SWAP_LAYOUTS_CLOSE) {
 			struct obd_client_handle *och = NULL;
+			struct obd_export *exp = ll_i2mdexp(inode);
 			struct ll_inode_info *lli;
 			struct inode *inode2;
+
+			/*
+			 * A single-object swap at close needs an MDT that
+			 * reads the OST objects from the close data, or it
+			 * would swap the whole layouts.
+			 */
+			if (lsl.sl_flags & SWAP_LAYOUTS_SINGLE_STRIPE &&
+			    !OCD_HAS_FLAG2(&exp->exp_connect_data,
+					   ONE_OBJ_SWAP))
+				GOTO(out, rc = -EOPNOTSUPP);
+			if (lsl.sl_flags & SWAP_LAYOUTS_SINGLE_STRIPE &&
+			    (fid_is_zero(&lsl.sl_fid1) ||
+			     fid_is_zero(&lsl.sl_fid2)))
+				GOTO(out, rc = -EINVAL);
+
+			/*
+			 * Before the lease is taken from the file: past that
+			 * the close is the only way to give it back.
+			 */
+			inode2 = file_inode(file2);
+			rc = ll_check_swap_layouts_validity(inode, inode2);
+			if (rc < 0)
+				GOTO(out, rc);
+			if (lu_fid_eq(ll_inode2fid(inode),
+				      ll_inode2fid(inode2)))
+				GOTO(out, rc = -EINVAL);
 
 			lli = ll_i2info(inode);
 			mutex_lock(&lli->lli_och_mutex);
@@ -5279,7 +5282,6 @@ ll_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			mutex_unlock(&lli->lli_och_mutex);
 			if (och == NULL)
 				GOTO(out, rc = -ENOLCK);
-			inode2 = file_inode(file2);
 			rc = ll_swap_layouts_close(och, inode, inode2, &lsl);
 		} else {
 			rc = ll_swap_layouts(file, file2, &lsl);

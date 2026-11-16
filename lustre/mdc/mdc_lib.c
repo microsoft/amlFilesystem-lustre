@@ -566,7 +566,13 @@ static void mdc_close_intent_pack(struct req_capsule *pill,
 	} else if (bias & MDS_PCC_ATTACH) {
 		data->cd_archive_id = op_data->op_archive_id;
 	} else if (bias & MDS_CLOSE_LAYOUT_SWAP) {
-		data->cd_data_version2 = op_data->op_data_version2;
+		data->cd_swap.cso_data_version2 = op_data->op_data_version2;
+		/* the OST objects of a single-object swap */
+		if (!fid_is_zero(&op_data->op_fid3)) {
+			data->cd_swap.cso_flags = SWAP_LAYOUTS_SINGLE_STRIPE;
+			data->cd_swap.cso_fid1 = op_data->op_fid3;
+			data->cd_swap.cso_fid2 = op_data->op_fid4;
+		}
 	}
 }
 

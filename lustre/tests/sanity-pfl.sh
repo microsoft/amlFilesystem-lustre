@@ -3025,6 +3025,70 @@ test_29c() {
 }
 run_test 29c "failed single-stripe swap rolls back both files' layouts"
 
+test_29d() {
+	(( MDS1_VERSION >= $(version_code 2.17.62.1) )) ||
+		skip "need MDS >= 2.17.62.1 for single-stripe swap at close"
+	(( OSTCOUNT >= 2 )) || skip_env "needs >= 2 OSTs"
+
+	local file1=$DIR/$tdir/file1
+	local file2=$DIR/$tdir/file2
+	local fid1 fid2
+
+	# OST object FID of stripe N of a composite file, from the yaml
+	# getstripe lines "-   0: { l_ost_idx: 0, l_fid: [0x..:0x..:0x0] }"
+	get_ost_fid() {
+		$LFS getstripe -v $1 | awk -v i="$2" '
+			$1 == "-" && $2 == (i ":") {
+				sub(/.*l_fid: */, "")
+				sub(/\}.*/, "")
+				print
+			}'
+	}
+
+	mkdir -p $DIR/$tdir || error "mkdir failed"
+	$LFS setstripe -E -1 -S 1M -c 2 -o 0,1 $file1 ||
+		error "setstripe $file1 failed"
+	$LFS setstripe -E -1 -S 1M -c 1 -o 1 $file2 ||
+		error "setstripe $file2 failed"
+	tr "\000" "\001" < /dev/zero | dd bs=1M count=1 iflag=fullblock \
+		of=$file1 2>/dev/null
+	tr "\000" "\002" < /dev/zero | dd bs=1M count=1 seek=1 \
+		iflag=fullblock of=$file1 2>/dev/null
+	tr "\000" "\003" < /dev/zero | dd bs=1M count=1 iflag=fullblock \
+		of=$file2 2>/dev/null
+
+	fid1=$(get_ost_fid $file1 0)
+	fid2=$(get_ost_fid $file2 0)
+	[[ -n "$fid1" && -n "$fid2" ]] ||
+		error "failed to get OST FIDs: '$fid1' '$fid2'"
+
+	# an open for write breaks the lease, so nothing is swapped
+	$LUSTRE/tests/swap_single_stripe -c -b $file1 "$fid1" $file2 "$fid2" &&
+		error "swap at close with a broken lease should fail"
+	[[ "$(get_ost_fid $file1 0)" == "$fid1" ]] ||
+		error "$file1 stripe 0 changed after a broken lease"
+	[[ "$(get_ost_fid $file2 0)" == "$fid2" ]] ||
+		error "$file2 stripe 0 changed after a broken lease"
+
+	$LUSTRE/tests/swap_single_stripe -c $file1 "$fid1" $file2 "$fid2" ||
+		error "swap at close failed"
+	[[ "$(get_ost_fid $file1 0)" == "$fid2" ]] ||
+		error "$file1 stripe 0 is not $fid2 after the swap"
+	[[ "$(get_ost_fid $file2 0)" == "$fid1" ]] ||
+		error "$file2 stripe 0 is not $fid1 after the swap"
+	[[ "$(get_ost_fid $file1 1)" != "" ]] ||
+		error "$file1 lost stripe 1"
+
+	cancel_lru_locks osc
+	od -t x1 -Ax $file1 | grep -q "^000000 03" ||
+		error "$file1 does not start with the data of $file2"
+	od -t x1 -Ax $file1 | grep -q "^100000 02" ||
+		error "$file1 stripe 1 data changed"
+	od -t x1 -Ax $file2 | grep -q "^000000 01" ||
+		error "$file2 does not start with the data of $file1"
+}
+run_test 29d "swap single stripe at lease close"
+
 test_100a() {
 	compression_supported || skip "server does not support data compression"
 

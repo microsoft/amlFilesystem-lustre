@@ -532,7 +532,13 @@ int llapi_group_unlock64(int fd, __u64 gid)
  *	   SWAP_LAYOUTS_CHECK_DV1, and SWAP_LAYOUTS_CHECK_DV2.
  *	   CHECK_DV* make ll_swap_layouts() return -EAGAIN if either file
  *	   changed since the versions were captured. WITH_DV12 alone only
- *	   transmits the versions. SWAP_LAYOUTS_CLOSE is not supported.
+ *	   transmits the versions.  With SWAP_LAYOUTS_CLOSE the swap is
+ *	   done when the lease on @fd_src is closed, and only if no open
+ *	   broke it; the data versions are not checked then, so the
+ *	   caller compares them before.  The lease is released once the
+ *	   close is sent, whatever its result; an error before that
+ *	   leaves it on @fd_src.  The errno does not say which, so after
+ *	   an error the caller releases it and ignores -ENOLCK.
  *
  * Objects are identified by OST FID (not layout index) so a concurrent
  * component rewrite cannot redirect the swap. Today migrate_stripe uses a
@@ -542,6 +548,9 @@ int llapi_group_unlock64(int fd, __u64 gid)
  * Return:
  * * %0 on success.
  * * %-EAGAIN if a data version changed since the copy.
+ * * %-EBUSY if the lease was broken or an open was in progress
+ *   (SWAP_LAYOUTS_CLOSE).
+ * * %-EOPNOTSUPP if the MDS cannot swap one object at close.
  * * %-errno on failure.
  */
 int llapi_fswap_layout_fids(int fd_src, int fd_volatile,
@@ -557,10 +566,6 @@ int llapi_fswap_layout_fids(int fd_src, int fd_volatile,
 
 	if (fid_src == NULL || fid_volatile == NULL ||
 	    fid_is_zero(fid_src) || fid_is_zero(fid_volatile))
-		return -EINVAL;
-
-	/* Close path drops stripe selectors; do not allow the combination */
-	if (flags & SWAP_LAYOUTS_CLOSE)
 		return -EINVAL;
 
 	/*
@@ -589,8 +594,15 @@ int llapi_fswap_layout_fids(int fd_src, int fd_volatile,
 	lsl.sl_fid2 = *fid_volatile;
 
 	rc = ioctl(fd_src, LL_IOC_LOV_SWAP_LAYOUTS_FID, &lsl);
-	if (rc < 0)
-		return -errno;
+	if (rc == 0)
+		return 0;
+	rc = -errno;
+	/*
+	 * The MDS answers a broken lease with -ESTALE, which mdc_close()
+	 * turns into -EBUSY once the lease open has committed.
+	 */
+	if (rc == -ESTALE && (flags & SWAP_LAYOUTS_CLOSE))
+		rc = -EBUSY;
 
-	return 0;
+	return rc;
 }

@@ -881,6 +881,19 @@ static int mdc_close(struct obd_export *exp, struct md_op_data *op_data,
 	       exp->exp_obd->obd_name, PFID(&op_data->op_fid1),
 	       op_data->op_bias);
 
+	/*
+	 * The client checked its MDT0000 for a single-object swap at close,
+	 * and with DNE this may be another MDT, which would swap the whole
+	 * layouts instead.  Give the lease back and close without the swap.
+	 */
+	if (op_data->op_bias & MDS_CLOSE_LAYOUT_SWAP &&
+	    !fid_is_zero(&op_data->op_fid3) &&
+	    !(exp_connect_flags2(exp) & OBD_CONNECT2_ONE_OBJ_SWAP)) {
+		ldlm_cli_cancel(&op_data->op_lease_handle, 0);
+		op_data->op_bias &= ~MDS_CLOSE_LAYOUT_SWAP;
+		saved_rc = -EOPNOTSUPP;
+	}
+
 	if (op_data->op_bias & MDS_CLOSE_INTENT) {
 		req_fmt = &RQF_MDS_CLOSE_INTENT;
 		if (op_data->op_bias & MDS_HSM_RELEASE) {

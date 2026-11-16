@@ -3215,8 +3215,12 @@ void lustre_swab_close_data_special(struct close_data *cd, enum mds_op_bias b)
 		__swab16s(&cd->cd_merge_flags);
 	else if (b & MDS_PCC_ATTACH)
 		swab32s(&cd->cd_archive_id);
-	else if (b & MDS_CLOSE_LAYOUT_SWAP)
-		swab64s(&cd->cd_data_version2);
+	else if (b & MDS_CLOSE_LAYOUT_SWAP) {
+		swab64s(&cd->cd_swap.cso_data_version2);
+		swab64s(&cd->cd_swap.cso_flags);
+		lustre_swab_lu_fid(&cd->cd_swap.cso_fid1);
+		lustre_swab_lu_fid(&cd->cd_swap.cso_fid2);
+	}
 }
 EXPORT_SYMBOL(lustre_swab_close_data_special);
 

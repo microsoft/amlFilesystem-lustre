@@ -3920,6 +3920,19 @@ enum cd_merge_flags {
 	CD_MERGE_FLAG_MAX
 };
 
+/*
+ * Layout swap at close.  cso_flags and the OST object FIDs are valid only
+ * with OBD_CONNECT2_ONE_OBJ_SWAP; with SWAP_LAYOUTS_SINGLE_STRIPE in
+ * cso_flags only the objects cso_fid1 of the closed file and cso_fid2 of
+ * cd_fid are exchanged.
+ */
+struct close_data_swap {
+	__u64			cso_data_version2;
+	__u64			cso_flags; /* enum lustre_swap_layouts_flags */
+	struct lu_fid		cso_fid1;
+	struct lu_fid		cso_fid2;
+};
+
 struct close_data {
 	struct lustre_handle	cd_handle;
 	struct lu_fid		cd_fid;
@@ -3935,6 +3948,8 @@ struct close_data {
 		__u32				cd_archive_id;
 		/* migrate swap layout */
 		__u64				cd_data_version2;
+		/* swap layout */
+		struct close_data_swap		cd_swap;
 	};
 };
 

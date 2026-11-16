@@ -2746,6 +2746,16 @@ static void check_hsm_user_import(void)
 	CHECK_MEMBER(hsm_user_import, hui_archive_id);
 }
 
+static void check_close_data_swap(void)
+{
+	BLANK_LINE();
+	CHECK_STRUCT(close_data_swap);
+	CHECK_MEMBER(close_data_swap, cso_data_version2);
+	CHECK_MEMBER(close_data_swap, cso_flags);
+	CHECK_MEMBER(close_data_swap, cso_fid1);
+	CHECK_MEMBER(close_data_swap, cso_fid2);
+}
+
 static void check_close_data(void)
 {
 	BLANK_LINE();
@@ -2759,6 +2769,7 @@ static void check_close_data(void)
 	CHECK_MEMBER(close_data, cd_merge_flags);
 	CHECK_MEMBER(close_data, cd_archive_id);
 	CHECK_MEMBER(close_data, cd_data_version2);
+	CHECK_MEMBER(close_data, cd_swap);
 
 	CHECK_VALUE(CD_MERGE_STALE);
 
@@ -4022,6 +4033,7 @@ main(int argc, char **argv)
 	check_hsm_request();
 	check_hsm_user_request();
 	check_hsm_user_import();
+	check_close_data_swap();
 	check_close_data();
 
 	CHECK_COND_STARTN(HAVE_NATIVE_LINUX_CLIENT);

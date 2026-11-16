@@ -5920,6 +5920,26 @@ void lustre_assert_wire_constants(void)
 	LASSERTF((int)sizeof(((struct hsm_user_import *)0)->hui_archive_id) == 4, "found %lld\n",
 		 (long long)(int)sizeof(((struct hsm_user_import *)0)->hui_archive_id));
 
+	/* Checks for struct close_data_swap */
+	LASSERTF((int)sizeof(struct close_data_swap) == 48, "found %lld\n",
+		 (long long)(int)sizeof(struct close_data_swap));
+	LASSERTF((int)offsetof(struct close_data_swap, cso_data_version2) == 0, "found %lld\n",
+		 (long long)(int)offsetof(struct close_data_swap, cso_data_version2));
+	LASSERTF((int)sizeof(((struct close_data_swap *)0)->cso_data_version2) == 8, "found %lld\n",
+		 (long long)(int)sizeof(((struct close_data_swap *)0)->cso_data_version2));
+	LASSERTF((int)offsetof(struct close_data_swap, cso_flags) == 8, "found %lld\n",
+		 (long long)(int)offsetof(struct close_data_swap, cso_flags));
+	LASSERTF((int)sizeof(((struct close_data_swap *)0)->cso_flags) == 8, "found %lld\n",
+		 (long long)(int)sizeof(((struct close_data_swap *)0)->cso_flags));
+	LASSERTF((int)offsetof(struct close_data_swap, cso_fid1) == 16, "found %lld\n",
+		 (long long)(int)offsetof(struct close_data_swap, cso_fid1));
+	LASSERTF((int)sizeof(((struct close_data_swap *)0)->cso_fid1) == 16, "found %lld\n",
+		 (long long)(int)sizeof(((struct close_data_swap *)0)->cso_fid1));
+	LASSERTF((int)offsetof(struct close_data_swap, cso_fid2) == 32, "found %lld\n",
+		 (long long)(int)offsetof(struct close_data_swap, cso_fid2));
+	LASSERTF((int)sizeof(((struct close_data_swap *)0)->cso_fid2) == 16, "found %lld\n",
+		 (long long)(int)sizeof(((struct close_data_swap *)0)->cso_fid2));
+
 	/* Checks for struct close_data */
 	LASSERTF((int)sizeof(struct close_data) == 96, "found %lld\n",
 		 (long long)(int)sizeof(struct close_data));
@@ -5959,6 +5979,10 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct close_data, cd_data_version2));
 	LASSERTF((int)sizeof(((struct close_data *)0)->cd_data_version2) == 8, "found %lld\n",
 		 (long long)(int)sizeof(((struct close_data *)0)->cd_data_version2));
+	LASSERTF((int)offsetof(struct close_data, cd_swap) == 32, "found %lld\n",
+		 (long long)(int)offsetof(struct close_data, cd_swap));
+	LASSERTF((int)sizeof(((struct close_data *)0)->cd_swap) == 48, "found %lld\n",
+		 (long long)(int)sizeof(((struct close_data *)0)->cd_swap));
 	LASSERTF(CD_MERGE_STALE == 1, "found %lld\n",
 		 (long long)CD_MERGE_STALE);
 	/* all merge flags must fit into the 16-bit cd_merge_flags */

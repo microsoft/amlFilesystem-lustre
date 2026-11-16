@@ -2392,6 +2392,9 @@ static int mdt_close_handle_layouts(struct mdt_thread_info *info,
 
 	/* Swap layout with orphan object */
 	if (ma->ma_attr_flags & MDS_CLOSE_LAYOUT_SWAP) {
+		struct close_data_swap *cso = &data->cd_swap;
+		const struct lu_fid *ofid1 = NULL;
+		const struct lu_fid *ofid2 = NULL;
 		__u64 dv1 = data->cd_data_version;
 		__u64 dv2 = 0;
 		enum lustre_swap_layouts_flags flags = 0;
@@ -2402,8 +2405,28 @@ static int mdt_close_handle_layouts(struct mdt_thread_info *info,
 			 * Old clients sent cd_data_version = 0 and no
 			 * cd_data_version2.
 			 */
-			dv2 = data->cd_data_version2;
+			dv2 = cso->cso_data_version2;
 			flags |= SWAP_LAYOUTS_WITH_DV12;
+		}
+
+		/*
+		 * Only the objects cso_fid1 of the closed file and cso_fid2
+		 * of the other one.  Older clients leave cso_flags unset.
+		 */
+		if (exp_connect_flags2(info->mti_exp) &
+		    OBD_CONNECT2_ONE_OBJ_SWAP &&
+		    cso->cso_flags & SWAP_LAYOUTS_SINGLE_STRIPE) {
+			if (fid_is_zero(&cso->cso_fid1) ||
+			    fid_is_zero(&cso->cso_fid2))
+				GOTO(out_unlock2, rc = -EINVAL);
+			flags |= SWAP_LAYOUTS_SINGLE_STRIPE;
+			/*
+			 * mdd_swap_layouts() puts the larger parent FID first
+			 * and binds ofid1 to it, as the client does for the
+			 * ioctl; o2 is the larger here.
+			 */
+			ofid1 = swap_objects ? &cso->cso_fid1 : &cso->cso_fid2;
+			ofid2 = swap_objects ? &cso->cso_fid2 : &cso->cso_fid1;
 		}
 
 		if (swap_objects)
@@ -2411,7 +2434,7 @@ static int mdt_close_handle_layouts(struct mdt_thread_info *info,
 
 		rc = mo_swap_layouts(info->mti_env, mdt_object_child(o1),
 				     mdt_object_child(o2), dv1, dv2, flags,
-				     NULL, NULL);
+				     ofid1, ofid2);
 	} else if (ma->ma_attr_flags & MDS_CLOSE_LAYOUT_MERGE ||
 		   ma->ma_attr_flags & MDS_CLOSE_LAYOUT_SPLIT) {
 		struct lu_buf *buf = &info->mti_buf;

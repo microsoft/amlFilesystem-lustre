@@ -1,4 +1,4 @@
-.TH LLAPI_FSWAP_LAYOUT_FIDS 3 2026-08-25 "Lustre User API" "Lustre Library Functions"
+.TH LLAPI_FSWAP_LAYOUT_FIDS 3 2026-11-20 "Lustre User API" "Lustre Library Functions"
 .SH NAME
 llapi_fswap_layout_fids \- exchange one OST object between two file layouts
 .SH SYNOPSIS
@@ -65,10 +65,33 @@ after filling the partner.
 .I flags
 may carry additional
 .B SWAP_LAYOUTS_*
-bits;
-.B SWAP_LAYOUTS_CLOSE
-is rejected with
-.BR -EINVAL .
+bits.
+.PP
+With
+.BR SWAP_LAYOUTS_CLOSE ,
+.I fd_src
+must hold a lease (see
+.BR llapi_lease_acquire (3)).
+The objects are exchanged when the MDS closes the lease, and only if no
+open for write or truncate broke it, so that no writer can come in
+between the last check and the swap.  Once the request reaches the close,
+the lease is released whether the swap was done or not.  A call that fails
+before that, on its arguments or on the two files, leaves the lease on
+.IR fd_src .
+The errno does not tell the two apart:
+.BR -EINVAL ,
+.B -EPERM
+and
+.B -EOPNOTSUPP
+can come from either side of the close.  So after a failure, a caller
+releases the lease with
+.BR llapi_lease_release (3)
+and takes its
+.B -ENOLCK
+as the close having released it already.
+The data versions are not checked then: the caller compares them, with
+.BR LL_DV_RD_FLUSH ,
+before the call.
 .PP
 Both descriptors must refer to regular files on a filesystem whose MDS
 negotiated
@@ -97,9 +120,7 @@ returns 0 on success or a negative errno value on failure.
 .SH ERRORS
 .TP 15
 .B -EINVAL
-A FID is NULL or zero,
-.B SWAP_LAYOUTS_CLOSE
-was requested, either file lacks a layout, the layout magic is
+A FID is NULL or zero, either file lacks a layout, the layout magic is
 unrecognized, or the two OST objects being exchanged have different
 .BR lmm_stripe_size .
 .TP
@@ -138,9 +159,31 @@ still fchown the partner for non-root paths.
 A data version check failed; the source or volatile changed since the
 versions were captured. Retry the copy and swap.
 .TP
+.B -EBUSY
+With
+.BR SWAP_LAYOUTS_CLOSE ,
+the lease was broken by an open for write or truncate, or another open
+of the file was in progress; no object was exchanged and the lease is
+released.
+.TP
+.B -ENOLCK
+With
+.BR SWAP_LAYOUTS_CLOSE ,
+.I fd_src
+holds no lease.
+.TP
+.B -EXDEV
+The two files are on different filesystems.
+.TP
 .B -EOPNOTSUPP
 The MDS does not support single-stripe swap
 .RB ( OBD_CONNECT2_ONE_OBJ_SWAP ).
+With
+.BR SWAP_LAYOUTS_CLOSE ,
+the lease is still held if MDT0000 lacks it, or it is released without
+a swap if only the MDT holding
+.I fd_src
+lacks it.
 .TP
 .B -EBADF
 .I fd_src
@@ -182,5 +225,7 @@ user application interface library since release 2.17.57.
 .SH SEE ALSO
 .BR lfs-migrate (1),
 .BR llapi_get_data_version (3),
+.BR llapi_lease_acquire (3),
+.BR llapi_lease_release (3),
 .BR lustre (7),
 .BR lustreapi (7)
