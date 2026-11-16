@@ -532,6 +532,7 @@ static osd_obj_type_f osd_create_type_f(enum dt_format_type type)
 		break;
 	default:
 		LBUG();
+		result = NULL;
 		break;
 	}
 	return result;
