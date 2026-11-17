@@ -216,6 +216,7 @@ autodetect_target() {
 	rhel9.6) target="5.14-rhel9.6";;
 	rhel9.7) target="5.14-rhel9.7";;
 	rhel9.8) target="5.14-rhel9.8";;
+	rhel9.9) target="5.14-rhel9.9";;
 	rhel10.0) target="6.12-rhel10.0";;
 	rhel10.1) target="6.12-rhel10.1";;
 	rhel10.2) target="6.12-rhel10.2";;
