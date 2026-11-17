@@ -2475,7 +2475,7 @@ static void osd_drop_preallocated_space(struct osd_object *o)
 	LASSERT(list_empty(&LDISKFS_I(inode)->i_orphan));
 
 	i_size = i_size_read(inode);
-	if ((i_size & PAGE_MASK) == 0)
+	if ((i_size & (i_blocksize(inode) - 1)) == 0)
 		return;
 
 	/*
