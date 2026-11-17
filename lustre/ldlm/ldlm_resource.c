@@ -889,13 +889,16 @@ static unsigned int ldlm_res_hop_hash(struct cfs_hash *hs,
 				      const void *key, const unsigned int bits)
 {
 	const struct ldlm_res_id *id = key;
-	unsigned int val = 0;
+	__u32 val = 0;
 	unsigned int i;
 
+	/* FIDs in consecutive sequences have overlapping oids, so
+	 * the words must be mixed, not summed (LU-21239).
+	 */
 	for (i = 0; i < RES_NAME_SIZE; i++)
-		val += id->name[i];
+		val = hash_64(val ^ id->name[i], 32);
 
-	return val & ((1UL << bits) - 1);
+	return hash_32(val, bits);
 }
 
 static void *ldlm_res_hop_key(struct hlist_node *hnode)
