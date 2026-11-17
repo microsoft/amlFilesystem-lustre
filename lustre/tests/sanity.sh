@@ -30423,6 +30423,54 @@ test_230C() {
 }
 run_test 230C "dir migrate shrink cleans stale stripe name entries (LU-20177)"
 
+test_230D() {
+	(( MDSCOUNT >= 2 )) || skip_env "needs >= 2 MDTs"
+	(( MDS1_VERSION >= $(version_code 2.11.52) )) ||
+		skip "need MDS >= 2.11.52 for file migration"
+	local trace_log=$TMP/$tfile.strace
+	local -a trace_cmd=()
+
+	if command -v strace > /dev/null; then
+		trace_cmd=(strace -e trace=setxattr -o "$trace_log")
+		stack_trap "rm -f '$trace_log'"
+	else
+		echo "strace not available; skipping setxattr check"
+	fi
+
+	$LFS mkdir -i 0 -c 1 "$DIR/$tdir" ||
+		error "lfs mkdir $tdir failed"
+	touch "$DIR/$tdir/$tfile" || error "touch $tfile failed"
+	local mdt_idx
+	mdt_idx=$($LFS getstripe -m "$DIR/$tdir/$tfile") ||
+		error "getstripe $tfile failed"
+	(( mdt_idx == 0 )) || error "expected $tfile on MDT0, got MDT$mdt_idx"
+	"${trace_cmd[@]}" $LFS migrate -m 1 "$DIR/$tdir/$tfile" ||
+		error "lfs migrate -m 1 $tfile failed"
+	if (( ${#trace_cmd[@]} )); then
+		if grep -Fq '"trusted.lmv"' "$trace_log"; then
+			error "unexpected trusted.lmv setxattr on $tfile"
+		else
+			local rc=$?
+
+			(( rc == 1 )) || error "cannot read $trace_log: rc=$rc"
+		fi
+	fi
+	local missing=$DIR/$tdir/missing
+	local link=$DIR/$tdir/dangling
+	local path output rc
+
+	ln -s "$missing" "$link" || error "symlink creation failed"
+	for path in "$missing" "$link"; do
+		rc=0
+		output=$(LC_ALL=C $LFS migrate -m 1 "$path" 2>&1) || rc=$?
+		(( rc == 2 )) || error "migrate $path returned $rc, expected 2"
+		[[ $output == *"$path"* &&
+		   $output == *"No such file or directory"* ]] ||
+			error "missing ENOENT diagnostic for $path: $output"
+	done
+}
+run_test 230D "lfs migrate file and missing path diagnostics (LU-19809)"
+
 test_231a()
 {
 	# For simplicity this test assumes that max_pages_per_rpc

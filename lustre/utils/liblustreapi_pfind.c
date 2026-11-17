@@ -4768,6 +4768,9 @@ int llapi_semantic_traverse(char *path, int size, int parent,
 			 */
 			if (d == -1) {
 				ret =  -old_errno;
+				if (old_errno == ENOENT && param->fp_migrate)
+					llapi_error(LLAPI_MSG_ERROR, ret,
+						    "migrate '%s'", path);
 				goto out;
 			}
 

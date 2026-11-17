@@ -3392,6 +3392,7 @@ static int cb_migrate_mdt_init(char *path, int p, int *dp,
 	int ret;
 	char *path_copy;
 	char *filename;
+	bool had_open_fd;
 	bool retry = false;
 
 	if (p == -1 && dp == NULL)
@@ -3400,7 +3401,8 @@ static int cb_migrate_mdt_init(char *path, int p, int *dp,
 	if (!lmu)
 		return -EINVAL;
 
-	if (dp != NULL && *dp != -1)
+	had_open_fd = dp && *dp != -1;
+	if (had_open_fd)
 		close(*dp);
 
 	if (p == -1) {
@@ -3475,7 +3477,7 @@ out:
 		param->fp_depth++;
 	}
 
-	if (dp != NULL) {
+	if (had_open_fd) {
 		/*
 		 * If the directory is being migration, we need
 		 * close the directory after migration,
@@ -3508,7 +3510,7 @@ static int cb_migrate_mdt_fini(char *path, int p, int *dp,
 	__u32 hash_type = lmu->lum_hash_type;
 	int ret = 0;
 
-	if (de && de->d_type != DT_DIR)
+	if ((de && de->d_type != DT_DIR) || (!de && *dp == -1))
 		goto out;
 
 	if (*dp != -1) {
