@@ -30485,13 +30485,13 @@ run_test 230B "create duplicated entries in a migrating dir"
 
 test_230C() {
 	(( MDSCOUNT >= 2 )) || skip "needs >= 2 MDTs"
-	(( MDS1_VERSION >= $(version_code 2.17.56) )) ||
-		skip "need MDS >= 2.17.56 for migrate nsonly retry"
+	(( MDS1_VERSION >= $(version_code 2.17.61.119) )) ||
+		skip "need MDS >= 2.17.61.119 for directory migration fix"
 
 	# Create a directory with 2 stripes, the master stripe on MDT1.
 	# Shrinking it to a single stripe makes its LMV layout-changing, which
 	# recursively migrates the subdirectories below across the two parent
-	# stripes (the spobj != tpobj case that can hit the -EALREADY retry).
+	# stripes (the spobj != tpobj case that can hit -EALREADY).
 	$LFS mkdir -i 1 -c 2 $DIR/$tdir ||
 		error "lfs mkdir -i 1 -c 2 $tdir failed"
 
@@ -30517,9 +30517,8 @@ test_230C() {
 		error "expected 2 stripes before migrate, got $stripe_before"
 
 	# Shrink $tdir to a single stripe on MDT0. The request on $tdir itself
-	# has spobj == tpobj (its parent $DIR is not striped), so the retry
-	# fires while recursively migrating d_mdt0, whose old-stripe name entry
-	# would otherwise be left behind and fail the shrink with ENOTEMPTY.
+	# has spobj == tpobj, so the namespace-only fallback applies while
+	# migrating d_mdt0, whose old name entry would otherwise block shrink.
 	$LFS migrate -m 0 -c 1 $DIR/$tdir ||
 		error "lfs migrate -m 0 -c 1 $tdir failed"
 
@@ -30535,9 +30534,28 @@ test_230C() {
 	(( found == ndirs + 2 )) ||
 		error "expected $((ndirs + 2)) dirs after migrate, found $found"
 
-	# The MDT0-resident subdir that drove the -EALREADY retry must survive
+	# The MDT0-resident subdir that drove -EALREADY must survive.
 	[ -d $DIR/$tdir/d_mdt0 ] ||
 		error "$tdir/d_mdt0 missing after migrate"
+
+	# Check the stored ".." entry against linkEA; a client path walk can
+	# resolve ".." even if it still points at the removed stripe.
+	do_facet mds1 $LCTL lfsck_start -M $(facet_svc mds1) \
+		-t namespace -A -r -n on ||
+		error "failed to start namespace LFSCK"
+
+	local i mdt ns_param unmatched
+	for ((i = 1; i <= MDSCOUNT; i++)); do
+		mdt=$(facet_svc mds$i)
+		ns_param=mdd.$mdt.lfsck_namespace
+		wait_update_facet mds$i "$LCTL get_param -n $ns_param |
+			awk '/^status:/ { print \\\$2 }'" "completed" 60 ||
+			error "namespace LFSCK did not complete on $mdt"
+		unmatched=$(do_facet mds$i $LCTL get_param -n $ns_param |
+			    awk '/^unmatched_pairs_inconsistent:/ { print $2 }')
+		[[ $unmatched == 0 ]] ||
+			error "unmatched namespace pairs on $mdt: '$unmatched'"
+	done
 
 	rm -rf $DIR/$tdir || error "rm -rf $tdir failed after migrate"
 }

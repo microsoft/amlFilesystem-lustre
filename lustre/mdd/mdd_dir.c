@@ -4499,6 +4499,7 @@ static int mdd_declare_migrate_update(const struct lu_env *env,
 				      struct lu_attr *tpattr,
 				      struct linkea_data *ldata,
 				      struct md_attr *ma,
+				      bool nsonly,
 				      struct thandle *handle)
 {
 	struct mdd_thread_info *info = mdd_env_info(env);
@@ -4513,6 +4514,18 @@ static int mdd_declare_migrate_update(const struct lu_env *env,
 		rc = mdo_declare_ref_del(env, spobj, handle);
 		if (rc)
 			return rc;
+
+		if (nsonly && spobj != tpobj) {
+			rc = mdo_declare_index_delete(env, obj, dotdot, handle);
+			if (rc)
+				return rc;
+
+			rc = mdo_declare_index_insert(env, obj,
+						      mdd_object_fid(tpobj),
+						      S_IFDIR, dotdot, handle);
+			if (rc)
+				return rc;
+		}
 	}
 
 	rc = mdo_declare_index_insert(env, tpobj, mdd_object_fid(obj),
@@ -4676,7 +4689,7 @@ static int mdd_declare_migrate_create(const struct lu_env *env,
 
 	rc = mdd_declare_migrate_update(env, spobj, tpobj, tobj, sname, tname,
 					attr, spattr, tpattr, ldata, ma,
-					handle);
+					false, handle);
 	return rc;
 }
 
@@ -4694,6 +4707,7 @@ static int mdd_migrate_update(const struct lu_env *env,
 			      struct lu_attr *tpattr,
 			      struct linkea_data *ldata,
 			      struct md_attr *ma,
+			      bool nsonly,
 			      struct thandle *handle)
 {
 	struct mdd_thread_info *info = mdd_env_info(env);
@@ -4717,6 +4731,18 @@ static int mdd_migrate_update(const struct lu_env *env,
 				tname->ln_name, handle);
 	if (rc)
 		RETURN(rc);
+
+	/* Full migration initialized ".." when it created the target. */
+	if (nsonly && S_ISDIR(attr->la_mode) && spobj != tpobj) {
+		rc = __mdd_index_delete_only(env, obj, dotdot, handle);
+		if (rc)
+			RETURN(rc);
+
+		rc = __mdd_index_insert_only(env, obj, mdd_object_fid(tpobj),
+					     S_IFDIR, dotdot, handle);
+		if (rc)
+			RETURN(rc);
+	}
 
 	rc = mdd_links_write(env, obj, ldata, handle);
 	if (rc)
@@ -4871,7 +4897,7 @@ static int mdd_migrate_create(const struct lu_env *env,
 	}
 
 	rc = mdd_migrate_update(env, spobj, tpobj, tobj, sname, tname, attr,
-				spattr, tpattr, ldata, ma, handle);
+				spattr, tpattr, ldata, ma, false, handle);
 
 	RETURN(rc);
 }
@@ -5063,7 +5089,10 @@ retry:
 		lmv = sbuf.lb_buf;
 		rc = mdd_migrate_cmd_check(env, mdd, sobj, lmv, lum,
 					   lum_len, sname);
-		if (rc)
+		if (rc == -EALREADY && spobj != tpobj)
+			/* The layout matches, but the name must still move. */
+			spec->sp_migrate_nsonly = true;
+		else if (rc)
 			GOTO(out, rc);
 	} else if (!S_ISDIR(attr->la_mode)) {
 		/* update namespace only if @sobj is on MDT where @tpobj is. */
@@ -5115,7 +5144,7 @@ retry:
 	if (spec->sp_migrate_nsonly)
 		rc = mdd_declare_migrate_update(env, spobj, tpobj, sobj, sname,
 						tname, attr, spattr, tpattr,
-						ldata, ma, handle);
+						ldata, ma, true, handle);
 	else
 		rc = mdd_declare_migrate_create(env, spobj, tpobj, sobj, tobj,
 						sname, tname, spattr, tpattr,
@@ -5136,7 +5165,7 @@ retry:
 	if (spec->sp_migrate_nsonly)
 		rc = mdd_migrate_update(env, spobj, tpobj, sobj, sname, tname,
 					attr, spattr, tpattr, ldata, ma,
-					handle);
+					true, handle);
 	else
 		rc = mdd_migrate_create(env, spobj, tpobj, sobj, tobj, sname,
 					tname, spattr, tpattr, attr, &sbuf,
