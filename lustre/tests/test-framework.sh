@@ -2357,13 +2357,14 @@ set_params_osts() {
 	set_params_nodes $osts $params
 }
 
+# write each node's own hostid to its /etc/hostid if it has none
 set_hostid () {
-	local hostid=${1:-$(hostid)}
+	local nodes=$1
 
-	if [ ! -s /etc/hostid ]; then
-		printf $(echo -n $hostid |
-	    sed 's/\(..\)\(..\)\(..\)\(..\)/\\x\4\\x\3\\x\2\\x\1/') >/etc/hostid
-	fi
+	do_nodes_script "$nodes" "set_hostid" \
+		"[[ -s /etc/hostid ]] || { h=\\\$(hostid);
+		printf \\\"\\x\\\${h:6:2}\\x\\\${h:4:2}\\\" > /etc/hostid;
+		printf \\\"\\x\\\${h:2:2}\\x\\\${h:0:2}\\\" >> /etc/hostid; }"
 }
 
 # Facet functions
@@ -6210,7 +6211,7 @@ formatall() {
 	# (Assumes MDS version is also OSS version)
 	if [ $(lustre_version_code $SINGLEMDS) -ge $(version_code 2.8.54) ];
 	then
-		do_rpc_nodes "$(all_server_nodes)" set_hostid
+		set_hostid "$(all_server_nodes)"
 	fi
 
 	# We need ldiskfs here, may as well load them all
@@ -9822,6 +9823,73 @@ wait_import_state_mount() {
 	wait_import_state "$@"
 }
 
+#
+# Print a remote command that does what wait_import_state() does, or
+# wait_import_state_mount() with "mount": wait up to $maxtime seconds
+# for each of the comma-separated imports in $params to reach the state
+# $expected, checking each second.
+#
+wait_import_state_cmd() {
+	local expected="$1"
+	local params="$2"
+	local maxtime=$3
+	local err_on_fail=$4
+	local mount=$5
+	local fail
+	local cmd="set -f; e=$expected
+	st() { $LCTL get_param -n \\\$1 2>/dev/null | cut -f2 | uniq; }"
+
+	(( err_on_fail == 0 )) ||
+		fail="echo \\\"can't put import for \\\$p into \\\$e state\\\" \
+			\\\"after \\\$i sec, have \\\$s\\\";"
+
+	# like is_mounted(), with neither client mounted there is no wait
+	[[ -z "$mount" ]] || cmd+="
+	awk '\\\$3 ~ \\\"lustre\\\" && \\\$1 ~ \\\":\\\" &&
+	     (\\\$2 == \\\"$MOUNT\\\" || \\\$2 == \\\"$MOUNT2\\\") { f = 1 }
+	     END { exit !f }' /proc/mounts || exit 0"
+
+	# a DISCONN wait also ends when the import is gone or reconnecting
+	cmd+="
+	for p in ${params//,/ }; do
+	    i=0; s=\\\$(st \\\$p)
+	    until echo \\\"\\\$s\\\" | grep -E -q \\\"^\\\$e\\\$\\\"; do
+		[[ \\\$e != DISCONN || -n \\\$s && \\\$s != CONNECTING ]] ||
+			continue 2
+		(( i < $maxtime )) || { $fail exit 1; }
+		sleep 1; i=\\\$((i + 1)); s=\\\$(st \\\$p)
+	    done
+	    m=\\\"\\\$p in \\\$s state after \\\$i sec\\\"
+	    echo \\\"\\\$m\\\" >&2
+	    $LCTL mark \\\"\\\$m\\\" 2> /dev/null
+	done; :"
+
+	echo -n "$cmd"
+}
+
+#
+# Run wait_import_state(), or wait_import_state_mount() with --mount, on
+# each node of $nodes with one remote command rather than an rpc.sh call.
+# usage: wait_nodes_import_state [--mount] nodes expected params \
+#	[maxtime [err_on_fail]]
+#
+wait_nodes_import_state() {
+	local mount
+
+	[[ "$1" == "--mount" ]] && mount=mount && shift
+
+	local nodes=$1
+	local expected=$2
+	local params=$3
+	local maxtime=${4:-$(max_recovery_time)}
+	local err_on_fail=${5:-1}
+
+	do_nodes_script "$nodes" \
+		"wait_import_state${mount:+_mount} $expected $params $maxtime" \
+		"$(wait_import_state_cmd "$expected" "$params" $maxtime \
+		   $err_on_fail $mount)"
+}
+
 # One client request could be timed out because server was not ready
 # when request was sent by client.
 # The request timeout calculation details :
@@ -9900,8 +9968,8 @@ _wait_osc_import_state() {
 	fi
 
 	local plist=$(comma_list $params)
-	if ! do_rpc_nodes "$(facet_active_host $facet)" \
-			wait_import_state $expected $plist $maxtime; then
+	if ! wait_nodes_import_state "$(facet_active_host $facet)" \
+			$expected $plist $maxtime; then
 		error "$facet: import is not in $expected state after $maxtime"
 		return 1
 	fi
@@ -9957,9 +10025,8 @@ _wait_mgc_import_state() {
 		done
 	fi
 	local plist=$(comma_list $params)
-	if ! do_rpc_nodes "$(facet_active_host $facet)" \
-			wait_import_state $expected $plist $maxtime \
-					  $error_on_failure; then
+	if ! wait_nodes_import_state "$(facet_active_host $facet)" \
+			$expected $plist $maxtime $error_on_failure; then
 		if [ $error_on_failure -ne 0 ]; then
 		    error "import is not in ${expected} state"
 		fi
@@ -9993,8 +10060,8 @@ wait_osp_import() {
 	local loctgt=$(facet_svc $facet)
 	local param="osp.$remtgt-os[pc]-${loctgt#*-}.*_server_uuid"
 
-	do_rpc_nodes "$(facet_active_host $facet)" \
-			wait_import_state $expected $param ||
+	wait_nodes_import_state "$(facet_active_host $facet)" \
+			$expected $param ||
 		error "$param: import is not in expected state"
 }
 
@@ -10031,6 +10098,27 @@ do_rpc_nodes () {
 		${MGSNID:+MGSNID=$MGSNID} CONFIG=${CONFIG} bash rpc.sh $* "
 }
 
+#
+# Run a script on each node of $nodes with one remote command each. With
+# VERBOSE, the log and the debug log mark show $desc rather than the
+# whole script, and the mark is made by the same remote command.
+# usage: do_nodes_script nodes desc script
+#
+do_nodes_script() {
+	local nodes=$1
+	local desc=$2
+	local script=$3
+
+	[[ -n "$nodes" ]] || return 0
+
+	if $VERBOSE; then
+		echo "CMD: $nodes $desc" >&2
+		script="$LCTL mark \\\"$desc\\\" > /dev/null 2>&1; $script"
+	fi
+
+	do_nodes --verbose --quiet $nodes "$script"
+}
+
 wait_clients_import_state () {
 	local list="$1"
 	local facet="$2"
@@ -10065,10 +10153,11 @@ wait_clients_import_state () {
 	done
 
 	[[ $expected == *FULL* && -n $ping_path ]] &&
-		do_rpc_nodes "$list" $LCTL get_param $ping_path || true
+		do_nodes_script "$list" "ping imports" \
+			"$LCTL get_param $ping_path > /dev/null 2>&1; :"
 
-	if ! do_rpc_nodes "$list" wait_import_state_mount "$expected" $params $maxtime 0;
-	then
+	if ! wait_nodes_import_state --mount "$list" "$expected" $params \
+			$maxtime 0; then
 		error "import is not in ${expected} state"
 		return 1
 	fi
@@ -10935,7 +11024,7 @@ set_flavor_all()
 	# make sure all oscs are connected
 	for c in ${clients//,/ }; do
 		do_node $c lfs df -h
-		do_rpc_nodes $c wait_import_state "FULL" \
+		wait_nodes_import_state $c "FULL" \
 			"osc.*.ost_server_uuid" $maxtime ||
 		error "OSCs not in FULL state for client $c"
 	done

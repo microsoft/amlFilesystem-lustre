@@ -932,6 +932,25 @@ test_17o() {
 	#following fail_loc to avoid interfer the recovery process.
 	fail mds${mdt_index}
 
+	# a quota slave CONN enqueue failed by this fail_loc leaks a lock
+	# reference that hangs the next umount, so wait for reintegration
+	local facet=mds${mdt_index}
+	local info="osd-*.$(facet_svc $facet).quota_slave.info"
+	local waited
+
+	for ((waited = 0; waited < 90; waited++)); do
+		do_facet $facet "$LCTL get_param -n $info" |
+			awk '/quota enabled:/ { en = $NF }
+			     /space acct:/ { ac = $NF }
+			     /uptodate:/ { t = substr($1, 1, 1)
+				if (index(en, t) && index(ac, t) &&
+				    $NF != "glb[1],slv[1],reint[0]")
+					busy = 1 }
+			     END { exit busy }' && break
+		sleep 1
+	done
+	(( waited < 90 )) || error "quota reintegration not done in 90s"
+
 	#define OBD_FAIL_OSD_LMA_INCOMPAT 0x194
 	do_facet mds${mdt_index} lctl set_param fail_loc=0x194
 	ls -l $wdir/$tfile && rc=1

@@ -4559,7 +4559,7 @@ test_46a() {
 	done
 	local maxtime=$((2 * $(request_timeout mds1)))
 	for host in "${!mdsparams[@]}"; do
-		do_rpc_nodes $host wait_import_state FULL \
+		wait_nodes_import_state $host FULL \
 			$(comma_list ${mdsparams[$host]}) $maxtime ||
 			error "$host: OST imports are not FULL"
 	done
