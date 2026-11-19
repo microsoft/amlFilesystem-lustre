@@ -918,6 +918,7 @@ void ptlrpc_server_drop_request(struct ptlrpc_request *req)
 	struct ptlrpc_request_buffer_desc *rqbd = req->rq_rqbd;
 	struct ptlrpc_service_part	  *svcpt = rqbd->rqbd_svcpt;
 	struct ptlrpc_service		  *svc = svcpt->scp_service;
+	LIST_HEAD(free_rqbds);
 	int				   refcount;
 
 	if (!atomic_dec_and_test(&req->rq_refcount))
@@ -1004,11 +1005,8 @@ void ptlrpc_server_drop_request(struct ptlrpc_request *req)
 			    (svc->srv_nrqbds_max != 0 &&
 			     svcpt->scp_nrqbds_total > svc->srv_nrqbds_max) ||
 			    test_req_buffer_pressure) {
-				/* like in ptlrpc_free_rqbd() */
 				svcpt->scp_nrqbds_total--;
-				OBD_FREE_LARGE(rqbd->rqbd_buffer,
-					       svc->srv_buf_size);
-				OBD_FREE_PTR(rqbd);
+				list_add(&rqbd->rqbd_list, &free_rqbds);
 			} else {
 				list_add_tail(&rqbd->rqbd_list,
 					      &svcpt->scp_rqbd_idle);
@@ -1016,6 +1014,14 @@ void ptlrpc_server_drop_request(struct ptlrpc_request *req)
 		}
 
 		spin_unlock(&svcpt->scp_lock);
+
+		/* vfree() may sleep, so free the buffers outside scp_lock */
+		while ((rqbd = list_first_entry_or_null(&free_rqbds,
+				struct ptlrpc_request_buffer_desc,
+				rqbd_list))) {
+			list_del(&rqbd->rqbd_list);
+			ptlrpc_free_rqbd(rqbd);
+		}
 	} else if (req->rq_reply_state && req->rq_reply_state->rs_prealloc) {
 		/* If we are low on memory, we are not interested in history */
 		list_del(&req->rq_list);
