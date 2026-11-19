@@ -400,6 +400,22 @@ static int osp_last_used_init(const struct lu_env *env, struct osp_device *osp)
 		GOTO(out, rc = -EINVAL);
 	}
 
+	/*
+	 * LU-21232: A zero object id must not be sent to the OST: the object
+	 * id and the sequence share one field in struct ost_id, so ostid_seq()
+	 * reads {seq, 0} as sequence 0 and the OST answers about sequence 0.
+	 * The OSP would then adopt sequence 0 and allocate IDIFs that collide
+	 * with the objects MDT0000 owns. Use oid 1 instead, so the OSP asks
+	 * about its own sequence.
+	 */
+	if (fid_is_norm(&osp->opd_last_used_fid) &&
+	    fid_oid(&osp->opd_last_used_fid) == 0) {
+		CWARN("%s: oid in last used fid "DFID" is 0, using oid %lu: rc = %d\n",
+		      osp->opd_obd->obd_name, PFID(&osp->opd_last_used_fid),
+		      (unsigned long)LUSTRE_FID_INIT_OID, rc);
+		osp->opd_last_used_fid.f_oid = LUSTRE_FID_INIT_OID;
+	}
+
 	osp_fid_to_obdid(&osp->opd_last_used_fid, &osp->opd_last_id);
 	CDEBUG(D_INFO, "%s: Init last used fid "DFID"\n",
 	       osp->opd_obd->obd_name, PFID(&osp->opd_last_used_fid));

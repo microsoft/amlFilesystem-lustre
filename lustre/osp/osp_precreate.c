@@ -850,8 +850,24 @@ static int osp_get_lastfid_from_ost(const struct lu_env *env,
 
 	/* Only update the last used fid, if the OST has objects for
 	 * this sequence, i.e. fid_oid > 0 */
-	if (fid_oid(last_fid) > 0 && update)
+	if (fid_oid(last_fid) > 0 && update) {
+		/*
+		 * The returned sequence is not the one asked about. The object
+		 * id and the sequence share one field in struct ost_id, so a
+		 * zero object id makes ostid_seq() read the fid as sequence 0.
+		 */
+		if (fid_seq(last_fid) != fid_seq(&d->opd_last_used_fid) &&
+		    !(fid_is_idif(last_fid) &&
+		      fid_is_idif(&d->opd_last_used_fid))) {
+			rc = -EPROTO;
+			CERROR("%s: last_fid "DFID" is for sequence %#llx not %#llx: rc = %d\n",
+			       d->opd_obd->obd_name, PFID(last_fid),
+			       fid_seq(last_fid),
+			       fid_seq(&d->opd_last_used_fid), rc);
+			GOTO(out, rc);
+		}
 		d->opd_last_used_fid = *last_fid;
+	}
 
 	if (fid_seq(last_fid) == fid_seq(&d->opd_last_used_fid)) {
 		if (fid_oid(last_fid) == 0 ||
