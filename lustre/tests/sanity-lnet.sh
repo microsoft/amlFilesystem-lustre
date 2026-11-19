@@ -79,6 +79,13 @@ cleanup_testsuite() {
 	rm -f $TMP/sanity-lnet-*.yaml $LNET_PARAMS_FILE
 	cleanup_netns
 	cleanup_lnet
+	# A router test that fails skips cleanup_router_test and leaves
+	# routes and extra nets on the remote nodes
+	local rnodes=$(remote_nodes_list)
+	if [[ -n "$rnodes" ]]; then
+		do_nodes $rnodes $LUSTRE_RMMOD ||
+			echo "Failed to unload modules on $rnodes"
+	fi
 	if $restore_mounts; then
 		setupall || error "Failed to setup Lustre after test execution"
 	elif $restore_modules; then
