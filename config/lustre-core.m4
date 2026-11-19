@@ -4569,6 +4569,7 @@ AC_ARG_ENABLE([mpitests],
 	AS_HELP_STRING([--enable-mpitests=<yes|no|mpicc wrapper>],
 		       [include mpi tests]), [
 		enable_mpitests="yes"
+		mpitests_requested="yes"
 		case $enableval in
 		yes)
 			MPICC_WRAPPER="mpicc"
@@ -4585,6 +4586,7 @@ AC_ARG_ENABLE([mpitests],
 		esac
 	], [
 		enable_mpitests="yes"
+		mpitests_requested="no"
 		MPICC_WRAPPER="mpicc"
 		MPI_BIN=$(eval which $MPICC_WRAPPER 2>/dev/null | xargs -r dirname)
 	])
@@ -4593,7 +4595,7 @@ AC_ARG_ENABLE([mpitests],
 		oldcc=$CC
 		CC=$MPICC_WRAPPER
 		AC_CACHE_CHECK([whether mpitests can be built],
-		lb_cv_mpi_tests, [AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+		lb_cv_mpi_tests, [AC_LINK_IFELSE([AC_LANG_SOURCE([
 			#include <mpi.h>
 			int main(void) {
 				int flag;
@@ -4604,6 +4606,13 @@ AC_ARG_ENABLE([mpitests],
 		])
 		enable_mpitests=$lb_cv_mpi_tests
 		CC=$oldcc
+		AS_IF([test "x$enable_mpitests" != "xyes"], [
+			AS_IF([test "x$mpitests_requested" = "xyes"], [
+				AC_MSG_ERROR([mpitests requested, but cannot be built with '$MPICC_WRAPPER'])
+			], [test -n "$MPI_BIN"], [
+				AC_MSG_WARN([cannot build mpitests with '$MPICC_WRAPPER', disabling them])
+			])
+		])
 	fi
 	AC_SUBST(MPI_BIN)
 	AC_SUBST(MPICC_WRAPPER)
