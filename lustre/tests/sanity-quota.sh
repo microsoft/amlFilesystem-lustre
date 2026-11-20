@@ -7808,6 +7808,9 @@ test_91()
 	stack_trap "facet_up mds1 || start mds1 $mds_dev $MDS_MOUNT_OPTS" EXIT
 	echo "stop mds1"
 	stop mds1 -f || error "Can't stop mds1"
+	# a short outage leaves the stale FULL import, evicting the client
+	wait_clients_import_state ${CLIENTS:-$HOSTNAME} mds1 \
+		"\(DISCONN\|CONNECTING\|IDLE\)"
 
 	# group and project indexes left by earlier subtests also put the
 	# OSTs into the slave array at QMT start, unlike a formatted MDT
