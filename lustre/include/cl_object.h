@@ -2740,6 +2740,7 @@ struct cl_dio_pages {
 	int			cdp_from;
 	int			cdp_to;
 	s32			*cdp_pgno;
+	unsigned int		cdp_pgno_count;
 };
 
 /* Top level struct used for AIO and DIO */

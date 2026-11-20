@@ -1520,12 +1520,11 @@ int ll_allocate_dio_buffer(struct cl_dio_pages *cdp, size_t io_size)
 	cdp->cdp_folios = NULL;
 	/* calculate pages for the rest of the buffer */
 	cdp->cdp_page_count += (io_size + PAGE_SIZE - 1) >> PAGE_SHIFT;
-	cdp->cdp_pgno = kvcalloc(cdp->cdp_page_count, sizeof(*cdp->cdp_pgno),
-				 GFP_NOFS);
+	OBD_ALLOC_PTR_ARRAY_LARGE(cdp->cdp_pgno, cdp->cdp_page_count);
 	if (!cdp->cdp_pgno)
 		GOTO(out, result = -ENOMEM);
-	cdp->cdp_folios = kvcalloc(cdp->cdp_page_count,
-				   sizeof(*cdp->cdp_folios), GFP_NOFS);
+	cdp->cdp_pgno_count = cdp->cdp_page_count;
+	OBD_ALLOC_PTR_ARRAY_LARGE(cdp->cdp_folios, cdp->cdp_page_count);
 	if (!cdp->cdp_folios)
 		GOTO(out, result = -ENOMEM);
 
@@ -1558,12 +1557,12 @@ void ll_free_dio_buffer(struct cl_dio_pages *cdp)
 	cdp->cdp_pgno = NULL;
 	cdp->cdp_folios = NULL;
 
-	kvfree(pgno_array);
+	OBD_FREE_PTR_ARRAY_LARGE(pgno_array, cdp->cdp_pgno_count);
 	if (!folio_array)
 		return;
 
 	obd_pool_put_folios_array(folio_array, nfolios);
-	kvfree(folio_array);
+	OBD_FREE_PTR_ARRAY_LARGE(folio_array, nfolios);
 }
 EXPORT_SYMBOL(ll_free_dio_buffer);
 
@@ -1598,7 +1597,7 @@ void ll_release_user_pages(struct cl_dio_pages *cdp)
 		ll_release_page(folio_page(folio_array[i], pgno), pinned);
 	}
 	kvfree(folio_array);
-	kvfree(pgno_array);
+	OBD_FREE_PTR_ARRAY_LARGE(pgno_array, cdp->cdp_pgno_count);
 }
 EXPORT_SYMBOL(ll_release_user_pages);
 

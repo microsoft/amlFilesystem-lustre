@@ -149,9 +149,10 @@ static ssize_t ll_get_iov_memory(struct cl_io *io, int rw,
 		flags |= ITER_ALLOW_P2PDMA;
 
 	cdp->cdp_folios = NULL;
-	cdp->cdp_pgno = kvcalloc(maxpages, sizeof(*cdp->cdp_pgno), GFP_NOFS);
+	OBD_ALLOC_PTR_ARRAY_LARGE(cdp->cdp_pgno, maxpages);
 	if (!cdp->cdp_pgno)
 		return -ENOMEM;
+	cdp->cdp_pgno_count = maxpages;
 
 	bytes = ll_iov_iter_extract_pages(iter, &pages, maxsize,
 					  maxpages, flags, &start);
@@ -181,7 +182,7 @@ static ssize_t ll_get_iov_memory(struct cl_io *io, int rw,
 		iov_iter_revert(iter, count - iov_iter_count(iter));
 	} else {
 		kvfree(pages);
-		kvfree(cdp->cdp_pgno);
+		OBD_FREE_PTR_ARRAY_LARGE(cdp->cdp_pgno, cdp->cdp_pgno_count);
 		cdp->cdp_pgno = NULL;
 	}
 	return bytes;
