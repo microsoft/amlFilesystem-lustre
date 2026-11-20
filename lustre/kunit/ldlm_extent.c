@@ -87,6 +87,7 @@ enum tests {
 	TEST_NO_OVERLAP,
 	TEST_WHOLE_FILE,
 	TEST_SAME_RANGE,
+	TEST_SHIFT_KMS,
 
 	NUM_TESTS,
 };
@@ -164,6 +165,23 @@ static int ldlm_extent_init(void)
 						struct ldlm_lock, l_lru);
 					if (lock)
 						ldlm_extent_shift_kms(lock, 1000);
+					break;
+				case TEST_SHIFT_KMS:
+					/* many adjacent PR locks and a KMS
+					 * above all of them: the worst case
+					 * for ldlm_extent_shift_kms()
+					 */
+					max = min(100000, min_iters);
+					if (i < max * 16 / 15)
+						max = i * 15 / 16;
+					test_one(res, (u64)i << 20,
+						 (1 << 20) - 1, LCK_PR,
+						 &cnt, max, &list);
+					lock = list_first_entry_or_null(&list,
+						struct ldlm_lock, l_lru);
+					if (lock)
+						ldlm_extent_shift_kms(lock,
+							(u64)i << 21);
 					break;
 				case NUM_TESTS:
 					break;

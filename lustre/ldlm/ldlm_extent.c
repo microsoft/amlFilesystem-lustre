@@ -925,6 +925,74 @@ out:
 }
 #endif /* CONFIG_LUSTRE_FS_SERVER */
 
+/**
+ * extent_kms_alive() - check if an extent node still protects data
+ * @lck: lock linked in an extent tree
+ *
+ * Locks with the same extent hang off the tree node on @l_same_extent, so
+ * the node is alive if it or any lock sharing its extent is not ignored.
+ *
+ * Return: true if some lock with this extent is not %kms_ignore
+ */
+static bool extent_kms_alive(struct ldlm_lock *lck)
+{
+	struct ldlm_lock *lk;
+
+	if (!(lck->l_flags & LDLM_FL_KMS_IGNORE))
+		return true;
+
+	list_for_each_entry(lk, &lck->l_same_extent, l_same_extent)
+		if (!(lk->l_flags & LDLM_FL_KMS_IGNORE))
+			return true;
+
+	return false;
+}
+
+/**
+ * extent_scan_kms() - find the highest KMS protected by a subtree
+ * @lck: root of the subtree to scan
+ * @old_kms: the KMS before the lock was cancelled
+ * @kms: highest KMS found so far, updated
+ *
+ * Use l_subtree_last, the highest extent end in a subtree, to skip subtrees
+ * that cannot raise @kms.  Walking all locks for every cancel is quadratic
+ * when a client holds many locks on one object (LU-21281).
+ *
+ * Return: true if a lock protects @old_kms, so the scan is complete
+ */
+static bool extent_scan_kms(struct ldlm_lock *lck, __u64 old_kms, __u64 *kms)
+{
+	while (lck) {
+		struct rb_node *rb;
+		__u64 end = LAST(lck);
+
+		if (lck->l_subtree_last != OBD_OBJECT_EOF &&
+		    lck->l_subtree_last + 1 <= *kms)
+			return false;
+
+		/* Locks to the right have higher starts, scan them first. */
+		rb = lck->l_rb.rb_right;
+		if (rb && extent_scan_kms(rb_entry(rb, struct ldlm_lock, l_rb),
+					  old_kms, kms))
+			return true;
+
+		if (extent_kms_alive(lck)) {
+			/* A lock on [x,y] protects a KMS of up to y + 1. */
+			if (end == OBD_OBJECT_EOF || end + 1 >= old_kms) {
+				*kms = old_kms;
+				return true;
+			}
+			if (end + 1 > *kms)
+				*kms = end + 1;
+		}
+
+		rb = lck->l_rb.rb_left;
+		lck = rb ? rb_entry(rb, struct ldlm_lock, l_rb) : NULL;
+	}
+
+	return false;
+}
+
 /* When a lock is cancelled by a client, the KMS may undergo change if this
  * is the "highest lock".  This function returns the new KMS value, updating
  * it only if we were the highest lock.
@@ -937,10 +1005,8 @@ __u64 ldlm_extent_shift_kms(struct ldlm_lock *lock, __u64 old_kms)
 {
 	struct ldlm_resource *res = lock->l_resource;
 	struct ldlm_interval_tree *tree;
-	struct ldlm_lock *lck;
 	__u64 kms = 0;
-	int idx = 0;
-	bool complete = false;
+	int idx;
 
 	ENTRY;
 
@@ -950,66 +1016,16 @@ __u64 ldlm_extent_shift_kms(struct ldlm_lock *lock, __u64 old_kms)
 	 */
 	ldlm_set_kms_ignore(lock);
 
-	/* We iterate over the lock trees, looking for the largest kms
-	 * smaller than the current one.
+	/* Look for the largest kms smaller than the current one.  Stop as
+	 * soon as a lock protects the current kms, then we are not the
+	 * highest lock and the kms does not change.
 	 */
 	for (idx = 0; idx < LCK_MODE_NUM; idx++) {
+		struct ldlm_lock *top;
+
 		tree = &res->lr_itree[idx];
-
-		/* If our already known kms is >= than the highest 'end' in
-		 * this tree, we don't need to check this tree, because
-		 * the kms from a tree can be lower than in_max_high (due to
-		 * kms_ignore), but it can never be higher. */
-		lck = extent_top(tree);
-		if (!lck || kms >= lck->l_subtree_last)
-			continue;
-
-		for (lck = extent_last(tree);
-		     lck;
-		     lck = extent_prev(lck)) {
-			if (ldlm_is_kms_ignore(lck)) {
-				struct ldlm_lock *lk;
-
-				list_for_each_entry(lk, &lck->l_same_extent,
-						    l_same_extent)
-					if (!ldlm_is_kms_ignore(lk)) {
-						lk = NULL;
-						break;
-					}
-				if (lk)
-					continue;
-			}
-
-			/* If this lock has a greater or equal kms, we are not
-			 * the highest lock (or we share that distinction
-			 * with another lock), and don't need to update KMS.
-			 * Record old_kms and stop looking.
-			 */
-			if (lck->l_policy_data.l_extent.end == OBD_OBJECT_EOF ||
-			    lck->l_policy_data.l_extent.end + 1 >= old_kms) {
-				kms = old_kms;
-				complete = true;
-				break;
-			}
-			if (lck->l_policy_data.l_extent.end + 1 > kms)
-				kms = lck->l_policy_data.l_extent.end + 1;
-
-			/* Since we start with the highest lock and work
-			 * down, for PW locks, we only need to check if we
-			 * should update the kms, then stop walking the tree.
-			 * PR locks are not exclusive, so the highest start
-			 * does not imply the highest end and we must
-			 * continue.  (Only one group lock is allowed per
-			 * resource, so this is irrelevant for group locks.)
-			 */
-			if (lck->l_granted_mode == LCK_PW)
-				break;
-		}
-
-		/* This tells us we're not the highest lock, so we don't need
-		 * to check the remaining trees
-		 */
-		if (complete)
+		top = extent_top(tree);
+		if (top && extent_scan_kms(top, old_kms, &kms))
 			break;
 	}
 

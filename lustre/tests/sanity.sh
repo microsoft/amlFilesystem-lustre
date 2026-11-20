@@ -32135,6 +32135,79 @@ test_255d() {
 }
 run_test 255d "lock cancel keeps pages covered by another lock"
 
+# cancel all unused locks in the namespace $1, set CANCEL_MS to the time in ms
+cancel_all_osc_locks_ms() {
+	local ns=$1
+	local start=${EPOCHREALTIME/./}
+	local deadline=$((SECONDS + 300))
+
+	cancel_lru_locks osc > /dev/null
+	while (( $($LCTL get_param -n $ns.lock_count) > 0 )); do
+		(( SECONDS < deadline )) || error "locks not cancelled in $ns"
+		sleep 0.1
+	done
+	CANCEL_MS=$(((${EPOCHREALTIME/./} - start) / 1000))
+}
+
+SANITY255E_COUNT=${SANITY255E_COUNT:-20000}
+
+test_255e() {
+	(( OST1_VERSION >= $(version_code 2.10.50) )) ||
+		skip "lustre < 2.10.50 does not support lockahead"
+
+	local ost1_imp=$(get_osc_import_name client ost1)
+	local imp_name=$($LCTL list_param osc.$ost1_imp | head -n1 |
+			 cut -d'.' -f2)
+	local ns=ldlm.namespaces.$imp_name
+	local count=$SANITY255E_COUNT
+	local low_first_ms
+	local high_first_ms
+	local locks
+
+	test_mkdir $DIR/$tdir || error "mkdir $tdir failed"
+	stack_trap "rm -rf $DIR/$tdir"
+	$LFS setstripe -i 0 -c 1 $DIR/$tdir/$tfile ||
+		error "setstripe $tfile failed"
+	# The size lets the lock extents count for the KMS.  Truncate takes a
+	# PW lock on the whole file, which would match all lockahead requests.
+	$TRUNCATE $DIR/$tdir/$tfile $((count * $(getconf PAGESIZE))) ||
+		error "truncate $tfile failed"
+	cancel_lru_locks osc
+
+	# The client cancels its unused locks from the newest to the oldest.
+	# Many adjacent PR locks on one object, taken from the highest offset,
+	# are cancelled from the lowest.  The highest lock keeps protecting
+	# the KMS, so each cancel is cheap.  This is the baseline.
+	lockahead_test -d $DIR/$tdir -f $tfile -t 24 -n $count -r ||
+		error "lockahead of $count locks downward failed"
+	locks=$($LCTL get_param -n $ns.lock_count)
+	(( locks >= count )) || error "downward: $locks locks, expected $count"
+	cancel_all_osc_locks_ms $ns
+	low_first_ms=$CANCEL_MS
+
+	# The same locks taken from the lowest offset are cancelled from the
+	# highest.  After each cancel no remaining lock protects the old KMS,
+	# and ldlm_extent_shift_kms() used to walk all of them under the
+	# resource lock, which is quadratic.  Clients were then evicted for not
+	# answering the blocking AST in time (LU-21281).
+	lockahead_test -d $DIR/$tdir -f $tfile -t 24 -n $count ||
+		error "lockahead of $count locks upward failed"
+	locks=$($LCTL get_param -n $ns.lock_count)
+	(( locks >= count )) || error "upward: $locks locks, expected $count"
+	cancel_all_osc_locks_ms $ns
+	high_first_ms=$CANCEL_MS
+
+	echo "cancel $count locks: lowest first $low_first_ms ms," \
+	     "highest first $high_first_ms ms"
+	# Both orders do the same work apart from the KMS update, so compare
+	# them instead of using an absolute time that depends on the node.
+	# Allow for noise and the polling interval.
+	(( high_first_ms <= low_first_ms * 3 / 2 + 500 )) ||
+		error "cancel highest first $high_first_ms ms," \
+		      "lowest first $low_first_ms ms"
+}
+run_test 255e "cancelling many extent locks from the highest is not slow"
+
 test_256() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	remote_mds_nodsh && skip "remote MDS with nodsh"

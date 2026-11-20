@@ -62,6 +62,8 @@ static char fsmountdir[PATH_MAX];	/* Lustre mountpoint */
 static char *lustre_dir;		/* Test directory inside Lustre */
 static char *lustre_dir2;		/* Same dir but on second mountpoint */
 static int single_test;			/* Number of a single test to execute*/
+static int lock_count = 20000;		/* Number of locks for test 24 */
+static bool lock_reverse;		/* Test 24: take locks high to low */
 
 /* Cleanup our test file. */
 static void cleanup(void)
@@ -1179,10 +1181,61 @@ static int test23(void)
 	return 0;
 }
 
+/* Take many adjacent PR locks on one object, one page each, from the lowest
+ * offset up, or from the highest down with -r.  The client cancels the newest
+ * lock first, so by default the highest lock goes first, which is the worst
+ * case for the KMS update on cancel (LU-21281).
+ * The locks are left in the client LRU, and the file is left in place.
+ * The caller creates the file with its final size, and cancels the client
+ * locks, since a PW lock for the whole file would match every request.
+ */
+static int test24(void)
+{
+	struct llapi_lu_ladvise *advice;
+	const int batch = 1000;
+	size_t page = getpagesize();
+	int fd;
+	int rc;
+	int i;
+	int j;
+
+	fd = open(mainpath, O_RDWR);
+	ASSERTF(fd >= 0, "open failed for '%s': %s",
+		mainpath, strerror(errno));
+
+	advice = calloc(batch, sizeof(*advice));
+	ASSERTF(advice != NULL, "cannot allocate advice");
+
+	for (i = 0; i < lock_count; i += batch) {
+		int n = lock_count - i < batch ? lock_count - i : batch;
+
+		for (j = 0; j < n; j++) {
+			int idx = lock_reverse ? lock_count - 1 - i - j : i + j;
+
+			setup_ladvise_lockahead(&advice[j], MODE_READ_USER, 0,
+						idx * page,
+						(idx + 1) * page - 1, false);
+		}
+		rc = llapi_ladvise(fd, 0, n, advice);
+		ASSERTF(rc == 0, "cannot lockahead '%s': %s",
+			mainpath, strerror(errno));
+		for (j = 0; j < n; j++)
+			ASSERTF(advice[j].lla_lockahead_result ==
+				LLA_RESULT_SENT,
+				"lockahead %d: unexpected result %d", i + j,
+				advice[j].lla_lockahead_result);
+	}
+
+	free(advice);
+	close(fd);
+
+	return 0;
+}
+
 static void usage(char *prog)
 {
 	fprintf(stderr,
-		"Usage: %s [-d lustre_dir], [-D lustre_dir2] [-t test]\n",
+		"Usage: %s [-d lustre_dir], [-D lustre_dir2] [-t test] [-n count] [-r]\n",
 		prog);
 	exit(-1);
 }
@@ -1191,7 +1244,7 @@ static void process_args(int argc, char *argv[])
 {
 	int c;
 
-	while ((c = getopt(argc, argv, "d:D:f:t:")) != -1) {
+	while ((c = getopt(argc, argv, "d:D:f:n:rt:")) != -1) {
 		switch (c) {
 		case 'f':
 			mainfile = optarg;
@@ -1201,6 +1254,12 @@ static void process_args(int argc, char *argv[])
 			break;
 		case 'D':
 			lustre_dir2 = optarg;
+			break;
+		case 'n':
+			lock_count = atoi(optarg);
+			break;
+		case 'r':
+			lock_reverse = true;
 			break;
 		case 't':
 			single_test = atoi(optarg);
@@ -1259,7 +1318,9 @@ int main(int argc, char *argv[])
 			"invalid name for mainpath2");
 	}
 
-	cleanup();
+	/* test 24 uses a file prepared by the caller */
+	if (single_test != 24)
+		cleanup();
 
 	switch (single_test) {
 	case 0:
@@ -1329,6 +1390,9 @@ int main(int argc, char *argv[])
 		ASSERTF(lustre_dir2,
 			"must provide second mount point for test 23");
 		PERFORM(test23);
+		break;
+	case 24:
+		rc = test24();
 		break;
 	default:
 		fprintf(stderr, "impossible value of single_test %d\n",
