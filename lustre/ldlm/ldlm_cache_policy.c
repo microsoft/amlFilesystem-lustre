@@ -180,12 +180,15 @@ static void ldlm_lfru_demote_lock(struct ldlm_namespace *ns,
 
 /**
  * ldlm_lfru_priv_too_many() - check whether the priv list is over capacity
+ * @ns: LDLM namespace whose private LRU lock count is checked
  *
  * Both conditions must hold:
  * - at least @LDLM_LFRU_PRIV_DEMOTE_THRESH priv locks, so batch demotion
  *   does not fire while the cache is still warming up and priv membership
  *   would otherwise oscillate, and
  * - priv locks reach lru_priv_ratio_limit of the current unused cache.
+ *
+ * Return: %true if private lock count is too large, %false otherwise
  */
 static inline bool ldlm_lfru_priv_too_many(struct ldlm_namespace *ns)
 {

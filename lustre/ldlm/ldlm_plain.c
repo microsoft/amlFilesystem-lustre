@@ -35,13 +35,18 @@
 
 #if IS_ENABLED(CONFIG_LUSTRE_FS_SERVER)
 /**
- * Determine if the lock is compatible with all locks on the queue.
+ * ldlm_plain_compat_queue() - Determine if the lock is compatible with all
+ *                             locks on the queue.
+ * @queue: granted/waiting lock queue
+ * @req: LDLM lock
+ * @work_list: conflicting locks list
  *
- * If \a work_list is provided, conflicting locks are linked there.
- * If \a work_list is not provided, we exit this function on first conflict.
+ * If @work_list is provided, conflicting locks are linked there.
+ * If @work_list is not provided, we exit this function on first conflict.
  *
- * \retval 0 if there are conflicting locks in the \a queue
- * \retval 1 if the lock is compatible to all locks in \a queue
+ * Return:
+ * * %0 if there are conflicting locks in the @queue
+ * * %1 if the lock is compatible to all locks in @queue
  */
 static inline int
 ldlm_plain_compat_queue(struct list_head *queue, struct ldlm_lock *req,
@@ -79,8 +84,8 @@ ldlm_plain_compat_queue(struct list_head *queue, struct ldlm_lock *req,
 		compat = 0;
 
 		/*
-		 * Add locks of the mode group to \a work_list as
-		 * blocking locks for \a req.
+		 * Add locks of the mode group to @work_list as
+		 * blocking locks for @req.
 		 */
 		if (lock->l_blocking_ast)
 			ldlm_add_ast_work_item(lock, req, work_list);
@@ -100,12 +105,25 @@ ldlm_plain_compat_queue(struct list_head *queue, struct ldlm_lock *req,
 }
 
 /**
- * Process a granting attempt for plain lock.
- * Must be called with ns lock held.
+ * ldlm_process_plain_lock() - Process a granting attempt for plain lock.
+ * @lock: LDLM lock
+ * @flags: Unused
+ * @intention: Processing intention (Rescan/Enqueue/Recovery)
+ * @err: granting attempt status, always set to %ELDLM_OK here [out]
+ * @work_list: list gathering the AST work items to send: blocking ASTs of
+ *             conflicting locks, except for %LDLM_PROCESS_RESCAN, and the
+ *             completion AST of @lock once granted, except for
+ *             %LDLM_PROCESS_ENQUEUE
  *
- * This function looks for any conflicts for \a lock in the granted or
+ * This function looks for any conflicts for @lock in the granted or
  * waiting queues. The lock is granted if no conflicts are found in
  * either queue.
+ *
+ * Context: Called with the resource lock held (see check_res_locked()).
+ * Return:
+ * * %LDLM_ITER_STOP if @intention is %LDLM_PROCESS_RESCAN and a conflicting
+ *   lock was found
+ * * %LDLM_ITER_CONTINUE otherwise
  */
 int ldlm_process_plain_lock(struct ldlm_lock *lock, __u64 *flags,
 			    enum ldlm_process_intention intention,
