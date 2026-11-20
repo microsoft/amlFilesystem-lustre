@@ -19,7 +19,7 @@
 #include <linux/delay.h>
 #include <linux/pid_namespace.h>
 #include <linux/stringhash.h>
-#include <lustre_compat/linux/rbtree.h>
+#include <linux/rbtree.h>
 #include <linux/workqueue.h>
 #include <cfs_hash.h>
 #include <obd_class.h>

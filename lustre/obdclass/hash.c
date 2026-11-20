@@ -84,7 +84,7 @@
 
 #include <linux/seq_file.h>
 #include <linux/log2.h>
-#include <lustre_compat/linux/workqueue.h>
+#include <linux/workqueue.h>
 
 #include <cfs_hash.h>
 #include <obd_class.h>

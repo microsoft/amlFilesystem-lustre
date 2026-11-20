@@ -39,10 +39,10 @@
 #include <asm/uaccess.h>
 #include <linux/miscdevice.h>
 #include <linux/seq_file.h>
+#include <linux/timer.h>
 #include <linux/kobject.h>
 
 #include <linux/lnet/lnet_crypto.h>
-#include <lustre_compat/linux/timer.h>
 #include <obd_support.h>
 #include <obd_class.h>
 #include <lprocfs_status.h>

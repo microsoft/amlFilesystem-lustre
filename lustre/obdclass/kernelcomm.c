@@ -21,7 +21,7 @@
 #include <linux/file.h>
 #include <linux/glob.h>
 #include <linux/types.h>
-#include <lustre_compat/net/genetlink.h>
+#include <net/genetlink.h>
 
 #include <obd_class.h>
 #include <obd_support.h>

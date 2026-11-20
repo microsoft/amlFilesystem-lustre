@@ -20,7 +20,7 @@
 
 #include <lustre_obdo.h>
 #include <lustre_osc.h>
-#include <lustre_compat/linux/folio_batch.h>
+#include <linux/folio_batch.h>
 #include <linux/falloc.h>
 
 #include "osc_internal.h"

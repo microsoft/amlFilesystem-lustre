@@ -19,7 +19,7 @@
 #define DEBUG_SUBSYSTEM S_CLASS
 
 #include <linux/list.h>
-#include <lustre_compat/linux/uio.h>
+#include <linux/uio.h>
 
 #include <obd_class.h>
 #include <obd_support.h>

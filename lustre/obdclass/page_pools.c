@@ -15,8 +15,8 @@
 
 #define DEBUG_SUBSYSTEM S_SEC
 
-#include <lustre_compat/linux/shrinker.h>
-#include <lustre_compat/linux/mm.h>
+#include <linux/shrinker.h>
+#include <linux/mm.h>
 
 #include <obd.h>
 #include <obd_class.h>

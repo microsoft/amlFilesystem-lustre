@@ -12,10 +12,10 @@
 
 #include <linux/module.h>
 #include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/random.h>
 #include <linux/sort.h>
 
-#include <lustre_compat/linux/mm.h>
 #include <obd_class.h>
 #include <obd_support.h>
 #include <lustre_disk.h>

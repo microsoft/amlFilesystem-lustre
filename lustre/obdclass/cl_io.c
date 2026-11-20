@@ -24,11 +24,11 @@
 #include <linux/list.h>
 #include <linux/list_sort.h>
 #include <linux/mmu_context.h>
+#include <linux/uio.h>
 #include <obd_class.h>
 #include <obd_support.h>
 #include <lustre_fid.h>
 #include <cl_object.h>
-#include <lustre_compat/linux/uio.h>
 #include "cl_internal.h"
 
 /*

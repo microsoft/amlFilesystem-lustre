@@ -16,7 +16,7 @@
 #include <linux/math64.h>
 #include <linux/random.h>
 #include <linux/sort.h>
-#include <lustre_compat/linux/timer.h>
+#include <linux/timer.h>
 #include <obd_class.h>
 #include <lu_tgt_alloc.h>
 

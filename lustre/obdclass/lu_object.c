@@ -24,7 +24,7 @@
 #include <linux/list.h>
 #include <linux/processor.h>
 #include <linux/random.h>
-#include <lustre_compat/linux/shrinker.h>
+#include <linux/shrinker.h>
 #include <linux/rhashtable.h>
 
 #include <obd_class.h>
