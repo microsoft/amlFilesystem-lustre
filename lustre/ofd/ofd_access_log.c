@@ -222,7 +222,7 @@ static int oal_file_open(struct inode *inode, struct file *filp)
 	ocb = kzalloc(sizeof(*ocb), GFP_KERNEL);
 	if (!ocb)
 		return -ENOMEM;
-	ocb->ocb_circ.buf = vmalloc(oal->oal_log_size);
+	OBD_ALLOC_LARGE(ocb->ocb_circ.buf, oal->oal_log_size);
 	if (!ocb->ocb_circ.buf) {
 		kfree(ocb);
 		return -ENOMEM;
@@ -426,7 +426,7 @@ static int oal_file_release(struct inode *inode, struct file *filp)
 	list_del(&ocb->ocb_list);
 	up_write(&oal->oal_buf_list_sem);
 
-	vfree(ocb->ocb_circ.buf);
+	OBD_FREE_LARGE(ocb->ocb_circ.buf, oal->oal_log_size);
 	kfree(ocb);
 
 	return 0;
