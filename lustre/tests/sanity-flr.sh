@@ -4112,6 +4112,46 @@ test_62() {
 }
 run_test 62 "read/write with unknown type of mirror"
 
+test_62b() {
+	(( CLIENT_VERSION >= $(version_code 2.17.62) )) ||
+		skip "client older than 2.17.62 cannot pack an unknown pattern"
+
+	local file=$DIR/$tdir/$tfile
+	local lov=$TMP/$tfile.lov
+	local pattern
+	local diffs
+
+	test_mkdir $DIR/$tdir
+	$LFS mirror create -N -c 1 -N -c 1 --flags=prefer $file ||
+		error "failed to create mirror file $file"
+	cat /etc/passwd > $file || error "cannot write to $file"
+	$LFS mirror resync $file || error "cannot resync $file"
+	stack_trap "rm -f $lov.1 $lov.2"
+	getfattr -n lustre.lov --only-values $file > $lov.1 ||
+		error "cannot get the layout of $file"
+	cancel_lru_locks mdc
+
+	echo "read the layout of a written mirror with unknown pattern"
+	#define OBD_FAIL_LOV_COMP_PATTERN 0x1427
+	# mirror 1 in-memory pattern is bad
+	$LCTL set_param fail_loc=0x1427 fail_val=1
+	stack_trap "$LCTL set_param fail_loc=0 fail_val=0"
+	pattern=$($LFS getstripe -I65537 $file | awk '/lmm_pattern/{print $2}')
+	[[ $pattern =~ 502 || $pattern =~ bad ]] ||
+		error "mirror 1 pattern '$pattern' is not 'bad' as expected"
+	getfattr -n lustre.lov --only-values $file > $lov.2 ||
+		error "cannot get the layout of $file with a bad pattern"
+	# only the two changed bytes of the pattern differ, so the client used
+	# its own bad layout, and mirror 1 keeps its objects
+	diffs=$(cmp -l $lov.1 $lov.2 | wc -l)
+	(( diffs == 2 )) || {
+		cmp -l $lov.1 $lov.2
+		error "$diffs bytes of the layout differ, not just the pattern"
+	}
+	diff /etc/passwd $file || error "read $file error"
+}
+run_test 62b "layout of an instantiated mirror with unknown pattern"
+
 test_70() {
 	local tf=$DIR/$tdir/$tfile
 

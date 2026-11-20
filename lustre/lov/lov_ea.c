@@ -139,8 +139,7 @@ static void lsme_free(struct lov_stripe_md_entry *lsme)
 	stripe_count = lsme->lsme_stripe_count;
 	if (!lsme_inited(lsme) ||
 	    lsme->lsme_pattern & LOV_PATTERN_F_RELEASED ||
-	    !lov_supported_comp_magic(lsme->lsme_magic) ||
-	    !lov_pattern_available(lsme->lsme_pattern))
+	    !lov_supported_comp_magic(lsme->lsme_magic))
 		stripe_count = 0;
 	for (i = 0; i < stripe_count; i++)
 		OBD_SLAB_FREE_PTR(lsme->lsme_oinfo[i], lov_oinfo_slab);
@@ -206,9 +205,11 @@ lsme_unpack(struct lov_obd *lov, struct lov_mds_md *lmm, size_t buf_size,
 	if (magic != LOV_MAGIC_V1 && magic != LOV_MAGIC_V3)
 		RETURN(ERR_PTR(-EINVAL));
 
+	/* the objects of a pattern this client does not know are kept, so that
+	 * the layout can still be packed (lov_lsme_pack_v1v3()) and copied
+	 */
 	pattern = le32_to_cpu(lmm->lmm_pattern);
-	if (pattern & LOV_PATTERN_F_RELEASED || !inited ||
-	    !lov_pattern_available(pattern))
+	if (pattern & LOV_PATTERN_F_RELEASED || !inited)
 		stripe_count = 0;
 	else
 		stripe_count = le16_to_cpu(lmm->lmm_stripe_count);
@@ -248,8 +249,10 @@ lsme_unpack(struct lov_obd *lov, struct lov_mds_md *lmm, size_t buf_size,
 			GOTO(out_lsme, rc = pool_name_len);
 	}
 
-	/* with Data-on-MDT set maxbytes to stripe size */
-	if (lsme_is_dom(lsme)) {
+	/* with Data-on-MDT set maxbytes to stripe size; an unknown pattern
+	 * with the MDT bit is not DoM and keeps its objects
+	 */
+	if (lsme_is_dom(lsme) && lov_pattern_available(pattern)) {
 		if (maxbytes) {
 			lov_bytes = lsme->lsme_stripe_size;
 			goto out_dom1;
@@ -273,7 +276,10 @@ lsme_unpack(struct lov_obd *lov, struct lov_mds_md *lmm, size_t buf_size,
 		ostid_le_to_cpu(&objects[i].l_ost_oi, &loi->loi_oi);
 		loi->loi_ost_idx = le32_to_cpu(objects[i].l_ost_idx);
 		loi->loi_ost_gen = le32_to_cpu(objects[i].l_ost_gen);
-		if (lov_oinfo_is_dummy(loi))
+		/* objects of an unknown pattern are kept but not looked
+		 * up, as no IO uses them
+		 */
+		if (lov_oinfo_is_dummy(loi) || !lov_pattern_available(pattern))
 			continue;
 
 retry_new_ost:
@@ -983,8 +989,7 @@ void dump_lsm(unsigned int level, const struct lov_stripe_md *lsm)
 				   lse->lsme_stripe_size, lse->lsme_pool_name);
 			if (!lsme_inited(lse) ||
 			    lse->lsme_pattern & LOV_PATTERN_F_RELEASED ||
-			    !lov_supported_comp_magic(lse->lsme_magic) ||
-			    !lov_pattern_available(lse->lsme_pattern))
+			    !lov_supported_comp_magic(lse->lsme_magic))
 				continue;
 			for (j = 0; j < lse->lsme_stripe_count; j++) {
 				CDEBUG_LIMIT(level,
