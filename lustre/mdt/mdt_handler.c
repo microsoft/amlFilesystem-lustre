@@ -271,14 +271,14 @@ static void mdt_lock_pdo_mode(struct mdt_thread_info *info, struct mdt_object *o
 }
 
 /**
- * Check whether \a o is directory stripe object.
+ * mdt_is_dir_stripe() - Check whether @o is directory stripe object.
+ * @info: thread environment
+ * @o: MDT object
  *
- * \param[in]  info	thread environment
- * \param[in]  o	MDT object
- *
- * \retval 1	is directory stripe.
- * \retval 0	isn't directory stripe.
- * \retval < 1  error code
+ * Return:
+ * * %1 is directory stripe.
+ * * %0 isn't directory stripe.
+ * * %negative error code
  */
 static int mdt_is_dir_stripe(struct mdt_thread_info *info,
 				struct mdt_object *o)
@@ -1857,15 +1857,16 @@ out:
 }
 
 /**
- * Handler of layout intent RPC requiring the layout modification
+ * mdt_layout_change() - Handler of layout intent RPC requiring the layout
+ *                       modification
+ * @info: thread environment
+ * @obj: object
+ * @lhc: object ldlm lock handle [out]
+ * @layout: layout change descriptor
  *
- * \param[in]  info	thread environment
- * \param[in]  obj	object
- * \param[out] lhc	object ldlm lock handle
- * \param[in]  layout	layout change descriptor
- *
- * \retval 0	on success
- * \retval < 0	error code
+ * Return:
+ * * %0	on success
+ * * %negative error code
  */
 int mdt_layout_change(struct mdt_thread_info *info, struct mdt_object *obj,
 		      struct mdt_lock_handle *lhc,
@@ -1916,12 +1917,13 @@ int mdt_layout_change(struct mdt_thread_info *info, struct mdt_object *obj,
 }
 
 /**
+ * mdt_swap_lov_flag() - Exchange MOF_LOV_CREATED flags between two objects
+ * @o1: First swap layout object [in, out]
+ * @o2: Second swap layout object [in, out]
+ *
  * Exchange MOF_LOV_CREATED flags between two objects after a
  * layout swap. No assumption is made on whether o1 or o2 have
  * created objects or not.
- *
- * \param[in,out] o1	First swap layout object
- * \param[in,out] o2	Second swap layout object
  */
 static void mdt_swap_lov_flag(struct mdt_object *o1, struct mdt_object *o2)
 {
@@ -2157,19 +2159,19 @@ lookup:
 }
 
 /**
- * Find name matching hash
+ * find_name_matching_hash() - Find name matching hash
+ * @info: mdt thread info
+ * @lname: encoded hash to find
+ * @parent: parent object
+ * @child: object to search with LinkEA
  *
- * We search \a child LinkEA for a name whose hash matches \a lname
+ * We search @child LinkEA for a name whose hash matches @lname
  * (it contains an encoded hash).
  *
- * \param info mdt thread info
- * \param lname encoded hash to find
- * \param parent parent object
- * \param child object to search with LinkEA
- *
- * \retval 1 match found
- * \retval 0 no match found
- * \retval -ev negative errno upon error
+ * Return:
+ * * %1 match found
+ * * %0 no match found
+ * * %negative errno upon error
  */
 int find_name_matching_hash(struct mdt_thread_info *info, struct lu_name *lname,
 			    struct mdt_object *parent, struct mdt_object *child)
@@ -4226,12 +4228,11 @@ struct mdt_object *mdt_object_find(const struct lu_env *env,
 }
 
 /**
- * Asyncronous commit for mdt device.
+ * mdt_device_commit_async() - Asyncronous commit for mdt device.
+ * @env: lustre environment
+ * @mdt: mdt device
  *
  * Pass asynchonous commit call down the MDS stack.
- *
- * \param env environment
- * \param mdt the mdt device
  */
 static void mdt_device_commit_async(const struct lu_env *env,
 				    struct mdt_device *mdt)
@@ -4249,30 +4250,30 @@ static void mdt_device_commit_async(const struct lu_env *env,
 	EXIT;
 }
 
-/**
- * Mark the lock as "synchonous".
+/*
+ * mdt_set_lock_sync() - Mark the lock as "synchonous".
+ * @lock: the lock to mark as "synchonous"
  *
  * Mark the lock to deffer transaction commit to the unlock time.
  *
- * \param lock the lock to mark as "synchonous"
- *
- * \see mdt_is_lock_sync
- * \see mdt_save_lock
+ * see mdt_is_lock_sync
+ * see mdt_save_lock
  */
 static inline void mdt_set_lock_sync(struct ldlm_lock *lock)
 {
 	lock->l_ast_data = (void *)1;
 }
 
-/**
- * Check whehter the lock "synchonous" or not.
+/*
+ * mdt_is_lock_sync() - Check whehter the lock "synchonous" or not.
+ * @lock: the lock to check
  *
- * \param lock the lock to check
- * \retval 1 the lock is "synchonous"
- * \retval 0 the lock isn't "synchronous"
+ * see mdt_set_lock_sync
+ * see mdt_save_lock
  *
- * \see mdt_set_lock_sync
- * \see mdt_save_lock
+ * Return:
+ * * %1 the lock is "synchonous"
+ * * %0 the lock isn't "synchronous"
  */
 static inline int mdt_is_lock_sync(struct ldlm_lock *lock)
 {
@@ -4280,17 +4281,20 @@ static inline int mdt_is_lock_sync(struct ldlm_lock *lock)
 }
 
 /**
- * Blocking AST for mdt locks.
+ * mdt_blocking_ast() - Blocking AST for mdt locks.
+ * @lock: the lock which blocks a request or cancelling lock
+ * @desc: unused
+ * @data: unused
+ * @flag: indicates whether this cancelling or blocking callback
  *
  * Starts transaction commit if in case of COS lock conflict or
  * deffers such a commit to the mdt_save_lock.
  *
- * \param lock the lock which blocks a request or cancelling lock
- * \param desc unused
- * \param data unused
- * \param flag indicates whether this cancelling or blocking callback
- * \retval 0
- * \see ldlm_blocking_ast_nocheck
+ * see ldlm_blocking_ast_nocheck
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 int mdt_blocking_ast(struct ldlm_lock *lock, struct ldlm_lock_desc *desc,
 		     void *data, int flag)
@@ -4686,7 +4690,6 @@ int mdt_object_lock_internal(struct mdt_thread_info *info,
 }
 
 /*
- * MDT object locking functions:
  * mdt_object_lock(): lock object, this is used in most places, and normally
  *	lock ibits doesn't contain LOOKUP, unless the caller knows it's not
  *	remote object.
@@ -4706,18 +4709,19 @@ int mdt_object_lock_internal(struct mdt_thread_info *info,
  */
 
 /**
- * lock object
+ * mdt_object_lock() - lock object
+ * @info: struct mdt_thread_info
+ * @obj: object
+ * @lh: lock handle
+ * @ibits: MDS inode lock bits
+ * @mode: lock mode
  *
  * this is used to lock object in most places, and normally lock ibits doesn't
  * contain LOOKUP, unless the caller knows it's not remote object.
  *
- * \param info		struct mdt_thread_info
- * \param obj		object
- * \param lh		lock handle
- * \param ibits		MDS inode lock bits
- * \param mode		lock mode
- *
- * \retval		0 on success, -ev on error.
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 int mdt_object_lock(struct mdt_thread_info *info, struct mdt_object *obj,
 		    struct mdt_lock_handle *lh,  enum mds_ibits_locks ibits,
@@ -4733,7 +4737,13 @@ int mdt_object_lock(struct mdt_thread_info *info, struct mdt_object *obj,
 }
 
 /**
- * lock object with LOOKUP and other ibits
+ * mdt_object_check_lock() - lock object with LOOKUP and other ibits
+ * @info: struct mdt_thread_info
+ * @parent: parent object
+ * @child: child object
+ * @lh: lock handle
+ * @ibits: MDS inode lock bits
+ * @mode: lock mode
  *
  * it will check whether parent and child are on different MDTs, if so, take
  * LOOKUP lock on parent MDT, and lock other ibits on child MDT, otherwise lock
@@ -4741,14 +4751,9 @@ int mdt_object_lock(struct mdt_thread_info *info, struct mdt_object *obj,
  * MDTs, in which case specific lock function should be used, and it's in
  * rename and migrate only.
  *
- * \param info		struct mdt_thread_info
- * \param parent	parent object
- * \param child		child object
- * \param lh		lock handle
- * \param ibits		MDS inode lock bits
- * \param mode		lock mode
- *
- * \retval		0 on success, -ev on error.
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 int mdt_object_check_lock(struct mdt_thread_info *info,
 			  struct mdt_object *parent, struct mdt_object *child,
@@ -4788,18 +4793,19 @@ int mdt_object_check_lock(struct mdt_thread_info *info,
 }
 
 /**
- * take parent UPDATE lock
+ * mdt_parent_lock() - take parent UPDATE lock
+ * @info: struct mdt_thread_info
+ * @obj: parent object
+ * @lh: lock handle
+ * @lname: child name
+ * @mode: lock mode
  *
  * if parent is local or mode is LCK_PW, take PDO lock, otherwise take regular
  * lock.
  *
- * \param info	struct mdt_thread_info
- * \param obj	parent object
- * \param lh	lock handle
- * \param lname	child name
- * \param mode	lock mode
- *
- * \retval	0 on success, -ev on error.
+ * Return:
+ * * %0 on success
+ * * %0 on failure
  */
 int mdt_parent_lock(struct mdt_thread_info *info, struct mdt_object *obj,
 		    struct mdt_lock_handle *lh, const struct lu_name *lname,
@@ -4823,21 +4829,22 @@ int mdt_parent_lock(struct mdt_thread_info *info, struct mdt_object *obj,
 }
 
 /**
- * lock object with trybits
+ * mdt_object_lock_try() - lock object with trybits
+ * @info: struct mdt_thread_info
+ * @obj: object
+ * @lh: lock handle
+ * @ibits: MDS inode lock bits
+ * @trybits: optional inode lock bits
+ * @mode: lock mode
  *
  * the trybits contains optional inode lock bits that can be granted. This is
  * called by getattr/open to fetch more inode lock bits to client, and is also
  * called by dir migration to lock link parent in non-block mode to avoid
  * deadlock.
  *
- * \param info		struct mdt_thread_info
- * \param obj		object
- * \param lh		lock handle
- * \param ibits		MDS inode lock bits
- * \param trybits	optional inode lock bits
- * \param mode		lock mode
- *
- * \retval		0 on success, -ev on error.
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 int mdt_object_lock_try(struct mdt_thread_info *info, struct mdt_object *obj,
 			struct mdt_lock_handle *lh, enum mds_ibits_locks *ibits,
@@ -4882,17 +4889,16 @@ int mdt_object_lookup_lock(struct mdt_thread_info *info,
 }
 
 /**
- * Save a lock within request object.
+ * mdt_save_lock() - Save a lock within request object.
+ * @info: thead info object
+ * @h: lock handle
+ * @mode: lock mode
+ * @decref: force immediate lock releasing
  *
  * Keep the lock referenced until whether client ACK or transaction
  * commit happens or release the lock immediately depending on input
  * parameters. If COS is ON, a write lock is converted to COS lock
  * before saving.
- *
- * \param info thead info object
- * \param h lock handle
- * \param mode lock mode
- * \param decref force immediate lock releasing
  */
 static void mdt_save_lock(struct mdt_thread_info *info, struct lustre_handle *h,
 			  enum ldlm_mode mode, int decref)
@@ -4956,15 +4962,15 @@ static void mdt_save_lock(struct mdt_thread_info *info, struct lustre_handle *h,
 }
 
 /**
- * Save cross-MDT lock in uncommitted_slc_locks
+ * mdt_save_remote_lock() - Save cross-MDT lock in uncommitted_slc_locks
+ * @info: thead info object
+ * @o: MDT object
+ * @h: lock handle
+ * @mode: lock mode
+ * @decref: force immediate lock releasing
  *
  * Keep the lock referenced until transaction commit happens or release the lock
  * immediately depending on input parameters.
- *
- * \param info thead info object
- * \param h lock handle
- * \param mode lock mode
- * \param decref force immediate lock releasing
  */
 static void mdt_save_remote_lock(struct mdt_thread_info *info,
 				 struct mdt_object *o, struct lustre_handle *h,
@@ -4997,18 +5003,17 @@ static void mdt_save_remote_lock(struct mdt_thread_info *info,
 }
 
 /**
- * Unlock mdt object.
+ * mdt_object_unlock() - Unlock mdt object.
+ * @info: thread info object
+ * @o: mdt object
+ * @lh: mdt lock handle referencing regular and PDO locks
+ * @decref: force immediate lock releasing
  *
  * Immeditely release the regular lock and the PDO lock or save the
  * lock in request and keep them referenced until client ACK or
  * transaction commit.
  *
- * \param info thread info object
- * \param o mdt object
- * \param lh mdt lock handle referencing regular and PDO locks
- * \param decref force immediate lock releasing
- *
- * XXX o is not used and may be NULL, see hsm_cdt_request_completed().
+ * Note: @o is not used and may be NULL, see hsm_cdt_request_completed().
  */
 void mdt_object_unlock(struct mdt_thread_info *info, struct mdt_object *o,
 		       struct mdt_lock_handle *lh, int decref)
@@ -6078,11 +6083,11 @@ static int mdt_seq_fini(const struct lu_env *env, struct mdt_device *mdt)
 	return seq_site_fini(env, mdt_seq_site(mdt));
 }
 
-/**
+/*
  * It will retrieve its FLDB entries from MDT0, and it only happens
  * when upgrading existent FS to 2.6 or when local FLDB is corrupted,
  * and it needs to refresh FLDB from the MDT0.
- **/
+ */
 static int mdt_register_lwp_callback(void *data)
 {
 	struct lu_env		env;
@@ -7599,29 +7604,31 @@ static inline void mdt_disable_slc(struct mdt_device *mdt)
 }
 
 /**
- * Match client and server connection feature flags.
+ * mdt_connect_internal() - Match client and server connection feature flags.
+ * @env: Lustre environment
+ * @exp: the obd_export associated with this client/target pair
+ * @mdt: the target device for the connection
+ * @data: stores data for this connect request
+ * @reconnect: must be true if it is a new connection and false for reconnection
  *
  * Compute the compatibility flags for a connection request based on
  * features mutually supported by client and server.
  *
- * The obd_export::exp_connect_data.ocd_connect_flags field in \a exp
+ * The obd_export::exp_connect_data.ocd_connect_flags field in @exp
  * must not be updated here, otherwise a partially initialized value may
  * be exposed. After the connection request is successfully processed,
  * the top-level MDT connect request handler atomically updates the export
  * connect flags from the obd_connect_data::ocd_connect_flags field of the
- * reply. \see mdt_connect().
+ * reply. see mdt_connect().
  *
  * Before 2.7.50 clients will send a struct obd_connect_data_v1 rather than a
  * full struct obd_connect_data. So care must be taken when accessing fields
  * that are not present in struct obd_connect_data_v1. See LU-16.
  *
- * \param exp   the obd_export associated with this client/target pair
- * \param mdt   the target device for the connection
- * \param data  stores data for this connect request
- *
- * \retval 0       success
- * \retval -EPROTO \a data unexpectedly has zero obd_connect_data::ocd_brw_size
- * \retval -EBADE  client and server feature requirements are incompatible
+ * Return:
+ * * %0 on success
+ * * %-EPROTO @data unexpectedly has zero obd_connect_data::ocd_brw_size
+ * * %-EBADE client and server feature requirements are incompatible
  */
 static int mdt_connect_internal(const struct lu_env *env,
 				struct obd_export *exp,
@@ -8243,17 +8250,19 @@ int mdt_links_read(struct mdt_thread_info *info, struct mdt_object *mdt_obj,
 }
 
 /**
+ * mdt_path_current() - Given MDT obj, try to look up full path to the object.
+ * @info: Per-thread common data shared by MDT level handlers.
+ * @obj: Object to do path lookup of
+ * @fp: User-provided struct to store path information [in,out]
+ * @root_fid: Root FID of current path should reach
+ *
  * Given an MDT object, try to look up the full path to the object.
  * Part of the MDT layer implementation of lfs fid2path.
  *
- * \param[in]     info  Per-thread common data shared by MDT level handlers.
- * \param[in]     obj   Object to do path lookup of
- * \param[in,out] fp    User-provided struct to store path information
- * \param[in]     root_fid Root FID of current path should reach
- *
- * \retval 0 Lookup successful, path information stored in fp
- * \retval -EAGAIN Lookup failed, usually because object is being moved
- * \retval negative errno if there was a problem
+ * Return:
+ * * %0 Lookup successful, path information stored in fp
+ * * %-EAGAIN Lookup failed, usually because object is being moved
+ * * %negative errno if there was a problem
  */
 static int mdt_path_current(struct mdt_thread_info *info,
 			    struct mdt_object *obj,
@@ -8425,19 +8434,21 @@ out:
 }
 
 /**
+ * mdt_path() - Given an MDT object, use mdt_path_current to get the path.
+ * @info: Per-thread common data shared by mdt level handlers.
+ * @obj: Object to do path lookup of
+ * @fp: User-provided struct for arguments to store path information [in,out]
+ * @root_fid: Root FID of current path should reach
+ *
  * Given an MDT object, use mdt_path_current to get the path.
  * Essentially a wrapper to retry mdt_path_current a set number of times
  * if -EAGAIN is returned (usually because an object is being moved).
  *
  * Part of the MDT layer implementation of lfs fid2path.
  *
- * \param[in]     info  Per-thread common data shared by mdt level handlers.
- * \param[in]     obj   Object to do path lookup of
- * \param[in,out] fp    User-provided struct for arguments and to store path
- *			information
- *
- * \retval 0 Lookup successful, path information stored in fp
- * \retval negative errno if there was a problem
+ * Return:
+ * * %0 Lookup successful, path information stored in fp
+ * * %negative errno if there was a problem
  */
 static int mdt_path(struct mdt_thread_info *info, struct mdt_object *obj,
 		    struct getinfo_fid2path *fp, struct lu_fid *root_fid)
@@ -8467,20 +8478,21 @@ static int mdt_path(struct mdt_thread_info *info, struct mdt_object *obj,
 }
 
 /**
- * Get the full path of the provided FID, as of changelog record recno.
+ * mdt_fid2path() - Get the full path of the provided FID, as of changelog
+ *                  record recno.
+ * @info: Per-thread common data shared by mdt level handlers.
+ * @root_fid: Root FID of current path should reach
+ * @fp: User-provided struct for arguments to store path information [in,out]
  *
  * This checks sanity and looks up object for user provided FID
  * before calling the actual path lookup code.
  *
  * Part of the MDT layer implementation of lfs fid2path.
  *
- * \param[in]     info  Per-thread common data shared by mdt level handlers.
- * \param[in,out] fp    User-provided struct for arguments and to store path
- *			information
- *
- * \retval 0 Lookup successful, path information and recno stored in fp
- * \retval -ENOENT, object does not exist
- * \retval negative errno if there was a problem
+ * Return:
+ * * %0 Lookup successful, path information and recno stored in fp
+ * * %-ENOENT, object does not exist
+ * * %negative errno if there was a problem
  */
 static int mdt_fid2path(struct mdt_thread_info *info,
 			struct lu_fid *root_fid,
@@ -9144,12 +9156,11 @@ struct lu_ucred *mdt_ucred_check(const struct mdt_thread_info *info)
 }
 
 /**
- * Enable/disable COS (Commit On Sharing).
+ * mdt_enable_cos() - Enable/disable COS (Commit On Sharing).
+ * @mdt: mdt device
+ * @val: 0 disables COS, other values enable COS
  *
  * Set/Clear the COS flag in mdt options.
- *
- * \param mdt mdt device
- * \param val 0 disables COS, other values enable COS
  */
 void mdt_enable_cos(struct mdt_device *mdt, bool val)
 {
@@ -9168,11 +9179,10 @@ void mdt_enable_cos(struct mdt_device *mdt, bool val)
 }
 
 /**
- * Check COS (Commit On Sharing) status.
+ * mdt_cos_is_enabled() - Check COS (Commit On Sharing) status.
+ * @mdt: mdt device
  *
  * Return COS flag status.
- *
- * \param mdt mdt device
  */
 int mdt_cos_is_enabled(struct mdt_device *mdt)
 {
