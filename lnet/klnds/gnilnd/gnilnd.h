@@ -1006,7 +1006,7 @@ static inline void *kgnilnd_vzalloc(int size)
 static inline void kgnilnd_vfree(void *ptr, int size)
 {
 	LIBCFS_FREE_PRE(ptr, size, "vfree");
-	vfree(ptr);
+	kvfree_atomic(ptr);
 }
 
 /* as of kernel version 4.2, set_mb is replaced with smp_store_mb */
