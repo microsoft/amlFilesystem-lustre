@@ -54,6 +54,9 @@ export fs_STRIPEPARAMS=${fs_STRIPEPARAMS:-""}
 	export UMOUNT="umount"
 }
 
+# EL's which() wrapper feeds every shell function to /usr/bin/which
+unset -f which 2> /dev/null
+
 # function used by scripts run on remote nodes
 LUSTRE=${LUSTRE:-$(cd $(dirname ${BASH_SOURCE[0]})/..; echo $PWD)}
 . $LUSTRE/tests/functions.sh
@@ -10025,7 +10028,7 @@ do_rpc_nodes () {
 	do_nodes ${quiet:-"--verbose"} $list "${RPATH} NAME=${NAME} \
 		TESTLOG_PREFIX=$TESTLOG_PREFIX TESTNAME=$TESTNAME \
 		RPC_CALLER_FEATURES=allow_register \
-		CONFIG=${CONFIG} bash rpc.sh $* "
+		${MGSNID:+MGSNID=$MGSNID} CONFIG=${CONFIG} bash rpc.sh $* "
 }
 
 wait_clients_import_state () {
