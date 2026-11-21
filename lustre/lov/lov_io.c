@@ -1857,9 +1857,32 @@ static int lov_io_iter_init(const struct lu_env *env,
 				continue;
 
 			if (unlikely(!r0->lo_sub[stripe])) {
-				if (ios->cis_io->ci_type == CIT_READ ||
-				    ios->cis_io->ci_type == CIT_WRITE ||
-				    ios->cis_io->ci_type == CIT_FAULT)
+				struct cl_io *io = ios->cis_io;
+				struct lov_object *lov = lio->lis_object;
+
+				/* a lost object of an EC raid set, such as
+				 * the dummy slot LFSCK leaves for it, is
+				 * rebuilt from parity, but not for AIO, whose
+				 * earlier chunks may still be in flight
+				 */
+				if (io->ci_type == CIT_READ &&
+				    io->ci_cross_ec &&
+				    lsme->lsme_dstripe_count != 0 &&
+				    !lsme_is_parity(lsme) &&
+				    !(io->ci_dio_aio &&
+				      io->ci_dio_aio->cda_is_aio)) {
+					CDEBUG(D_VFSTRACE,
+					       DFID": no object for stripe %u of comp %d, switch to CIT_EC_RD\n",
+					       PFID(lu_object_fid(lov2lu(lov))),
+					       stripe, index);
+					io->ci_switch_ec_io = 1;
+					io->ci_ndelay_tried = 0;
+					io->ci_need_restart = 1;
+					RETURN(-ENODATA);
+				}
+				if (io->ci_type == CIT_READ ||
+				    io->ci_type == CIT_WRITE ||
+				    io->ci_type == CIT_FAULT)
 					RETURN(-EIO);
 
 				continue;
@@ -2207,12 +2230,20 @@ static int lov_ecio_add_data_sub(const struct lu_env *env, struct lov_io *lio,
 				continue;
 			}
 
+			/* a stripe without an object in an EC raid set is lost,
+			 * so rebuild it.  No lock covers its pages: they are
+			 * kept only until the layout lock is cancelled, which
+			 * any change of the data does first
+			 */
 			if (unlikely(!r0->lo_sub[stripe])) {
-				CWARN("%s: "DFID": stripe %u in comp %d is NULL, rc = %d\n",
-				      lov2obd(dev->ld_lov)->obd_name,
-				      PFID(lu_object_fid(lov2lu(lov))),
-				      stripe, index, -EIO);
-				RETURN(-EIO);
+				if (lle->lle_lsme->lsme_dstripe_count == 0)
+					RETURN(-EIO);
+				io->u.ci_ec.ec_unprotected_recovery = true;
+				(*err_nr)++;
+				CDEBUG(D_INFO, DFID": stripe %u in comp %d has no object (%d)\n",
+				       PFID(lu_object_fid(lov2lu(lov))),
+				       stripe, index, *err_nr);
+				continue;
 			}
 
 			/* no sub IO: neither read nor locked by this IO */

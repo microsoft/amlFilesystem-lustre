@@ -7782,6 +7782,39 @@ test_44a() {
 }
 run_test 44a "test error handling with too many OST failures"
 
+test_45a() {
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs"
+	(( CLIENT_VERSION >= $(version_code 2.17.62) )) ||
+		skip "client older than 2.17.62 cannot rebuild a lost object"
+
+	local tf=$DIR/$tfile
+	local ref=$TMP/$tfile.ref
+	local ost
+
+	enable_ec
+	stack_trap "rm -f $tf $ref"
+
+	$LFS setstripe -E eof -c 2 -S 1M --ec 2+1 $tf ||
+		error "setstripe --ec 2+1 failed"
+	dd if=/dev/urandom of=$ref bs=1M count=4 2>/dev/null ||
+		error "create $ref failed"
+	cp $ref $tf || error "copy to $tf failed"
+	$LFS mirror resync $tf || error "mirror resync failed"
+	# the client unpacks the layout again only for a new inode
+	remount_client $MOUNT || error "remount $MOUNT failed"
+
+	# as for a dummy slot that LFSCK leaves for a lost object
+	ost=$($LFS getstripe -I65537 -i $tf)
+	#define OBD_FAIL_MAKE_LOVEA_HOLE 0x1406
+	$LCTL set_param fail_loc=0x1406 fail_val=$((ost + 1))
+	stack_trap "$LCTL set_param fail_loc=0 fail_val=0"
+	cmp $ref $tf || error "read with no object on OST $ost failed"
+	$LCTL set_param fail_loc=0 fail_val=0
+	remount_client $MOUNT || error "remount $MOUNT failed"
+	cmp $ref $tf || error "read with all objects failed"
+}
+run_test 45a "EC read rebuilds a data stripe that has no object"
+
 test_46d() {
 	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
 	enable_ec

@@ -178,6 +178,14 @@ int lov_page_init_composite(const struct lu_env *env, struct cl_object *obj,
 						&suboff);
 		if (stripe < 0)
 			RETURN(-EINVAL);
+		/* CIT_EC_RD rebuilds a stripe without an object from parity
+		 * into a page with no sub-object, see lov_ecio_add_data_sub()
+		 */
+		if (unlikely(!lov_r0(loo, entry)->lo_sub[stripe]) &&
+		    lio->lis_cl.cis_io->ci_type == CIT_EC_RD) {
+			page->cp_lov_index = CP_LOV_INDEX_EMPTY;
+			RETURN(0);
+		}
 		lio->lis_cached_entry = entry;
 		lio->lis_cached_stripe = stripe;
 		lio->lis_cached_off = offset;

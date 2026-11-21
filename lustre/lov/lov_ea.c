@@ -767,6 +767,33 @@ lsm_unpackmd_comp_md_v1(struct lov_obd *lov, void *buf, size_t buf_size)
 		blob_size = le32_to_cpu(lcme->lcme_size);
 		blob = (char *)lcm + blob_offset;
 
+		/* the objects on the OSTs that fail_val selects are lost, as
+		 * for a dummy slot, see cfs_fail_index()
+		 */
+		if (unlikely(CFS_FAIL_PRECHECK(OBD_FAIL_MAKE_LOVEA_HOLE) &&
+			     le32_to_cpu(lcme->lcme_flags) & LCME_FL_INIT)) {
+			struct lov_mds_md *lmm = blob;
+			struct lov_mds_md_v3 *lmm3 = blob;
+			struct lov_ost_data_v1 *objs = lmm->lmm_objects;
+			u32 magic = le32_to_cpu(lmm->lmm_magic);
+			u32 pattern = le32_to_cpu(lmm->lmm_pattern);
+			u16 count = le16_to_cpu(lmm->lmm_stripe_count);
+			int j;
+
+			if (magic == LOV_MAGIC_V3)
+				objs = lmm3->lmm_objects;
+			if ((magic == LOV_MAGIC_V1 || magic == LOV_MAGIC_V3) &&
+			    !(pattern & (LOV_PATTERN_F_RELEASED |
+					 LOV_PATTERN_MDT)) &&
+			    blob_size >= lov_mds_md_size(count, magic)) {
+				for (j = 0; j < count; j++)
+					if (cfs_fail_index(cfs_fail_val,
+						le32_to_cpu(objs[j].l_ost_idx)))
+						memset(&objs[j], 0,
+						       sizeof(objs[j]));
+			}
+		}
+
 		if (unlikely(CFS_FAIL_CHECK(OBD_FAIL_LOV_COMP_MAGIC) &&
 			     (cfs_fail_val == i + 1)))
 			((struct lov_mds_md *)blob)->lmm_magic = LOV_MAGIC_BAD;
