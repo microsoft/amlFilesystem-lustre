@@ -1118,9 +1118,11 @@ int mgc_enqueue(struct obd_export *exp, enum ldlm_type type,
 
 	cli = &exp->exp_obd->u.cli;
 	tgt_processing = atomic_read(&cli->cl_mgc_tgt_processing);
+	/* a target that runs the MGS has no local copy of its logs */
 	if (tgt_processing && mgc_mgs_unreachable(exp->exp_obd) &&
 	    !(cld->cld_cfg.cfg_sb &&
-	      (s2lsi(cld->cld_cfg.cfg_sb)->lsi_flags & LDD_F_NO_LOCAL_LOGS)))
+	      (s2lsi(cld->cld_cfg.cfg_sb)->lsi_flags &
+	       (LDD_F_NO_LOCAL_LOGS | LDD_F_SV_TYPE_MGS))))
 		RETURN(-ETIMEDOUT);
 
 	CDEBUG(D_MGC, "Enqueue for %s (res %#llx)\n", cld->cld_logname,
@@ -1211,6 +1213,8 @@ static int mgc_set_info_async(const struct lu_env *env, struct obd_export *exp,
 
 			at = &imp->imp_at.iat_net_latency;
 			at_reset(at, INITIAL_CONNECT_TIMEOUT);
+			WRITE_ONCE(exp->exp_obd->u.cli.cl_mgc_unreachable,
+				   false);
 		}
 
 		if (imp->imp_state == LUSTRE_IMP_DISCON || value > 1)
