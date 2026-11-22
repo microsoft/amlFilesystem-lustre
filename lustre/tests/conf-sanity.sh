@@ -12080,7 +12080,7 @@ test_134() {
 
 	do_facet mds1 "$LCTL lfsck_start -A && $LCTL lfsck_query -w > /dev/null"
 
-	if (( MDS1_VERSION >= $(version_code 2.16.0) )); then
+	if (( MDS1_VERSION >= $(version_code v2_16_50-122-g7b21e7738e) )); then
 		# LU-18401
 		iam_files+=$(printf "LFSCK/lfsck_layout_%02u " {0..15})
 		iam_files+=$(printf "LFSCK/lfsck_namespace_%02u " {0..15})
