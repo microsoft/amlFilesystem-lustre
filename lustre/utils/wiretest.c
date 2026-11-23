@@ -2778,6 +2778,8 @@ void lustre_assert_wire_constants(void)
 		 (unsigned int)MDS_RENAME_AGAIN);
 	LASSERTF(MDS_NAMEHASH == 0x08000000UL, "found 0x%.8xUL\n",
 		 (unsigned int)MDS_NAMEHASH);
+	LASSERTF(MDS_RESYNC_SIZE == 0x10000000UL, "found 0x%.8xUL\n",
+		 (unsigned int)MDS_RESYNC_SIZE);
 
 	/* Checks for struct mdt_body */
 	LASSERTF((int)sizeof(struct mdt_body) == 216, "found %lld\n",
@@ -3693,10 +3695,10 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct mdt_rec_resync, rs_padding2));
 	LASSERTF((int)sizeof(((struct mdt_rec_resync *)0)->rs_padding2) == 8, "found %lld\n",
 		 (long long)(int)sizeof(((struct mdt_rec_resync *)0)->rs_padding2));
-	LASSERTF((int)offsetof(struct mdt_rec_resync, rs_padding3) == 96, "found %lld\n",
-		 (long long)(int)offsetof(struct mdt_rec_resync, rs_padding3));
-	LASSERTF((int)sizeof(((struct mdt_rec_resync *)0)->rs_padding3) == 8, "found %lld\n",
-		 (long long)(int)sizeof(((struct mdt_rec_resync *)0)->rs_padding3));
+	LASSERTF((int)offsetof(struct mdt_rec_resync, rs_size) == 96, "found %lld\n",
+		 (long long)(int)offsetof(struct mdt_rec_resync, rs_size));
+	LASSERTF((int)sizeof(((struct mdt_rec_resync *)0)->rs_size) == 8, "found %lld\n",
+		 (long long)(int)sizeof(((struct mdt_rec_resync *)0)->rs_size));
 	LASSERTF((int)offsetof(struct mdt_rec_resync, rs_padding4) == 104, "found %lld\n",
 		 (long long)(int)offsetof(struct mdt_rec_resync, rs_padding4));
 	LASSERTF((int)sizeof(((struct mdt_rec_resync *)0)->rs_padding4) == 8, "found %lld\n",

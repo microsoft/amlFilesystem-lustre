@@ -1291,6 +1291,7 @@ check_mds_op_bias(void)
 	CHECK_VALUE_X(MDS_CLOSE_LAYOUT_SWAP_HSM);
 	CHECK_VALUE_X(MDS_RENAME_AGAIN);
 	CHECK_VALUE_X(MDS_NAMEHASH);
+	CHECK_VALUE_X(MDS_RESYNC_SIZE);
 }
 
 static void
@@ -1609,7 +1610,7 @@ check_mdt_rec_resync(void)
 	CHECK_MEMBER(mdt_rec_resync, rs_lease_handle);
 	CHECK_MEMBER(mdt_rec_resync, rs_padding1);
 	CHECK_MEMBER(mdt_rec_resync, rs_padding2);
-	CHECK_MEMBER(mdt_rec_resync, rs_padding3);
+	CHECK_MEMBER(mdt_rec_resync, rs_size);
 	CHECK_MEMBER(mdt_rec_resync, rs_padding4);
 	CHECK_MEMBER(mdt_rec_resync, rs_bias);
 	CHECK_MEMBER(mdt_rec_resync, rs_padding5);

@@ -2147,6 +2147,8 @@ enum mds_op_bias {
 	/* rename must retry again with target ACLs */
 	MDS_RENAME_AGAIN	= 1 << 26,
 	MDS_NAMEHASH		= 1 << 27,
+	/* rs_size of a resync is the file size */
+	MDS_RESYNC_SIZE		= 1 << 28,
 };
 
 #define MDS_CLOSE_INTENT (MDS_HSM_RELEASE | MDS_CLOSE_LAYOUT_SWAP |         \
@@ -2313,7 +2315,7 @@ struct mdt_rec_resync {
 	struct lustre_handle rs_lease_handle;	/* rr_mtime */
 	__s64		rs_padding1;	/* rr_atime */
 	__s64		rs_padding2;	/* rr_ctime */
-	__u64		rs_padding3;	/* rr_size */
+	__u64		rs_size;	/* rr_size, with MDS_RESYNC_SIZE */
 	__u64		rs_padding4;	/* rr_blocks */
 	__u32		rs_bias;
 	__u32		rs_padding5;	/* rr_mode */
