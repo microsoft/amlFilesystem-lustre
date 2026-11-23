@@ -4914,8 +4914,8 @@ test_204a() {
 	$LCTL get_param -n mdc.*.connect_flags | grep -q pcc_ro ||
 		skip "Server does not support PCC-RO"
 
-	(( $MDS1_VERSION >= $(version_code 2.15.61) )) ||
-		skip "Need server version at least 2.15.61"
+	(( $MDS1_VERSION >= $(version_code v2_16_51-30-g84100d7f7d) )) ||
+		skip "Need MDS version at least 2.16.51.30 for lustre.pin"
 
 	setup_loopdev $SINGLEAGT $loopfile $mntpt 50
 	do_facet $SINGLEAGT mkdir $hsm_root || error "mkdir $hsm_root failed"
@@ -4984,8 +4984,8 @@ test_204b() {
 	$LCTL get_param -n mdc.*.connect_flags | grep -q pcc_ro ||
 		skip "Server does not support PCC-RO"
 
-	(( $MDS1_VERSION >= $(version_code 2.15.61) )) ||
-		skip "Need server version at least 2.15.61"
+	(( $MDS1_VERSION >= $(version_code v2_16_51-30-g84100d7f7d) )) ||
+		skip "Need MDS version at least 2.16.51.30 for lustre.pin"
 
 	old=$(do_facet mds1 $LCTL get_param -n mdt.*.enable_pin_gid | head -1)
 	do_facet mds1 $LCTL set_param mdt.*.enable_pin_gid=0
@@ -5035,8 +5035,8 @@ test_204c() {
 	$LCTL get_param -n mdc.*.connect_flags | grep -q pcc_ro ||
 		skip "Server does not support PCC-RO"
 
-	(( $MDS1_VERSION >= $(version_code 2.15.61) )) ||
-		skip "Need server version at least 2.15.61"
+	(( $MDS1_VERSION >= $(version_code v2_16_51-30-g84100d7f7d) )) ||
+		skip "Need MDS version at least 2.16.51.30 for lustre.pin"
 
 	do_facet $SINGLEAGT echo -n attach_id_not_specified > $file ||
 		error "dd write $file failed"
