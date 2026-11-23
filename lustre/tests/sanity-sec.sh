@@ -1522,6 +1522,10 @@ do_fops_quota_test() {
 	local run_u=$1
 	# fuzz quota used to account for possible indirect blocks, etc
 	local quota_fuzz=$(fs_log_size)
+
+	# earlier removals free OST blocks asynchronously
+	sync_all_data || true
+	wait_delete_completed_mds
 	local qused_orig=$(nodemap_check_quota "$run_u")
 	local qused_high=$((qused_orig + quota_fuzz))
 	local qused_low=$((qused_orig - quota_fuzz))
