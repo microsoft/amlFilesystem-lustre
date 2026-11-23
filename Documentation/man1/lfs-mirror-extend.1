@@ -300,15 +300,10 @@ This option cannot be used with
 .B -f
 or
 .BR --ec .
-It needs the FLR EC connect flag, which is negotiated when the client
-connects: set the module parameter
-.B lustre.enable_flr_ec=1
-on the client before mounting, and enable
-.B parity
-in
-.BR mdt.layout_pattern_types (4)
-on the MDS, otherwise the extend fails with
+It needs MDTs of 2.18.0 or newer, otherwise the extend fails with
 .BR EOPNOTSUPP .
+The client checks the version of MDT0000 only, so do not use it while
+other MDTs still run an older version.
 .TP
 .BR --no-verify
 This option indicates not to verify the mirror(s) from victim file(s) in case

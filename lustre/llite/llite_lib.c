@@ -412,9 +412,8 @@ static void ll_hybrid_io_check_ost(struct ll_sb_info *sbi,
  * target_handle_connect() echoes un-negotiated obd_connect_data fields
  * back from the request, so an unconditional store would let the client's
  * own request defeat the pre-2.18 fallback in lov_layout_pattern_mask().
- * Without the flag the mask is cleared, so a reconnect to an MDS that no
- * longer advertises anything beyond the baseline falls back the same way
- * a fresh mount does.
+ * Without the flag the mask is cleared, so a reconnect to an MDS older
+ * than 2.18 falls back the same way a fresh mount does.
  *
  * An MDS that fills the field in always reports at least the pre-2.18
  * baseline, so a mask without it is an echo of this client's own request
@@ -704,14 +703,16 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 				   OBD_CONNECT2_PCCRO |
 				   OBD_CONNECT2_MIRROR_ID_FIX |
 				   OBD_CONNECT2_READDIR_OPEN |
+				   OBD_CONNECT2_FLR_EC |
 				   OBD_CONNECT2_ONE_OBJ_SWAP |
 				   OBD_CONNECT2_DNE_INTENT;
 
-	if (ll_enable_flr_ec) {
-		data->ocd_connect_flags2 |= OBD_CONNECT2_FLR_EC;
-		data->ocd_layout_pattern_types = LOV_LAYOUT_PATTERN_TYPES_217 |
-					    LOV_PATTERN_PARITY;
-	}
+	/* always tell the MDS which layout patterns this client handles,
+	 * parity only when enabled here
+	 */
+	data->ocd_layout_pattern_types = LOV_LAYOUT_PATTERN_TYPES_217;
+	if (ll_enable_flr_ec)
+		data->ocd_layout_pattern_types |= LOV_PATTERN_PARITY;
 
 	if (test_bit(LL_SBI_LRU_RESIZE, sbi->ll_flags))
 		data->ocd_connect_flags |= OBD_CONNECT_LRU_RESIZE;

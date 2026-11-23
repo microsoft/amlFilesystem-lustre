@@ -474,8 +474,7 @@ struct lov_obd {
  *
  * llite stores the mask from the MDS connect reply when the MDS granted
  * OBD_CONNECT2_FLR_EC, at mount and again on every MDC reconnect.  An MDS
- * older than 2.18 does not send it, and neither does one that advertises
- * nothing beyond the pre-2.18 baseline, so a clear mask means exactly the
+ * older than 2.18 does not send it, so a clear mask means exactly the
  * patterns every such MDS supports.
  *
  * Return: bitmask of enum lov_pattern values the client may use.

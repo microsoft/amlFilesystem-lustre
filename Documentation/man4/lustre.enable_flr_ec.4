@@ -29,12 +29,13 @@ Per-client node, for all filesystems mounted afterwards.
 .SH DESCRIPTION
 Whether this client asks the MDS for erasure coded FLR layout support
 when it mounts a filesystem.
-When set, the client tells the MDS that it understands the
+The client always sends the MDS the layout pattern types it supports, and
+when this is set the list includes the
 .B parity
 layout pattern.  An MDS from 2.18.0 on replies with the pattern types both
 ends support, see
 .BR mdt.layout_pattern_types (4);
-an older MDS cannot filter the list and the client keeps what it asked for.
+with an older MDS the client uses only the pre-2.18 baseline.
 The result is visible as
 .BR lov.layout_pattern_types (4).
 .PP

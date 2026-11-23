@@ -384,7 +384,7 @@ static void __exit lustre_exit(void)
 unsigned int ll_enable_flr_ec;
 module_param_named(enable_flr_ec, ll_enable_flr_ec, uint, 0644);
 MODULE_PARM_DESC(enable_flr_ec,
-		 "enable FLR EC connect flag, off by default");
+		 "request EC parity layouts at mount, off by default");
 
 MODULE_AUTHOR("OpenSFS, Inc. <http://www.lustre.org/>");
 MODULE_DESCRIPTION("Lustre Client File System");

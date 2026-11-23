@@ -2106,8 +2106,8 @@ set_spl_panic() {
 }
 
 #
-# Turn on FLR EC on an MDT so that its clients can negotiate
-# OBD_CONNECT2_FLR_EC. load_modules_local() passes mdt_enable_flr_ec=1
+# Turn on FLR EC on an MDT so that its clients can negotiate the parity
+# layout pattern. load_modules_local() passes mdt_enable_flr_ec=1
 # to mdt.ko, but that only reaches the nodes it runs on; a remote MDS
 # loads mdt.ko from the target mount with the default of 0 unless
 # LOAD_MODULES_REMOTE is set. mdt_enable_flr_ec only seeds
@@ -6278,8 +6278,8 @@ remount_client()
 # Establish EC layout pattern negotiation for tests that need it.
 #
 # Negotiation only happens at connect time: the MDS must advertise parity
-# in mdt.*.layout_pattern_types and the client must request OBD_CONNECT2_FLR_EC
-# (module param enable_flr_ec).  The module-load MODOPTS defaults that
+# in mdt.*.layout_pattern_types and the client must request it (module
+# param enable_flr_ec).  The module-load MODOPTS defaults that
 # enable both are unreliable when the modules are already resident,
 # MODOPTS_* is preset in the environment, or the server modules are loaded
 # by mount rather than by the test framework (LOAD_MODULES_REMOTE=false,
@@ -6329,7 +6329,7 @@ try_pattern_negotiation() {
 			error "parity not enabled on all MDTs: $pt"
 	fi
 
-	# client side: request EC negotiation on every later connect too,
+	# client side: request parity on every later connect too,
 	# since the caller may remount after the fast path below
 	cur=$($LCTL get_param -n --module $flr_ec 2>/dev/null) || true
 	if [[ -z "$cur" ]]; then

@@ -33,19 +33,20 @@ The client only uses layout types in this list: a component with any other
 pattern is left uninitialized, and IO reads another mirror instead if the
 file has one.
 .PP
-A client that connects without requesting layout negotiation does not
-receive a list, and reports the pre-2.18 baseline of
+The client always negotiates the list, whether or not erasure coding is
+enabled.  An MDS older than 2.18.0 does not negotiate it, and the client
+then reports the pre-2.18 baseline of
 .BR raid0 ", " mdt " and " overstriped
 with the
 .BR hole " and " released
 layout flags, which every MDS supports.
 .PP
-An MDS older than 2.18.0 does not know about this field and so cannot
-filter the list, and the client keeps the types it asked for.  The answer
-is still accurate, because such an MDS offers layout negotiation at all
-only when erasure coding is enabled on it, and a client that is not offered
-negotiation falls back to the baseline above.
-So
+Every 2.18 client and MDS show
+.B flr_ec
+in
+.BR mdc.*.connect_flags ,
+since that flag carries this list, so check this parameter to see whether
+erasure coding can be used.
 .B parity
 in this list means that both ends support erasure coded FLR mirrors,
 see

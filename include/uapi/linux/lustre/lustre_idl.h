@@ -865,7 +865,7 @@ struct ptlrpc_body_v2 {
 #define OBD_CONNECT2_MIRROR_ID_FIX     0x2000000000ULL /* rr_mirror_id move */
 #define OBD_CONNECT2_UPDATE_LAYOUT     0x4000000000ULL /* update compressibility */
 #define OBD_CONNECT2_READDIR_OPEN      0x8000000000ULL /* read first dir page on open */
-#define OBD_CONNECT2_FLR_EC           0x10000000000ULL /* parity support */
+#define OBD_CONNECT2_FLR_EC           0x10000000000ULL /* layout patterns */
 #define OBD_CONNECT2_FLR_IMMED_MIRROR 0x20000000000ULL /* client writes mirror*/
 #define OBD_CONNECT2_NO_APPEND        0x40000000000ULL /* no O_APPEND layout */
 #define OBD_CONNECT2_FLR_EC_WR        0x80000000000ULL /* write EC support */
@@ -952,6 +952,7 @@ struct ptlrpc_body_v2 {
 				OBD_CONNECT2_PCCRO | \
 				OBD_CONNECT2_MIRROR_ID_FIX |\
 				OBD_CONNECT2_READDIR_OPEN | \
+				OBD_CONNECT2_FLR_EC | \
 				OBD_CONNECT2_ONE_OBJ_SWAP)
 
 #define OST_CONNECT_SUPPORTED  (OBD_CONNECT_SRVLOCK | OBD_CONNECT_GRANT | \

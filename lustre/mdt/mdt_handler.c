@@ -7645,17 +7645,12 @@ static int mdt_connect_internal(const struct lu_env *env,
 		RETURN(-EACCES);
 
 	if (data->ocd_connect_flags & OBD_CONNECT_FLAGS2) {
-		__u64 supported2 = MDT_CONNECT_SUPPORTED2;
+		data->ocd_connect_flags2 &= MDT_CONNECT_SUPPORTED2;
 
-		/* advertise EC layout negotiation when any pattern beyond the
-		 * pre-2.18 baseline is enabled in mdt.*.layout_pattern_types
+		/* negotiate layout patterns even when only the pre-2.18
+		 * baseline is enabled, so the MDS knows what this client can
+		 * handle whether or not parity is enabled on either end
 		 */
-		if (mdt->mdt_layout_pattern_types &
-		    ~LOV_LAYOUT_PATTERN_TYPES_217)
-			supported2 |= OBD_CONNECT2_FLR_EC;
-
-		data->ocd_connect_flags2 &= supported2;
-
 		if (data->ocd_connect_flags2 & OBD_CONNECT2_FLR_EC)
 			data->ocd_layout_pattern_types &=
 				mdt->mdt_layout_pattern_types;

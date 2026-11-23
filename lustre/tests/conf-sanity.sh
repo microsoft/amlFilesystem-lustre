@@ -13774,12 +13774,11 @@ test_163a() {
 	setupall
 	stack_trap stopall
 
-	# layout_pattern_types is only advertised once EC negotiation is active
-	# on both ends.  The module-load MODOPTS that enable it are unreliable
-	# when the modules are already resident (e.g. loaded by an earlier
-	# subtest), so enable it explicitly at runtime: the MDS must advertise a
-	# pattern beyond the pre-2.18 baseline, and the client must request EC
-	# negotiation on its next (re)connect.
+	# enable parity on both ends as well, see 163e for the baseline.  The
+	# module-load MODOPTS that enable it are unreliable when the modules
+	# are already resident (e.g. loaded by an earlier subtest), so enable
+	# it explicitly at runtime: the MDS must advertise parity, and the
+	# client must request it on its next mount.
 	do_facet mds1 $LCTL set_param mdt.*.layout_pattern_types=+parity ||
 		error "cannot set mdt.*.layout_pattern_types=+parity"
 
@@ -13824,9 +13823,9 @@ test_163b() {
 	echo "default layout_pattern_types: $pt"
 	[[ "$pt" =~ "raid0" ]] || error "baseline raid0 missing: $pt"
 
-	# the client only sees advertised patterns once it requests EC
-	# negotiation; enable it explicitly rather than relying on the load-time
-	# MODOPTS, which are skipped when the modules are already resident
+	# the client only gets parity once it requests it; enable it
+	# explicitly rather than relying on the load-time MODOPTS, which are
+	# skipped when the modules are already resident
 	local flr_ec=lustre.enable_flr_ec
 	local cur=$($LCTL get_param -n --module $flr_ec)
 	[[ -n "$cur" ]] || error "client lacks module parameter $flr_ec"
@@ -13847,8 +13846,7 @@ test_163b() {
 	[[ "$pt" =~ "parity" ]] && error "parity still set after -parity: $pt"
 	[[ "$pt" =~ "raid0" ]] || error "baseline lost after -parity: $pt"
 
-	# client renegotiates on reconnect: with no pattern beyond the baseline
-	# the MDS stops advertising FLR_EC, so parity leaves the import
+	# client renegotiates on reconnect, so parity leaves the import
 	remount_client $MOUNT
 	local imp=$($LCTL get_param -n mdc.$FSNAME-MDT0000-*.import |
 		    awk '/layout_pattern_types/ {print; exit}')
@@ -14115,6 +14113,68 @@ test_163d() {
 	diff /etc/passwd $tf.mirror || error "cannot read $tf.mirror"
 }
 run_test 163d "component with an un-negotiated layout flag is unusable"
+
+test_163e() {
+	(( $MDS1_VERSION >= $(version_code 2.17.62.2) )) ||
+		skip "need MDS >= 2.17.62.2 for negotiation without parity"
+
+	setupall
+	stack_trap stopall
+
+	local pt_param=mdt.$FSNAME-MDT0000.layout_pattern_types
+	local flr_ec=lustre.enable_flr_ec
+	local cur=$($LCTL get_param -n --module $flr_ec)
+	local tf=$DIR/$tfile
+	local mdcdev
+	local pass
+	local pt
+	local imp
+
+	[[ -n "$cur" ]] || error "client lacks module parameter $flr_ec"
+	pt=$(do_facet mds1 $LCTL get_param -n $pt_param)
+	[[ -n "$pt" ]] || error "MDS lacks $pt_param"
+
+	# EC is off on both ends, as it is by default
+	stack_trap "$LCTL set_param --module $flr_ec=$cur"
+	$LCTL set_param --module $flr_ec=0
+	stack_trap "do_facet mds1 $LCTL set_param $pt_param=$pt"
+	do_facet mds1 $LCTL set_param $pt_param=-parity
+	[[ "$(do_facet mds1 $LCTL get_param -n $pt_param)" =~ "parity" ]] &&
+		error "cannot disable parity on the MDS"
+	remount_client $MOUNT
+
+	# the client and MDS still negotiate the layout patterns, at mount
+	# and again when the MDC reconnects
+	for pass in mount reconnect; do
+		if [[ $pass == reconnect ]]; then
+			mdcdev=$($LCTL dl | awk "/$FSNAME-MDT0000-mdc-/ {
+				if (\$2 == \"UP\") {print \$1}}")
+			[[ -n "$mdcdev" ]] || error "MDT0000 mdc not UP"
+			$LCTL --device $mdcdev recover ||
+				error "mdc reconnect failed"
+		fi
+		$LCTL get_param -n mdc.$FSNAME-MDT0000-*.connect_flags |
+			grep -qw flr_ec || error "no flr_ec at $pass"
+		imp=$($LCTL get_param -n mdc.$FSNAME-MDT0000-*.import |
+		      awk '/layout_pattern_types/ {print; exit}')
+		echo "mdc import after $pass: '$imp'"
+		[[ "$imp" =~ "raid0" ]] ||
+			error "no layout_pattern_types in import at $pass"
+		[[ "$imp" =~ "parity" ]] &&
+			error "parity negotiated with EC disabled at $pass"
+	done
+
+	# merging a stale mirror needs a 2.18 MDS, not EC
+	stack_trap "rm -f $tf"
+	dd if=/dev/urandom of=$tf bs=1M count=1 || error "write $tf failed"
+	$LFS mirror extend -N --no-resync $tf ||
+		error "mirror extend --no-resync failed with EC disabled"
+	$LFS getstripe -v $tf | grep -q "lcme_flags:.*stale" || {
+		$LFS getstripe -v $tf
+		error "no stale mirror after extend --no-resync"
+	}
+}
+run_test 163e "layout patterns are negotiated with EC disabled"
 
 cleanup_164() {
 	# Ensure all test mounts are cleaned up
