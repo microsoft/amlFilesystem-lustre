@@ -3579,10 +3579,16 @@ void lustre_assert_wire_constants(void)
 		 (long long)(int)offsetof(struct mdt_rec_rename, rn_mode));
 	LASSERTF((int)sizeof(((struct mdt_rec_rename *)0)->rn_mode) == 4, "found %lld\n",
 		 (long long)(int)sizeof(((struct mdt_rec_rename *)0)->rn_mode));
-	LASSERTF((int)offsetof(struct mdt_rec_rename, rn_padding_5) == 120, "found %lld\n",
-		 (long long)(int)offsetof(struct mdt_rec_rename, rn_padding_5));
-	LASSERTF((int)sizeof(((struct mdt_rec_rename *)0)->rn_padding_5) == 4, "found %lld\n",
-		 (long long)(int)sizeof(((struct mdt_rec_rename *)0)->rn_padding_5));
+	LASSERTF((int)offsetof(struct mdt_rec_rename, rn_flags) == 120, "found %lld\n",
+		 (long long)(int)offsetof(struct mdt_rec_rename, rn_flags));
+	LASSERTF((int)sizeof(((struct mdt_rec_rename *)0)->rn_flags) == 4, "found %lld\n",
+		 (long long)(int)sizeof(((struct mdt_rec_rename *)0)->rn_flags));
+	LASSERTF(MDS_RENAME_FL_NOREPLACE == 0x00000001UL, "found 0x%.8xUL\n",
+		 (unsigned int)MDS_RENAME_FL_NOREPLACE);
+	LASSERTF(MDS_RENAME_FL_EXCHANGE == 0x00000002UL, "found 0x%.8xUL\n",
+		 (unsigned int)MDS_RENAME_FL_EXCHANGE);
+	LASSERTF(MDS_RENAME_FL_WHITEOUT == 0x00000004UL, "found 0x%.8xUL\n",
+		 (unsigned int)MDS_RENAME_FL_WHITEOUT);
 	LASSERTF((int)offsetof(struct mdt_rec_rename, rn_padding_6) == 124, "found %lld\n",
 		 (long long)(int)offsetof(struct mdt_rec_rename, rn_padding_6));
 	LASSERTF((int)sizeof(((struct mdt_rec_rename *)0)->rn_padding_6) == 4, "found %lld\n",

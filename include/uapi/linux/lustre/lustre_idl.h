@@ -2272,10 +2272,19 @@ struct mdt_rec_rename {
 	__u64		rn_padding_4;   /* rr_blocks */
 	__u32		rn_bias;        /* some operation flags */
 	__u32		rn_mode;        /* cross-ref rename has mode */
-	__u32		rn_padding_5;   /* rr_flags */
+	__u32		rn_flags;       /* rr_flags, enum mds_rename_flags */
 	__u32		rn_padding_6;   /* rr_padding_2 */
 	__u32		rn_padding_7;   /* rr_padding_3 */
 	__u32		rn_padding_8;   /* rr_padding_4 */
+};
+
+/* renameat2() flags in rn_flags, with the values of RENAME_*, sent only
+ * to an MDT with OBD_CONNECT2_RENAMEAT2
+ */
+enum mds_rename_flags {
+	MDS_RENAME_FL_NOREPLACE	= 0x00000001,
+	MDS_RENAME_FL_EXCHANGE	= 0x00000002,
+	MDS_RENAME_FL_WHITEOUT	= 0x00000004,
 };
 
 /* instance of mdt_reint_rec */

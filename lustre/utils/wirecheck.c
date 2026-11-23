@@ -1577,7 +1577,10 @@ check_mdt_rec_rename(void)
 	CHECK_MEMBER(mdt_rec_rename, rn_padding_4);
 	CHECK_MEMBER(mdt_rec_rename, rn_bias);
 	CHECK_MEMBER(mdt_rec_rename, rn_mode);
-	CHECK_MEMBER(mdt_rec_rename, rn_padding_5);
+	CHECK_MEMBER(mdt_rec_rename, rn_flags);
+	CHECK_VALUE_X(MDS_RENAME_FL_NOREPLACE);
+	CHECK_VALUE_X(MDS_RENAME_FL_EXCHANGE);
+	CHECK_VALUE_X(MDS_RENAME_FL_WHITEOUT);
 	CHECK_MEMBER(mdt_rec_rename, rn_padding_6);
 	CHECK_MEMBER(mdt_rec_rename, rn_padding_7);
 	CHECK_MEMBER(mdt_rec_rename, rn_padding_8);
