@@ -2827,6 +2827,8 @@ void lustre_assert_wire_constants(void)
 		 (unsigned int)MDS_NAMEHASH);
 	LASSERTF(MDS_RESYNC_SIZE == 0x10000000UL, "found 0x%.8xUL\n",
 		 (unsigned int)MDS_RESYNC_SIZE);
+	LASSERTF(MDS_CREATE_TMPFILE == 0x20000000UL, "found 0x%.8xUL\n",
+		 (unsigned int)MDS_CREATE_TMPFILE);
 
 	/* Checks for struct mdt_body */
 	LASSERTF((int)sizeof(struct mdt_body) == 216, "found %lld\n",

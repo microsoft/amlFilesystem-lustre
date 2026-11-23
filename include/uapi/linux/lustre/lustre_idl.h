@@ -2156,6 +2156,8 @@ enum mds_op_bias {
 	MDS_NAMEHASH		= 1 << 27,
 	/* rs_size of a resync is the file size */
 	MDS_RESYNC_SIZE		= 1 << 28,
+	/* create an unlinked O_TMPFILE file that may be linked later */
+	MDS_CREATE_TMPFILE	= 1 << 29,
 };
 
 #define MDS_CLOSE_INTENT (MDS_HSM_RELEASE | MDS_CLOSE_LAYOUT_SWAP |         \
