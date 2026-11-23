@@ -177,10 +177,12 @@ EXPORT_SYMBOL(tgt_validate_obdo);
 static int tgt_io_data_unpack(struct tgt_session_info *tsi, struct ost_id *oi)
 {
 	unsigned int max_brw;
-	struct niobuf_remote	*rnb;
-	struct obd_ioobj	*ioo;
-	unsigned int		 niocount;
-	int			 obj_count;
+	struct niobuf_remote *rnb;
+	struct obd_ioobj *ioo;
+	unsigned int niocount;
+	int obj_count;
+	int rc;
+	unsigned int i;
 
 	ENTRY;
 
@@ -236,6 +238,16 @@ static int tgt_io_data_unpack(struct tgt_session_info *tsi, struct ost_id *oi)
 		       obd_export_nid2str(tsi->tsi_exp),
 		       niocount, ioo->ioo_bufcnt, -EPROTO);
 		RETURN(-EPROTO);
+	}
+
+	for (i = 0; i < niocount; i++) {
+		if (rnb[i].rnb_len == 0) {
+			rc = -EINVAL;
+			CERROR("%s: client %s sent zero-length niobuf %u: rc = %d\n",
+			       tgt_name(tsi->tsi_tgt),
+			       obd_export_nid2str(tsi->tsi_exp), i, rc);
+			RETURN(rc);
+		}
 	}
 
 	RETURN(0);
