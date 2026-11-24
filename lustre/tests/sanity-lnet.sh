@@ -5249,6 +5249,9 @@ test_227() {
 
 	[[ $NETTYPE != kfi* ]] || skip "kfi doesn't support drop rules"
 
+	(( $MDS1_VERSION >= $(version_code 2.15.63.226) )) ||
+		skip "need MDS >= 2.15.64 for router peer health LU-17855"
+
 	setup_router_test -p 2 $opts || return $?
 
 	do_basic_rtr_test || return $?
