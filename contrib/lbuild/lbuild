@@ -1996,7 +1996,8 @@ seen_list=$(new_list)
 trap 'set +x;
 echo "An unexpected error has occurred at ${BASH_SOURCE[0]##*/}:$((LINENO-1)).
 Unfortunately the above line number in the message may or may not be correct,
-but details have been send to the lbuild maintainer.  Attempting to continue."; (echo "Untrapped error"
+but details have been send to the lbuild maintainer.  Attempting to continue."; (trap - ERR
+echo "Untrapped error"
 echo
 # have we seen this one
 echo "checking seen list for ${BASH_SOURCE[0]}:${BASH_LINENO[0]}"
